@@ -1,0 +1,32 @@
+{
+  "name": "dependably-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for the Dependably self-hosted artifact repository (npm/PyPI/NuGet/Maven/RPM/OCI).",
+  "type": "module",
+  "bin": {
+    "dependably-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "Apache-2.0"
+}
