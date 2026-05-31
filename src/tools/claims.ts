@@ -2,30 +2,71 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
-import { json, run, withSummary } from '../format.js';
+import { run, structured, withSummary } from '../format.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci']);
 const claimState = z
   .enum(['unclaimed', 'mixed', 'local_only'])
   .describe('Claim state machine: unclaimed → mixed → local_only (one-way).');
 
+const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+// transition_claim mixed→local_only purges proxy versions; release_claim deletes.
+const DESTRUCTIVE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+const claim = z.object({
+  id: z.string().optional(),
+  ecosystem: z.string().optional(),
+  name: z.string().optional(),
+  state: z.string().optional(),
+  reason: z.string().optional(),
+  created_by: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+}).passthrough();
+
 function claimPath(eco: string, name: string): string {
   return `/api/v1/admin/claims/${eco}/${encodeURIComponent(name)}`;
 }
 
 export function registerClaimsTools(server: McpServer, client: DependablyClient): void {
-  server.tool(
+  server.registerTool(
     'list_claims',
-    'List package-name claims (namespace ownership for supply-chain trust). Filter by ecosystem, state, or search term.',
     {
-      ecosystem: ecosystem.optional(),
-      state: claimState.optional(),
-      search: z.string().optional(),
-      limit: z.number().int().positive().max(500).optional(),
+      title: 'List claims',
+      description: 'List package-name claims (namespace ownership for supply-chain trust). Filter by ecosystem, state, or search term.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {
+        ecosystem: ecosystem.optional(),
+        state: claimState.optional(),
+        search: z.string().optional(),
+        limit: z.number().int().positive().max(500).optional(),
+      },
+      outputSchema: {
+        items: z.array(claim).optional(),
+        total: z.number().optional(),
+      },
     },
     async (args) =>
       run(async () =>
-        json(
+        structured(
           await client.get('/api/v1/admin/claims', {
             ecosystem: args.ecosystem,
             state: args.state,
@@ -36,21 +77,36 @@ export function registerClaimsTools(server: McpServer, client: DependablyClient)
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'get_claim',
-    'Get a single claim plus its effective state.',
-    { ecosystem, name: z.string() },
-    async (args) => run(async () => json(await client.get(claimPath(args.ecosystem, args.name)))),
+    {
+      title: 'Get claim',
+      description: 'Get a single claim plus its effective state.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: { ecosystem, name: z.string() },
+      outputSchema: {
+        ecosystem: z.string().optional(),
+        name: z.string().optional(),
+        state: z.string().nullable().optional(),
+        is_implicit: z.boolean().optional(),
+        claim: claim.nullable().optional(),
+      },
+    },
+    async (args) => run(async () => structured(await client.get(claimPath(args.ecosystem, args.name)))),
   );
 
-  server.tool(
+  server.registerTool(
     'create_claim',
-    'Claim a previously-unclaimed package name. Creating with state=local_only triggers a proxy-version purge.',
     {
-      ecosystem,
-      name: z.string(),
-      state: claimState.optional().describe('Default: mixed.'),
-      reason: z.string().describe('Required justification (audit trail).'),
+      title: 'Create claim',
+      description: 'Claim a previously-unclaimed package name. Creating with state=local_only triggers a proxy-version purge.',
+      annotations: WRITE_ANNOTATIONS,
+      inputSchema: {
+        ecosystem,
+        name: z.string(),
+        state: claimState.optional().describe('Default: mixed.'),
+        reason: z.string().describe('Required justification (audit trail).'),
+      },
     },
     async (args) =>
       run(async () =>
@@ -61,14 +117,18 @@ export function registerClaimsTools(server: McpServer, client: DependablyClient)
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'transition_claim',
-    'Move a claim along its state machine. mixed→local_only PURGES every proxy version + its blob first.',
     {
-      ecosystem,
-      name: z.string(),
-      state: claimState,
-      reason: z.string(),
+      title: 'Transition claim',
+      description: 'Move a claim along its state machine. mixed→local_only PURGES every proxy version + its blob first.',
+      annotations: DESTRUCTIVE_ANNOTATIONS,
+      inputSchema: {
+        ecosystem,
+        name: z.string(),
+        state: claimState,
+        reason: z.string(),
+      },
     },
     async (args) =>
       run(async () =>
@@ -79,13 +139,17 @@ export function registerClaimsTools(server: McpServer, client: DependablyClient)
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'release_claim',
-    'Release a claim back to unclaimed. Fails if local versions still exist (delete those first).',
     {
-      ecosystem,
-      name: z.string(),
-      reason: z.string(),
+      title: 'Release claim',
+      description: 'Release a claim back to unclaimed. Fails if local versions still exist (delete those first).',
+      annotations: DESTRUCTIVE_ANNOTATIONS,
+      inputSchema: {
+        ecosystem,
+        name: z.string(),
+        reason: z.string(),
+      },
     },
     async (args) =>
       run(async () =>

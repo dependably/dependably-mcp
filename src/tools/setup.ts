@@ -3,29 +3,53 @@ import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
 import type { Config } from '../config.js';
-import { json, run, type ToolResult } from '../format.js';
+import { run, structured, type ToolResult } from '../format.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven']);
+
+const REMOTE_READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const LOCAL_READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
 
 function fenced(lang: string, body: string): ToolResult {
   return { content: [{ type: 'text', text: `\`\`\`${lang}\n${body}\n\`\`\`` }] };
 }
 
 export function registerSetupTools(server: McpServer, client: DependablyClient, cfg: Config): void {
-  server.tool(
+  server.registerTool(
     'get_setup_snippet',
-    'Fetch the canonical Dependably-generated client config snippet for an ecosystem (.npmrc, pip.conf, nuget.config, settings.xml).',
-    { ecosystem },
-    async (args) => run(async () => json(await client.get(`/api/v1/setup/${args.ecosystem}`))),
+    {
+      title: 'Setup snippet',
+      description: 'Fetch the canonical Dependably-generated client config snippet for an ecosystem (.npmrc, pip.conf, nuget.config, settings.xml).',
+      annotations: REMOTE_READ_ANNOTATIONS,
+      inputSchema: { ecosystem },
+      outputSchema: { snippet: z.string() },
+    },
+    async (args) =>
+      run(async () => structured(await client.get(`/api/v1/setup/${args.ecosystem}`), 'snippet')),
   );
 
-  server.tool(
+  server.registerTool(
     'get_install_command',
-    'Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it.',
     {
-      ecosystem,
-      package: z.string().describe('Package name (canonical for the ecosystem).'),
-      version: z.string().optional().describe('Optional pinned version.'),
+      title: 'Install command',
+      description: 'Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it.',
+      annotations: LOCAL_READ_ANNOTATIONS,
+      inputSchema: {
+        ecosystem,
+        package: z.string().describe('Package name (canonical for the ecosystem).'),
+        version: z.string().optional().describe('Optional pinned version.'),
+      },
     },
     async (args) => {
       const base = cfg.baseUrl;
@@ -59,12 +83,16 @@ export function registerSetupTools(server: McpServer, client: DependablyClient, 
     },
   );
 
-  server.tool(
+  server.registerTool(
     'get_publish_command',
-    'Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token.',
     {
-      ecosystem,
-      artifact_path: z.string().describe('Path to the built artifact (e.g. ./dist/*, ./bin/Release/*.nupkg, package.tgz).'),
+      title: 'Publish command',
+      description: 'Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token.',
+      annotations: LOCAL_READ_ANNOTATIONS,
+      inputSchema: {
+        ecosystem,
+        artifact_path: z.string().describe('Path to the built artifact (e.g. ./dist/*, ./bin/Release/*.nupkg, package.tgz).'),
+      },
     },
     async (args) => {
       const base = cfg.baseUrl;

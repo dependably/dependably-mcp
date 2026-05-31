@@ -14,20 +14,52 @@ const versionTarget = {
   version: z.string().describe('Package version (ecosystem-canonical form).'),
 };
 
+const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+const REVERSIBLE_BLOCK = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const DESTRUCTIVE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
 function versionPath(args: { ecosystem: string; name: string; version: string }): string {
   return `/api/v1/packages/${args.ecosystem}/${encodeURIComponent(args.name)}/${encodeURIComponent(args.version)}`;
 }
 
 export function registerVulnsTools(server: McpServer, client: DependablyClient): void {
-  server.tool(
+  server.registerTool(
     'list_vulnerabilities',
-    'List affected packages and severities from the OSV scan results, optionally narrowed by ecosystem or name.',
     {
-      ecosystem: ecosystem.optional(),
-      name: z.string().optional().describe('Filter to a single package name.'),
-      sort: z.string().optional().describe('Sort field (server default).'),
-      dir: z.enum(['asc', 'desc']).optional(),
-      ...paginationSchema,
+      title: 'List vulnerabilities',
+      description: 'List affected packages and severities from the OSV scan results, optionally narrowed by ecosystem or name.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {
+        ecosystem: ecosystem.optional(),
+        name: z.string().optional().describe('Filter to a single package name.'),
+        sort: z.string().optional().describe('Sort field (server default).'),
+        dir: z.enum(['asc', 'desc']).optional(),
+        ...paginationSchema,
+      },
     },
     async (args) =>
       run(async () =>
@@ -44,35 +76,71 @@ export function registerVulnsTools(server: McpServer, client: DependablyClient):
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'rescan_version',
-    'Force an immediate OSV rescan of a specific version. 1-hour cooldown enforced server-side (returns 429).',
-    versionTarget,
+    {
+      title: 'Rescan version',
+      description: 'Force an immediate OSV rescan of a specific version. 1-hour cooldown enforced server-side (returns 429).',
+      annotations: WRITE_ANNOTATIONS,
+      inputSchema: versionTarget,
+    },
     async (args) =>
-      run(async () => withSummary(`Rescan requested for ${args.ecosystem}/${args.name}@${args.version}.`, await client.post(`${versionPath(args)}/rescan`))),
+      run(async () =>
+        withSummary(
+          `Rescan requested for ${args.ecosystem}/${args.name}@${args.version}.`,
+          await client.post(`${versionPath(args)}/rescan`),
+        ),
+      ),
   );
 
-  server.tool(
+  server.registerTool(
     'block_version',
-    'Manually block a specific version. Subsequent fetches return 403 until unblocked.',
-    versionTarget,
+    {
+      title: 'Block version',
+      description: 'Manually block a specific version. Subsequent fetches return 403 until unblocked.',
+      annotations: REVERSIBLE_BLOCK,
+      inputSchema: versionTarget,
+    },
     async (args) =>
-      run(async () => withSummary(`Blocked ${args.ecosystem}/${args.name}@${args.version}.`, await client.post(`${versionPath(args)}/block`))),
+      run(async () =>
+        withSummary(
+          `Blocked ${args.ecosystem}/${args.name}@${args.version}.`,
+          await client.post(`${versionPath(args)}/block`),
+        ),
+      ),
   );
 
-  server.tool(
+  server.registerTool(
     'unblock_version',
-    'Lift a manual block on a version (also overrides any auto-block).',
-    versionTarget,
+    {
+      title: 'Unblock version',
+      description: 'Lift a manual block on a version (also overrides any auto-block).',
+      annotations: REVERSIBLE_BLOCK,
+      inputSchema: versionTarget,
+    },
     async (args) =>
-      run(async () => withSummary(`Unblocked ${args.ecosystem}/${args.name}@${args.version}.`, await client.post(`${versionPath(args)}/unblock`))),
+      run(async () =>
+        withSummary(
+          `Unblocked ${args.ecosystem}/${args.name}@${args.version}.`,
+          await client.post(`${versionPath(args)}/unblock`),
+        ),
+      ),
   );
 
-  server.tool(
+  server.registerTool(
     'yank_version',
-    'Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability.',
-    versionTarget,
+    {
+      title: 'Yank version',
+      description: 'Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability.',
+      annotations: DESTRUCTIVE_ANNOTATIONS,
+      inputSchema: versionTarget,
+    },
     async (args) =>
-      run(async () => withSummary(`Yanked ${args.ecosystem}/${args.name}@${args.version}.`, await client.del(versionPath(args)))),
+      run(async () =>
+        withSummary(
+          `Yanked ${args.ecosystem}/${args.name}@${args.version}.`,
+          await client.del(versionPath(args)),
+        ),
+      ),
   );
 }

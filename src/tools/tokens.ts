@@ -20,18 +20,47 @@ const description = z
   .optional()
   .describe('Free-text label, up to 200 characters.');
 
+const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+const DESTRUCTIVE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
 export function registerTokensTools(server: McpServer, client: DependablyClient): void {
-  server.tool(
+  server.registerTool(
     'list_tokens',
-    'List the caller\'s own user tokens (id, capabilities, expiry — never plaintext).',
-    {},
+    {
+      title: 'List user tokens',
+      description: 'List the caller\'s own user tokens (id, capabilities, expiry — never plaintext).',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {},
+    },
     async () => run(async () => json(await client.get('/api/v1/tokens'))),
   );
 
-  server.tool(
+  server.registerTool(
     'create_token',
-    'Mint a new user token. The plaintext token is returned ONCE in the response — surface it to the user immediately.',
-    { capabilities, expiresAt, description },
+    {
+      title: 'Create user token',
+      description: 'Mint a new user token. The plaintext token is returned ONCE in the response — surface it to the user immediately.',
+      annotations: WRITE_ANNOTATIONS,
+      inputSchema: { capabilities, expiresAt, description },
+    },
     async (args) =>
       run(async () =>
         withSummary(
@@ -45,29 +74,46 @@ export function registerTokensTools(server: McpServer, client: DependablyClient)
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'revoke_token',
-    'Revoke one of the caller\'s user tokens by id. Admins may revoke any user token in the org.',
-    { id: z.string().describe('Token id (from list_tokens).') },
+    {
+      title: 'Revoke user token',
+      description: 'Revoke one of the caller\'s user tokens by id. Admins may revoke any user token in the org.',
+      annotations: DESTRUCTIVE_ANNOTATIONS,
+      inputSchema: { id: z.string().describe('Token id (from list_tokens).') },
+    },
     async (args) =>
-      run(async () => withSummary(`Revoked token ${args.id}.`, await client.del(`/api/v1/tokens/${encodeURIComponent(args.id)}`))),
+      run(async () =>
+        withSummary(
+          `Revoked token ${args.id}.`,
+          await client.del(`/api/v1/tokens/${encodeURIComponent(args.id)}`),
+        ),
+      ),
   );
 
-  server.tool(
+  server.registerTool(
     'list_service_tokens',
-    'List the org\'s named service (M2M) tokens. Requires tenant:configure (admin+).',
-    {},
+    {
+      title: 'List service tokens',
+      description: 'List the org\'s named service (M2M) tokens. Requires tenant:configure (admin+).',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {},
+    },
     async () => run(async () => json(await client.get('/api/v1/service-tokens'))),
   );
 
-  server.tool(
+  server.registerTool(
     'create_service_token',
-    'Create a named service (M2M) token. Plaintext returned once. Requires tenant:configure.',
     {
-      name: z.string().describe('Human-readable service token name (e.g. "ci-publisher").'),
-      capabilities,
-      expiresAt,
-      description,
+      title: 'Create service token',
+      description: 'Create a named service (M2M) token. Plaintext returned once. Requires tenant:configure.',
+      annotations: WRITE_ANNOTATIONS,
+      inputSchema: {
+        name: z.string().describe('Human-readable service token name (e.g. "ci-publisher").'),
+        capabilities,
+        expiresAt,
+        description,
+      },
     },
     async (args) =>
       run(async () =>
@@ -83,13 +129,20 @@ export function registerTokensTools(server: McpServer, client: DependablyClient)
       ),
   );
 
-  server.tool(
+  server.registerTool(
     'revoke_service_token',
-    'Revoke a service token by id. Requires tenant:configure.',
-    { id: z.string().describe('Service token id (from list_service_tokens).') },
+    {
+      title: 'Revoke service token',
+      description: 'Revoke a service token by id. Requires tenant:configure.',
+      annotations: DESTRUCTIVE_ANNOTATIONS,
+      inputSchema: { id: z.string().describe('Service token id (from list_service_tokens).') },
+    },
     async (args) =>
       run(async () =>
-        withSummary(`Revoked service token ${args.id}.`, await client.del(`/api/v1/service-tokens/${encodeURIComponent(args.id)}`)),
+        withSummary(
+          `Revoked service token ${args.id}.`,
+          await client.del(`/api/v1/service-tokens/${encodeURIComponent(args.id)}`),
+        ),
       ),
   );
 }

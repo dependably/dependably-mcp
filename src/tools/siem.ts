@@ -18,17 +18,28 @@ const authActionPrefix = z
     'Auth-event action prefix. Examples: "login.failure", "login.locked", "lockout.triggered", "token.revoked", "rbac.member_removed". Repeat the param to OR multiple prefixes.',
   );
 
+const READ_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
 export function registerSiemTools(server: McpServer, client: DependablyClient): void {
-  server.tool(
+  server.registerTool(
     'siem_list_auth_events',
-    'Stream auth events from the audit log (GET /api/v1/siem/events/auth) — login successes/failures, lockouts, token mints/revocations, role changes. Default lookback 24h, capped at SIEM_MAX_LOOKBACK_DAYS (default 90). Requires read:audit capability or a system-admin token.',
     {
-      since: z.string().optional().describe('Lower bound as ISO-8601 timestamp. Default: 24h ago.'),
-      until: z.string().optional().describe('Upper bound as ISO-8601 timestamp. Default: now.'),
-      org: z.string().optional().describe('Org slug filter (system-admin tokens only — others are scoped to their own org).'),
-      action: z.array(authActionPrefix).optional().describe('Filter to these action prefixes. Omit for the server-default set (login./lockout./token./rbac.).'),
-      limit: z.number().int().positive().max(500).optional().describe('Page size, 1–500, default 100.'),
-      cursor: z.string().optional().describe('Opaque cursor from a previous page\'s response.'),
+      title: 'SIEM: auth events',
+      description: 'Stream auth events from the audit log (GET /api/v1/siem/events/auth) — login successes/failures, lockouts, token mints/revocations, role changes. Default lookback 24h, capped at SIEM_MAX_LOOKBACK_DAYS (default 90). Requires read:audit capability or a system-admin token.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {
+        since: z.string().optional().describe('Lower bound as ISO-8601 timestamp. Default: 24h ago.'),
+        until: z.string().optional().describe('Upper bound as ISO-8601 timestamp. Default: now.'),
+        org: z.string().optional().describe('Org slug filter (system-admin tokens only — others are scoped to their own org).'),
+        action: z.array(authActionPrefix).optional().describe('Filter to these action prefixes. Omit for the server-default set (login./lockout./token./rbac.).'),
+        limit: z.number().int().positive().max(500).optional().describe('Page size, 1–500, default 100.'),
+        cursor: z.string().optional().describe('Opaque cursor from a previous page\'s response.'),
+      },
     },
     async (args) =>
       run(async () => {
@@ -39,19 +50,25 @@ export function registerSiemTools(server: McpServer, client: DependablyClient): 
         if (args.limit) path.searchParams.set('limit', String(args.limit));
         if (args.cursor) path.searchParams.set('cursor', args.cursor);
         for (const a of args.action ?? []) path.searchParams.append('action', a);
-        const qs = path.search; // "?…" or ""
+        const qs = path.search;
         return json(await client.get(`/api/v1/siem/events/auth${qs}`));
       }),
   );
 
-  server.tool(
+  server.registerTool(
     'siem_vulnerabilities_summary',
-    'Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }.',
     {
-      org: z.string().optional().describe('Org slug filter (system-admin tokens only).'),
-      ecosystem: ecosystem.optional(),
+      title: 'SIEM: vulnerabilities summary',
+      description: 'Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {
+        org: z.string().optional().describe('Org slug filter (system-admin tokens only).'),
+        ecosystem: ecosystem.optional(),
+      },
     },
     async (args) =>
-      run(async () => json(await client.get('/api/v1/siem/vulnerabilities/summary', { org: args.org, ecosystem: args.ecosystem }))),
+      run(async () =>
+        json(await client.get('/api/v1/siem/vulnerabilities/summary', { org: args.org, ecosystem: args.ecosystem })),
+      ),
   );
 }
