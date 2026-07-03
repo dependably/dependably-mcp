@@ -28,6 +28,19 @@ Dependably's management API is JWT-session-first: the default auth scheme reads 
 
 `get_install_command` / `get_publish_command` cover all eight ecosystems (npm, pypi, nuget, maven, rpm, oci, golang, cargo). Go is proxy-only: it has an install command but no hosted publish endpoint, so `get_publish_command` returns guidance to push a VCS tag instead.
 
+### What scope should the token have?
+
+Mint the token with only the capabilities for the tools you intend to use. **v1 needs neither `push` (`publish:*`) nor `pull` (`read:packages`)** — publishing and pulling packages are done by your package manager with its own token, and the read/browse tools are deferred to v2 (see [Roadmap / v2](#roadmap--v2)). Pick from:
+
+| You want to… | Capability to grant | Unlocks |
+|---|---|---|
+| Monitor audit + vulnerability posture *(recommended minimal — read-only)* | `read:audit` | `siem_list_auth_events`, `siem_vulnerabilities_summary` |
+| Yank a bad published version | `yank:*` (or per-ecosystem `yank:npm`, …) | `yank_version` |
+| Bulk / air-gapped import | `import:*` **and** `tenant:configure` *(admin-grade)* | `import_manifest`, `admin_upload` |
+| Health / readiness / version / metrics, and the local command builders | *nothing* — anonymous / IP-allowlisted / local | the 6 observability + setup tools |
+
+A **`read:audit`-only** token is the safe default: it drives both SIEM tools (and, with them, every anonymous/local tool) while carrying no write power — a `yank`/`import` attempt returns a clean `403`. Add `yank:*` or `import:*`+`tenant:configure` only if you need those actions. Always use a **user-owned PAT** (service/M2M tokens `404` on gated endpoints).
+
 ### Known limits
 
 - **Service / machine (M2M) tokens currently `404`** on capability-gated endpoints — including `yank` and `import`. Use a **user-owned PAT**.
