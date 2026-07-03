@@ -42,7 +42,7 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
     'get_version',
     {
       title: 'Server version',
-      description: 'Server build version (GET /version).',
+      description: 'Server build version (GET /version). The endpoint is gated by the same IP allowlist as /metrics — if your MCP host isn\'t in the allowlist this returns 403.',
       annotations: READ_ANNOTATIONS,
       inputSchema: {},
     },

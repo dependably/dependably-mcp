@@ -2,10 +2,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
-import { json, run, withSummary, paginationSchema } from '../format.js';
+import { run, withSummary } from '../format.js';
 
 const ecosystem = z
-  .enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci'])
+  .enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo'])
   .describe('Package ecosystem.');
 
 const versionTarget = {
@@ -13,13 +13,6 @@ const versionTarget = {
   name: z.string().describe('Package name.'),
   version: z.string().describe('Package version (ecosystem-canonical form).'),
 };
-
-const READ_ANNOTATIONS = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-} as const;
 
 const DESTRUCTIVE_ANNOTATIONS = {
   readOnlyHint: false,
@@ -33,35 +26,6 @@ function versionPath(args: { ecosystem: string; name: string; version: string })
 }
 
 export function registerVulnsTools(server: McpServer, client: DependablyClient): void {
-  server.registerTool(
-    'list_vulnerabilities',
-    {
-      title: 'List vulnerabilities',
-      description: 'List affected packages and severities from the OSV scan results, optionally narrowed by ecosystem or name.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {
-        ecosystem: ecosystem.optional(),
-        name: z.string().optional().describe('Filter to a single package name.'),
-        sort: z.string().optional().describe('Sort field (server default).'),
-        dir: z.enum(['asc', 'desc']).optional(),
-        ...paginationSchema,
-      },
-    },
-    async (args) =>
-      run(async () =>
-        json(
-          await client.get('/api/v1/vuln-report', {
-            ecosystem: args.ecosystem,
-            name: args.name,
-            sort: args.sort,
-            dir: args.dir,
-            page: args.page,
-            limit: args.limit,
-          }),
-        ),
-      ),
-  );
-
   server.registerTool(
     'yank_version',
     {
