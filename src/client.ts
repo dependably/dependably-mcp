@@ -90,7 +90,7 @@ export class DependablyClient {
   }
 }
 
-function formatHttpError(
+export function formatHttpError(
   method: string,
   url: string,
   status: number,

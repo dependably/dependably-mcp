@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
 
-const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci']);
+const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
 
 // Known action prefixes for siem_list_auth_events (server filters by prefix match):
 //   login.success | login.failure | login.locked
