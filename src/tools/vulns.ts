@@ -21,20 +21,6 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-const WRITE_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: true,
-} as const;
-
-const REVERSIBLE_BLOCK = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-} as const;
-
 const DESTRUCTIVE_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true,
@@ -72,57 +58,6 @@ export function registerVulnsTools(server: McpServer, client: DependablyClient):
             page: args.page,
             limit: args.limit,
           }),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    'rescan_version',
-    {
-      title: 'Rescan version',
-      description: 'Force an immediate OSV rescan of a specific version. 1-hour cooldown enforced server-side (returns 429).',
-      annotations: WRITE_ANNOTATIONS,
-      inputSchema: versionTarget,
-    },
-    async (args) =>
-      run(async () =>
-        withSummary(
-          `Rescan requested for ${args.ecosystem}/${args.name}@${args.version}.`,
-          await client.post(`${versionPath(args)}/rescan`),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    'block_version',
-    {
-      title: 'Block version',
-      description: 'Manually block a specific version. Subsequent fetches return 403 until unblocked.',
-      annotations: REVERSIBLE_BLOCK,
-      inputSchema: versionTarget,
-    },
-    async (args) =>
-      run(async () =>
-        withSummary(
-          `Blocked ${args.ecosystem}/${args.name}@${args.version}.`,
-          await client.post(`${versionPath(args)}/block`),
-        ),
-      ),
-  );
-
-  server.registerTool(
-    'unblock_version',
-    {
-      title: 'Unblock version',
-      description: 'Lift a manual block on a version (also overrides any auto-block).',
-      annotations: REVERSIBLE_BLOCK,
-      inputSchema: versionTarget,
-    },
-    async (args) =>
-      run(async () =>
-        withSummary(
-          `Unblocked ${args.ecosystem}/${args.name}@${args.version}.`,
-          await client.post(`${versionPath(args)}/unblock`),
         ),
       ),
   );

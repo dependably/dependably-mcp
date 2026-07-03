@@ -10,10 +10,11 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-// Health / metrics / observability snapshot. Use these to triage incidents:
+// Health / metrics probes. Use these to triage incidents:
 //   - readiness_check       → which subsystem reports degraded?
-//   - get_observability_snapshot → blob sizes, last-success age per background job, since-startup counters, /metrics scrape diagnostics
 //   - get_prometheus_metrics → raw Prometheus text (IP-allowlisted server-side; bearer token is ignored)
+// These endpoints are anonymous / IP-allowlisted, so they work without a PAT
+// (subject to the /metrics IP allowlist).
 export function registerObservabilityTools(server: McpServer, client: DependablyClient): void {
   server.registerTool(
     'health_check',
@@ -57,27 +58,5 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
       inputSchema: {},
     },
     async () => run(async () => json(await client.get('/metrics'))),
-  );
-
-  server.registerTool(
-    'get_observability_snapshot',
-    {
-      title: 'Observability snapshot',
-      description: 'Operator dashboard snapshot (GET /api/v1/system/observability). Includes blob store sizes per tier, last-success age per background job, since-startup counters (publishes, proxy fetches, cache hits/misses), recent /metrics scrape attempts. Requires a system-admin token.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {},
-    },
-    async () => run(async () => json(await client.get('/api/v1/system/observability'))),
-  );
-
-  server.registerTool(
-    'get_metrics_access_config',
-    {
-      title: 'Metrics access config',
-      description: 'Current /metrics IP allowlist + enable flag (GET /api/v1/system/metrics-access). Requires a system-admin token.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {},
-    },
-    async () => run(async () => json(await client.get('/api/v1/system/metrics-access'))),
   );
 }
