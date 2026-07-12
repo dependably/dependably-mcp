@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { DependablyClient } from './client.js';
 import type { Config } from './config.js';
-import { registerVulnsTools } from './tools/vulns.js';
+import { registerYankTools } from './tools/yank.js';
 import { registerSiemTools } from './tools/siem.js';
 import { registerImportTools } from './tools/import.js';
 import { registerObservabilityTools } from './tools/observability.js';
@@ -14,9 +14,13 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
     version: '0.1.0',
   });
 
-  registerVulnsTools(server, client);
+  registerYankTools(server, client);
   registerSiemTools(server, client);
-  registerImportTools(server, client, cfg);
+  // The import tools read local files and upload them, so they are opt-in:
+  // registered only when DEPENDABLY_IMPORT_ROOT scopes what they may read.
+  if (cfg.importRoot) {
+    registerImportTools(server, cfg);
+  }
   registerObservabilityTools(server, client);
   registerSetupTools(server, cfg);
 

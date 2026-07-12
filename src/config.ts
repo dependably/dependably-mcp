@@ -1,3 +1,6 @@
+import { statSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 /**
  * Runtime configuration for the v1, PAT-only Dependably MCP server.
  *
@@ -7,8 +10,9 @@
  * `dependably_session` cookie and ignores the `Authorization` header, so a PAT
  * only reaches endpoints that opt into the `ApiToken` auth scheme (yank, import,
  * SIEM) plus anonymous / IP-allowlisted probes (health, readiness, version,
- * metrics). v1 ships exactly that surface: 11 tools across yank, SIEM, admin
- * import, observability, and the local install/publish command builders.
+ * metrics). v1 ships exactly that surface: 9 tools by default (yank, SIEM,
+ * observability, local install/publish command builders) plus the 2 admin
+ * import tools when `DEPENDABLY_IMPORT_ROOT` opts in.
  *
  * The read surface (package inventory, vulnerability list, audit logs, org
  * settings, whoami, setup snippet) is deferred to v2, once the server accepts
@@ -27,6 +31,13 @@ export interface Config {
   token: string;
   /** Per-request HTTP timeout in milliseconds. */
   timeoutMs: number;
+  /**
+   * Absolute directory the import tools may read artefact files from.
+   * Unset ⇒ the import tools are not registered at all. This is the opt-in
+   * that keeps the default tool surface free of local-file reads (an LLM
+   * tricked into calling admin_upload cannot exfiltrate arbitrary files).
+   */
+  importRoot?: string;
 }
 
 export function loadConfig(): Config {
@@ -62,5 +73,20 @@ export function loadConfig(): Config {
     timeoutMs = n;
   }
 
-  return { baseUrl, token, timeoutMs };
+  const importRootRaw = process.env.DEPENDABLY_IMPORT_ROOT?.trim();
+  let importRoot: string | undefined;
+  if (importRootRaw) {
+    importRoot = resolve(importRootRaw);
+    let stat;
+    try {
+      stat = statSync(importRoot);
+    } catch {
+      throw new Error(`DEPENDABLY_IMPORT_ROOT does not exist: ${importRoot}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`DEPENDABLY_IMPORT_ROOT must be a directory: ${importRoot}`);
+    }
+  }
+
+  return { baseUrl, token, timeoutMs, importRoot };
 }

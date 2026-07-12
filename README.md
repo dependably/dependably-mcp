@@ -6,7 +6,7 @@ Dependably is a self-hosted private artifact repository for npm, PyPI, NuGet, Ma
 
 ## v1 — PAT-only, works today
 
-This is **v1**. It authenticates **only** with a Dependably Personal Access Token (`DEPENDABLY_TOKEN`) sent as a bearer token, and it ships **only the tools that actually function with a PAT today** — 11 tools across 5 groups.
+This is **v1**. It authenticates **only** with a Dependably Personal Access Token (`DEPENDABLY_TOKEN`) sent as a bearer token, and it ships **only the tools that actually function with a PAT today** — 11 tools across 5 groups (9 by default; the 2 import tools are opt-in, see below).
 
 Dependably's management API is JWT-session-first: the default auth scheme reads the session JWT from the `dependably_session` cookie and never looks at the `Authorization` header. A PAT therefore only works on endpoints that explicitly opt into the `ApiToken` auth scheme (yank, admin import, SIEM) plus anonymous / IP-allowlisted probes (health, readiness, version, metrics). The install/publish command builders run entirely locally and never call the server. Everything else — the read surface — returns `401` to a PAT until a separate server change lands (see [Roadmap / v2](#roadmap--v2)), so it is **not** in v1.
 
@@ -14,17 +14,19 @@ Dependably's management API is JWT-session-first: the default auth scheme reads 
 
 | Tool | Group | Capability the PAT needs |
 |---|---|---|
-| `yank_version` — destructive delete of a published version | vulns | `yank:{ecosystem}` |
+| `yank_version` — destructive delete of a published version | yank | `yank:{ecosystem}` |
 | `siem_list_auth_events` — login/lockout/token/rbac auth events with ISO-8601 since/until + prefix filters | siem | `read:audit` |
 | `siem_vulnerabilities_summary` — severity-bucketed vuln counts by ecosystem | siem | `read:audit` |
-| `import_manifest` — manifest-driven, all-or-nothing bulk import (lockfile + referenced artefacts) | import | `import:*` + `tenant:configure` (admin-grade token) |
-| `admin_upload` — air-gapped bulk upload of N local artefact files (ecosystem auto-detected) | import | `import:*` + `tenant:configure` (admin-grade token) |
+| `import_manifest` — manifest-driven, all-or-nothing bulk import (lockfile + referenced artefacts) | import† | `import:*` + `tenant:configure` (admin-grade token) |
+| `admin_upload` — air-gapped bulk upload of N local artefact files (ecosystem auto-detected) | import† | `import:*` + `tenant:configure` (admin-grade token) |
 | `health_check` — liveness (`GET /health`) | observability | none (anonymous) |
 | `readiness_check` — readiness + per-subsystem checks (`GET /ready`) | observability | none (anonymous) |
 | `get_version` — server build version (`GET /version`) | observability | none (anonymous / IP-allowlisted) |
 | `get_prometheus_metrics` — raw `/metrics` text | observability | none (IP-allowlisted server-side) |
 | `get_install_command` — build the install shell command (does **not** execute) | setup | none (local, no server call) |
 | `get_publish_command` — build the publish shell command (does **not** execute) | setup | none (local, no server call) |
+
+† **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 9-tool surface, which performs no local file reads at all.
 
 `get_install_command` / `get_publish_command` cover all eight ecosystems (npm, pypi, nuget, maven, rpm, oci, golang, cargo). Go is proxy-only: it has an install command but no hosted publish endpoint, so `get_publish_command` returns guidance to push a VCS tag instead.
 
@@ -45,7 +47,7 @@ A **`read:audit`-only** token is the safe default: it drives both SIEM tools (an
 
 - **Service / machine (M2M) tokens currently `404`** on capability-gated endpoints — including `yank` and `import`. Use a **user-owned PAT**.
 - In **MFA-required orgs**, a token principal may get **`403 mfa_enrollment_required`** on gated endpoints even with the right capability.
-- Admin **import** (`import_manifest`, `admin_upload`) requires an **admin-grade token** carrying `import:*` and `tenant:configure`; a plain read PAT will be rejected.
+- Admin **import** (`import_manifest`, `admin_upload`) requires an **admin-grade token** carrying `import:*` and `tenant:configure`; a plain read PAT will be rejected. The tools are also **absent unless `DEPENDABLY_IMPORT_ROOT` is set** (see [Configure](#configure)).
 
 ## Roadmap / v2
 
@@ -80,6 +82,7 @@ The server is configured entirely through environment variables, supplied by you
 | `DEPENDABLY_BASE_URL` | yes | — | Base URL of your Dependably instance (e.g. `https://dependably.example.com`). Tenancy is resolved from the host — no org slug needed. |
 | `DEPENDABLY_TOKEN` | yes | — | A Dependably **Personal Access Token (PAT)**. Mint one from the web UI under *Tokens*. Sent as a bearer token. Use a **user-owned** PAT (service/M2M tokens currently `404` on gated endpoints). |
 | `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
+| `DEPENDABLY_IMPORT_ROOT` | no | *(unset)* | Opt-in for the two import tools. Set it to the directory holding your artefact files; `import_manifest` / `admin_upload` are only registered when it is set, and refuse to read files outside it. |
 
 The PAT's **capabilities** determine which tools succeed — see the capability column in [the 11 tools](#the-11-tools).
 
@@ -137,6 +140,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ```bash
 npm run dev   # tsc --watch
 npm run build # tsc once
+npm test      # build + smoke test (boots the server in-memory, asserts the tool surface)
 ```
 
 Source layout:
@@ -149,9 +153,9 @@ src/
 ├── server.ts          # registers the 5 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
 └── tools/
-    ├── vulns.ts        # yank_version
+    ├── yank.ts         # yank_version
     ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary
-    ├── import.ts       # import_manifest, admin_upload
+    ├── import.ts       # import_manifest, admin_upload (opt-in via DEPENDABLY_IMPORT_ROOT)
     ├── observability.ts# health_check, readiness_check, get_version, get_prometheus_metrics
     └── setup.ts        # get_install_command, get_publish_command
 ```

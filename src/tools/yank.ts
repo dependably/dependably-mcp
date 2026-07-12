@@ -25,12 +25,12 @@ function versionPath(args: { ecosystem: string; name: string; version: string })
   return `/api/v1/packages/${args.ecosystem}/${encodeURIComponent(args.name)}/${encodeURIComponent(args.version)}`;
 }
 
-export function registerVulnsTools(server: McpServer, client: DependablyClient): void {
+export function registerYankTools(server: McpServer, client: DependablyClient): void {
   server.registerTool(
     'yank_version',
     {
       title: 'Yank version',
-      description: 'Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability.',
+      description: 'Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability. Pass the plain package name (e.g. "@scope/pkg", "library/ubuntu", "github.com/x/y") — URL encoding is handled.',
       annotations: DESTRUCTIVE_ANNOTATIONS,
       inputSchema: versionTarget,
     },

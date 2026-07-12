@@ -1,6 +1,8 @@
 import type { Config } from './config.js';
 
-type Query = Record<string, string | number | boolean | undefined | null>;
+type QueryValue = string | number | boolean | undefined | null;
+/** Array values become repeated query params (?action=a&action=b). */
+type Query = Record<string, QueryValue | QueryValue[]>;
 
 export class DependablyApiError extends Error {
   constructor(
@@ -54,6 +56,11 @@ export class DependablyClient {
     try {
       res = await fetch(url, init);
     } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new Error(
+          `${method} ${url} timed out after ${this.cfg.timeoutMs}ms. Raise DEPENDABLY_TIMEOUT_MS if the instance is just slow.`,
+        );
+      }
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`${method} ${url} failed: ${msg}`);
     }
@@ -82,8 +89,10 @@ export class DependablyClient {
     const url = new URL(`${this.cfg.baseUrl}${p}`);
     if (query) {
       for (const [k, v] of Object.entries(query)) {
-        if (v === undefined || v === null || v === '') continue;
-        url.searchParams.set(k, String(v));
+        for (const item of Array.isArray(v) ? v : [v]) {
+          if (item === undefined || item === null || item === '') continue;
+          url.searchParams.append(k, String(item));
+        }
       }
     }
     return url.toString();

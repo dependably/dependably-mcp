@@ -42,17 +42,18 @@ export function registerSiemTools(server: McpServer, client: DependablyClient): 
       },
     },
     async (args) =>
-      run(async () => {
-        const path = new URL(`http://x/api/v1/siem/events/auth`);
-        if (args.since) path.searchParams.set('since', args.since);
-        if (args.until) path.searchParams.set('until', args.until);
-        if (args.org) path.searchParams.set('org', args.org);
-        if (args.limit) path.searchParams.set('limit', String(args.limit));
-        if (args.cursor) path.searchParams.set('cursor', args.cursor);
-        for (const a of args.action ?? []) path.searchParams.append('action', a);
-        const qs = path.search;
-        return json(await client.get(`/api/v1/siem/events/auth${qs}`));
-      }),
+      run(async () =>
+        json(
+          await client.get('/api/v1/siem/events/auth', {
+            since: args.since,
+            until: args.until,
+            org: args.org,
+            action: args.action,
+            limit: args.limit,
+            cursor: args.cursor,
+          }),
+        ),
+      ),
   );
 
   server.registerTool(

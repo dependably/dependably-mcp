@@ -1,11 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { readFile, realpath } from 'node:fs/promises';
+import { basename, resolve, sep } from 'node:path';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import { DependablyApiError, formatHttpError } from '../client.js';
-import type { DependablyClient } from '../client.js';
 import type { Config } from '../config.js';
 import { run, withSummary } from '../format.js';
 
@@ -27,7 +26,7 @@ const WRITE_ANNOTATIONS = {
 const filePaths = z
   .array(z.string().min(1))
   .min(1)
-  .describe('Absolute (or process-relative) paths to artefact files on the machine running this MCP server. Each file is read and streamed as a multipart part; the server auto-detects the ecosystem from the file contents.');
+  .describe('Paths to artefact files on the machine running this MCP server; every path must resolve inside DEPENDABLY_IMPORT_ROOT. Each file is read and streamed as a multipart part; the server auto-detects the ecosystem from the file contents.');
 
 const dryRun = z
   .boolean()
@@ -108,10 +107,32 @@ function buildUrl(
   return url.toString();
 }
 
-async function appendFile(form: FormData, field: string, path: string): Promise<void> {
-  const buf = await readFile(path);
+/**
+ * Resolve a user-supplied path and require it to live under the import root.
+ * realpath both requires the file to exist and resolves symlinks, so a link
+ * placed inside the root that points outside it is refused as well.
+ */
+async function resolveWithinRoot(root: string, path: string): Promise<string> {
+  let real: string;
+  try {
+    real = await realpath(resolve(path));
+  } catch {
+    throw new Error(`File not found: ${path}`);
+  }
+  const rootReal = await realpath(root);
+  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+    throw new Error(
+      `Refusing to read ${path}: it resolves outside DEPENDABLY_IMPORT_ROOT (${root}).`,
+    );
+  }
+  return real;
+}
+
+async function appendFile(form: FormData, field: string, root: string, path: string): Promise<void> {
+  const real = await resolveWithinRoot(root, path);
+  const buf = await readFile(real);
   // new Uint8Array(buf) avoids a SharedArrayBuffer typing mismatch on Blob's BlobPart.
-  form.append(field, new Blob([new Uint8Array(buf)]), basename(path));
+  form.append(field, new Blob([new Uint8Array(buf)]), basename(real));
 }
 
 function summarize(response: unknown): string {
@@ -127,13 +148,18 @@ function summarize(response: unknown): string {
   return 'Import complete.';
 }
 
-export function registerImportTools(server: McpServer, _client: DependablyClient, cfg: Config): void {
+export function registerImportTools(server: McpServer, cfg: Config): void {
+  const root = cfg.importRoot;
+  if (!root) {
+    throw new Error('registerImportTools requires cfg.importRoot (DEPENDABLY_IMPORT_ROOT)');
+  }
+
   server.registerTool(
     'admin_upload',
     {
       title: 'Admin bulk upload',
       description:
-        'Air-gapped bulk import: upload N local artefact files (any supported ecosystem) as "uploaded" package versions. POST /api/v1/admin/upload (multipart). The server detects each file\'s ecosystem from its contents — no ecosystem argument. One bad file is rejected per-file; the rest of the batch proceeds. Requires a token with the import-all capability. Files are read from the machine running this MCP server.',
+        'Air-gapped bulk import: upload N local artefact files (any supported ecosystem) as "uploaded" package versions. POST /api/v1/admin/upload (multipart). The server detects each file\'s ecosystem from its contents — no ecosystem argument. One bad file is rejected per-file; the rest of the batch proceeds. Requires a token with the import-all capability. Files are read from the machine running this MCP server and must live under DEPENDABLY_IMPORT_ROOT.',
       annotations: WRITE_ANNOTATIONS,
       inputSchema: {
         files: filePaths,
@@ -145,7 +171,7 @@ export function registerImportTools(server: McpServer, _client: DependablyClient
         const form = new FormData();
         for (const path of args.files) {
           // Field name "files"; the controller accepts any field except "sha256sums".
-          await appendFile(form, 'files', path);
+          await appendFile(form, 'files', root, path);
         }
         const response = await multipartPost(cfg, '/api/v1/admin/upload', form, {
           dryRun: args.dry_run,
@@ -159,7 +185,7 @@ export function registerImportTools(server: McpServer, _client: DependablyClient
     {
       title: 'Import from manifest',
       description:
-        'Manifest-driven, all-or-nothing import: a lockfile (package-lock.json, requirements.txt, packages.lock.json, Pipfile.lock, or poetry.lock) plus every artefact it references. POST /api/v1/admin/import/manifest (multipart). The server pre-validates manifest↔artefact correspondence and hashes before writing anything; any mismatch rejects the entire batch with a 422 report. Requires a token with the import-all capability. All paths are read from the machine running this MCP server.',
+        'Manifest-driven, all-or-nothing import: a lockfile (package-lock.json, requirements.txt, packages.lock.json, Pipfile.lock, or poetry.lock) plus every artefact it references. POST /api/v1/admin/import/manifest (multipart). The server pre-validates manifest↔artefact correspondence and hashes before writing anything; any mismatch rejects the entire batch with a 422 report. Requires a token with the import-all capability. All paths are read from the machine running this MCP server and must live under DEPENDABLY_IMPORT_ROOT.',
       annotations: WRITE_ANNOTATIONS,
       inputSchema: {
         manifest_path: z
@@ -173,9 +199,9 @@ export function registerImportTools(server: McpServer, _client: DependablyClient
     async (args) =>
       run(async () => {
         const form = new FormData();
-        await appendFile(form, 'manifest', args.manifest_path);
+        await appendFile(form, 'manifest', root, args.manifest_path);
         for (const path of args.files) {
-          await appendFile(form, 'files', path);
+          await appendFile(form, 'files', root, path);
         }
         const response = await multipartPost(cfg, '/api/v1/admin/import/manifest', form, {
           dryRun: args.dry_run,
