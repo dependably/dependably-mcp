@@ -63,7 +63,7 @@ When #343 ships, these return in v2.
 ## Install
 
 ```bash
-git clone https://github.com/<you>/dependably-mcp.git
+git clone https://gitlab.northwardlabs.ca/moonlitlabs/dependably-mcp.git
 cd dependably-mcp
 npm install
 npm run build
@@ -147,7 +147,7 @@ src/
 ├── config.ts          # env parsing (PAT-only)
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
 ├── server.ts          # registers the 5 tool modules
-├── format.ts          # tool-result helpers + shared pagination schema
+├── format.ts          # tool-result helpers (json/withSummary/err/run)
 └── tools/
     ├── vulns.ts        # yank_version
     ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary

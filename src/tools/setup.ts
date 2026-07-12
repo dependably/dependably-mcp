@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { Config } from '../config.js';
-import { err, type ToolResult } from '../format.js';
+import type { ToolResult } from '../format.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
 
@@ -129,9 +129,15 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
           );
         }
         case 'golang':
-          return err(
-            'Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.',
-          );
+          // Informational, not an error: there is simply no publish command to return.
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.',
+              },
+            ],
+          };
         case 'cargo':
           return fenced(
             'bash',

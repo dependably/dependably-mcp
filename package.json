@@ -2,6 +2,19 @@
   "name": "dependably-mcp",
   "version": "0.1.0",
   "description": "MCP server for the Dependably self-hosted artifact repository (npm/PyPI/NuGet/Maven/RPM/OCI/Go/Cargo).",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "dependably",
+    "artifact-repository",
+    "supply-chain",
+    "registry"
+  ],
+  "author": "Michael Hiland",
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitlab.northwardlabs.ca/moonlitlabs/dependably-mcp.git"
+  },
   "type": "module",
   "bin": {
     "dependably-mcp": "dist/index.js"
@@ -15,7 +28,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
