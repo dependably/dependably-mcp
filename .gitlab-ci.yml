@@ -9,24 +9,26 @@
 #   same version. Mirrors the checker-npm (@dependably/npm-check) pipeline.
 #
 #   test        `npm test` (tsc build + scripts/smoke.mjs in-memory tool-surface check)
-#                on every push/MR
+#               on every push/MR
 #   npm-check   audits package-lock.json with our own dogfooded checker
-#               (@dependably/npm-check, pulled from the private registry via
-#               the root .npmrc @dependably scope) — skipped until
-#               DEPENDABLY_TOKEN is configured
+#               (@dependably/npm-check)
 #   build       `npm run build && npm pack` the publishable tarball, kept as a
 #               job artifact
 #   publish     manual gate on a vX.Y.Z tag — pushes the built tarball to the
 #               private dependably (dogfood) registry
 #
+# All npm installs route through the private dependably registry (like every
+# other Dependably repo's CI) rather than the public registry: package-lock.json
+# resolves against dependably.northwardlabs.ca (see root .npmrc, and dev
+# machines that dogfood the instance as their default npm registry), so a
+# pipeline without these credentials 401s on ordinary installs, not just
+# @dependably-scoped ones.
+#
 # Required CI/CD variables (Settings → CI/CD → Variables):
-#   DEPENDABLY_TOKEN  Unprotected + Masked — read token for the @dependably npm
-#                     scope on dependably.northwardlabs.ca (see root .npmrc).
-#                     Unprotected so MR pipelines (unprotected branches) can
-#                     use it too; the npm-check job is skipped without it.
-#   REGISTRY_URL      Protected          — base URL of the private dependably
-#                     instance, e.g. https://dependably.northwardlabs.ca/
-#   REGISTRY_KEY      Protected + Masked — npm publish token for that instance
+#   REGISTRY_URL  Protected          — base URL of the private dependably
+#                 instance, e.g. https://dependably.northwardlabs.ca/
+#   REGISTRY_KEY  Protected + Masked — npm token for that instance (install +
+#                 publish)
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so
 # the full suite gates the MR, not a redundant branch pipeline), the branch
@@ -50,38 +52,53 @@ stages:
   - build
   - publish
 
-# Reusable npm dependency cache (keyed on the lockfile).
-.npm_install: &npm_install
+# Wires REGISTRY_URL + REGISTRY_KEY (project CI/CD variables) into npm so `npm
+# ci`/`npm install`/`npx` route through the private dependably instance instead
+# of the public registry — package-lock.json's `resolved` entries already point
+# there (dev machines default to it), so this isn't optional plumbing, it's what
+# makes installs resolve at all. HARD-FAILS when either var is empty rather than
+# silently falling back to public. Overwrites the project-root .npmrc for the
+# duration of the job (it's a fresh checkout each time — never persisted back);
+# doing it at project level, not $HOME, so it reliably wins over the committed
+# .npmrc's @dependably-scope line rather than racing it on precedence.
+.private-registry-setup:
+  before_script:
+    - |
+      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${REGISTRY_KEY:-}" ]; then
+        echo "ERROR: REGISTRY_URL/REGISTRY_KEY are empty — refusing to install from the public registry." >&2
+        echo "Both must be set as CI/CD variables (Settings > CI/CD > Variables)." >&2
+        exit 1
+      fi
+      HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's|^https?://||; s|/.*||')
+      printf 'registry=%s/npm/\n//%s/npm/:_authToken=%s\nalways-auth=true\nfund=false\n' \
+        "$REGISTRY_URL" "$HOST" "$REGISTRY_KEY" > .npmrc
+      ACTIVE=$(npm config get registry)
+      case "$ACTIVE" in *npmjs.org*) echo "ERROR: npm still resolved to the public registry ($ACTIVE)." >&2; exit 1 ;; esac
+      echo "npm registry → $ACTIVE"
+    - npm ci --cache .npm --prefer-offline
   cache:
     key:
       files:
         - package-lock.json
     paths:
       - .npm/
-  before_script:
-    - npm ci --cache .npm --prefer-offline
 
 test:
   stage: test
-  <<: *npm_install
+  extends: .private-registry-setup
   script:
     - npm test
 
-# Dogfoods our own supply-chain checker against our own lockfile. Gated on
-# DEPENDABLY_TOKEN being configured so a fresh pipeline (before the operator
-# sets up the private-registry token) doesn't hard-fail before ops can wire it
-# up; flip the `rules:` to unconditional once the variable is in place.
+# Dogfoods our own supply-chain checker against our own lockfile.
 npm-check:
   stage: test
-  <<: *npm_install
-  rules:
-    - if: '$DEPENDABLY_TOKEN'
+  extends: .private-registry-setup
   script:
     - npx -y @dependably/npm-check@1.7.1 audit package-lock.json
 
 build:
   stage: build
-  <<: *npm_install
+  extends: .private-registry-setup
   script:
     - npm run build
     - npm pack
@@ -112,8 +129,6 @@ publish:
         exit 1
       fi
     - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
-    # Separate --userconfig file for the publish token, rather than overwriting the
-    # committed root .npmrc (which only maps the @dependably scope for npm-check).
     - |
       {
         echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
