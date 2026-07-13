@@ -1,0 +1,19 @@
+# Supply-chain: audit package-lock.json with our own dogfooded checker whenever
+# it (or package.json) changes. @dependably/npm-check lives on the private
+# dependably registry (see root .npmrc), so this needs a DEPENDABLY_TOKEN with
+# read access to dependably.northwardlabs.ca. Without it the check is skipped
+# (a warning, not a failure) so contributors without feed access can still
+# commit — CI enforces it regardless.
+staged_npm_deps=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^package(-lock)?\.json$' || true)
+
+if [ -n "$staged_npm_deps" ]; then
+  if [ -z "${DEPENDABLY_TOKEN:-}" ]; then
+    echo "⚠ Skipping npm-check: DEPENDABLY_TOKEN not set (private feed unavailable). CI will still enforce it."
+  else
+    echo "Auditing package-lock.json (@dependably/npm-check)…"
+    if ! npx -y @dependably/npm-check@1.7.1 audit package-lock.json; then
+      echo "✗ npm-check found issues. Fix them, or allowlist a host in .dependably."
+      exit 1
+    fi
+  fi
+fi

@@ -1,0 +1,156 @@
+# CI/CD pipeline for dependably-mcp
+#
+# Flow:  test  →  build  →  publish (manual, tag-driven)
+#
+#   Releases are TAG-DRIVEN: push a `vX.Y.Z` tag on main and the `publish` job
+#   appears as a manual gate on that tag's pipeline. It does NOT run on the
+#   default-branch pipeline — that's what guarantees the release tag exists
+#   and prevents a main pipeline and its tag pipeline from both publishing the
+#   same version. Mirrors the checker-npm (@dependably/npm-check) pipeline.
+#
+#   test        `npm test` (tsc build + scripts/smoke.mjs in-memory tool-surface check)
+#               on every push/MR
+#   npm-check   audits package-lock.json with our own dogfooded checker
+#               (@dependably/npm-check)
+#   build       `npm run build && npm pack` the publishable tarball, kept as a
+#               job artifact
+#   publish     manual gate on a vX.Y.Z tag — pushes the built tarball to the
+#               private dependably (dogfood) registry
+#
+# All npm installs route through the private dependably registry (like every
+# other Dependably repo's CI) rather than the public registry: package-lock.json
+# resolves against dependably.northwardlabs.ca (see root .npmrc, and dev
+# machines that dogfood the instance as their default npm registry), so a
+# pipeline without these credentials 401s on ordinary installs, not just
+# @dependably-scoped ones.
+#
+# Required CI/CD variables (Settings → CI/CD → Variables):
+#   REGISTRY_URL  Protected          — base URL of the private dependably
+#                 instance, e.g. https://dependably.northwardlabs.ca/
+#   REGISTRY_KEY  Protected + Masked — npm token for that instance (install +
+#                 publish)
+
+# Run ONE pipeline per change: a merge-request pipeline when an MR is open (so
+# the full suite gates the MR, not a redundant branch pipeline), the branch
+# pipeline on main, and tag pipelines.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+  auto_cancel:
+    on_new_commit: interruptible
+
+default:
+  image: node:20
+  interruptible: true
+
+stages:
+  - test
+  - build
+  - publish
+
+# Wires REGISTRY_URL + REGISTRY_KEY (project CI/CD variables) into npm so `npm
+# ci`/`npm install`/`npx` route through the private dependably instance instead
+# of the public registry — package-lock.json's `resolved` entries already point
+# there (dev machines default to it), so this isn't optional plumbing, it's what
+# makes installs resolve at all. HARD-FAILS when either var is empty rather than
+# silently falling back to public. Overwrites the project-root .npmrc for the
+# duration of the job (it's a fresh checkout each time — never persisted back);
+# doing it at project level, not $HOME, so it reliably wins over the committed
+# .npmrc's @dependably-scope line rather than racing it on precedence.
+.private-registry-setup:
+  before_script:
+    - |
+      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${REGISTRY_KEY:-}" ]; then
+        echo "ERROR: REGISTRY_URL/REGISTRY_KEY are empty — refusing to install from the public registry." >&2
+        echo "Both must be set as CI/CD variables (Settings > CI/CD > Variables)." >&2
+        exit 1
+      fi
+      HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's|^https?://||; s|/.*||')
+      printf 'registry=%s/npm/\n//%s/npm/:_authToken=%s\nalways-auth=true\nfund=false\n' \
+        "$REGISTRY_URL" "$HOST" "$REGISTRY_KEY" > .npmrc
+      ACTIVE=$(npm config get registry)
+      case "$ACTIVE" in *npmjs.org*) echo "ERROR: npm still resolved to the public registry ($ACTIVE)." >&2; exit 1 ;; esac
+      echo "npm registry → $ACTIVE"
+    - npm ci --cache .npm --prefer-offline
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+
+test:
+  stage: test
+  extends: .private-registry-setup
+  script:
+    - npm test
+
+# Dogfoods our own supply-chain checker against our own lockfile. Deliberately
+# does NOT extend .private-registry-setup: that template overwrites .npmrc with
+# the resolved REGISTRY_KEY in plaintext, which is exactly what npm-check's own
+# valid-npmrc rule flags as a supply-chain anti-pattern — it would be auditing a
+# file we just made non-compliant. This job only needs the @dependably scope
+# (already mapped in the committed .npmrc via `${DEPENDABLY_TOKEN}`, an env-var
+# reference, not a literal secret) to resolve npm-check itself via npx; no
+# `npm ci` of our own deps is needed to lint a static lockfile.
+npm-check:
+  stage: test
+  script:
+    - |
+      if [ -z "${REGISTRY_KEY:-}" ]; then
+        echo "ERROR: REGISTRY_KEY must be set as a CI/CD variable (used here as DEPENDABLY_TOKEN for the @dependably scope)." >&2
+        exit 1
+      fi
+    - DEPENDABLY_TOKEN="$REGISTRY_KEY" npx -y @dependably/npm-check@1.7.1 audit package-lock.json
+
+build:
+  stage: build
+  extends: .private-registry-setup
+  script:
+    - npm run build
+    - npm pack
+  artifacts:
+    paths:
+      - "*.tgz"
+    expire_in: 1 week
+
+publish:
+  stage: publish
+  # External write (pushes the tarball to the registry) — never auto-cancel it.
+  interruptible: false
+  # Only the build artifact is needed — no source install, and publishing a
+  # prebuilt tarball deliberately skips `prepublishOnly` (which re-runs the
+  # full suite). The `test` stage above is the authoritative quality gate.
+  dependencies:
+    - build
+  # Manual approval on a version tag. Serialize so two publishes can't race.
+  resource_group: publish
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+      allow_failure: false
+  script:
+    - |
+      if [ -z "$REGISTRY_URL" ] || [ -z "$REGISTRY_KEY" ]; then
+        echo "ERROR: REGISTRY_URL and REGISTRY_KEY must be set as CI/CD variables." >&2
+        exit 1
+      fi
+    - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
+    - |
+      {
+        echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
+        echo "always-auth=true"
+      } > .npmrc.publish
+    - TARBALL=$(ls ./*.tgz)
+    - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
+    - echo "Publishing $TARBALL ($PKG) to $REGISTRY_URL"
+    - npm publish "$TARBALL" --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "Verifying $PKG is live on the registry…"
+    - npm view "$PKG" version --registry "$REGISTRY_URL"
+    - echo "✓ $PKG published and verified on $REGISTRY_URL"
+  after_script:
+    - rm -f .npmrc.publish
