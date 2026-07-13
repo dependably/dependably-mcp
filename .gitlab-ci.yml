@@ -1,6 +1,6 @@
 # CI/CD pipeline for dependably-mcp
 #
-# Flow:  test  →  build  →  publish (manual, tag-driven)
+# Flow:  test  →  build  →  sbom  →  sbom-publish  →  publish (manual, tag-driven)
 #
 #   Releases are TAG-DRIVEN: push a `vX.Y.Z` tag on main and the `publish` job
 #   appears as a manual gate on that tag's pipeline. It does NOT run on the
@@ -8,14 +8,18 @@
 #   and prevents a main pipeline and its tag pipeline from both publishing the
 #   same version. Mirrors the checker-npm (@dependably/npm-check) pipeline.
 #
-#   test        `npm test` (tsc build + scripts/smoke.mjs in-memory tool-surface check)
-#               on every push/MR
-#   npm-check   audits package-lock.json with our own dogfooded checker
-#               (@dependably/npm-check)
-#   build       `npm run build && npm pack` the publishable tarball, kept as a
-#               job artifact
-#   publish     manual gate on a vX.Y.Z tag — pushes the built tarball to the
-#               private dependably (dogfood) registry
+#   test          `npm test` (tsc build + scripts/smoke.mjs in-memory tool-surface check)
+#                 on every push/MR
+#   npm-check     audits package-lock.json with our own dogfooded checker
+#                 (@dependably/npm-check)
+#   build         `npm run build && npm pack` the publishable tarball, kept as a
+#                 job artifact
+#   sbom          generate a CycloneDX SBOM (every pipeline), kept as an artifact
+#   sbom-publish  upload the SBOM to Dependency-Track on the default branch (its
+#                 own stage so it never races the `sbom` job in the shared build
+#                 dir)
+#   publish       manual gate on a vX.Y.Z tag — pushes the built tarball to the
+#                 private dependably (dogfood) registry
 #
 # All npm installs route through the private dependably registry (like every
 # other Dependably repo's CI) rather than the public registry: package-lock.json
@@ -25,10 +29,14 @@
 # @dependably-scoped ones.
 #
 # Required CI/CD variables (Settings → CI/CD → Variables):
-#   REGISTRY_URL  Protected          — base URL of the private dependably
-#                 instance, e.g. https://dependably.northwardlabs.ca/
-#   REGISTRY_KEY  Protected + Masked — npm token for that instance (install +
-#                 publish)
+#   REGISTRY_URL          Protected          — base URL of the private
+#                         dependably instance, e.g. https://dependably.northwardlabs.ca/
+#   REGISTRY_KEY          Protected + Masked — npm token for that instance
+#                         (install + publish)
+#   dependencyTrack_url   Protected          — Dependency-Track base URL, e.g.
+#                         https://dtrack.example.com
+#   dependencyTrack_token Protected + Masked — DT API key with BOM_UPLOAD +
+#                         PROJECT_CREATION_UPLOAD perms
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so
 # the full suite gates the MR, not a redundant branch pipeline), the branch
@@ -50,6 +58,8 @@ default:
 stages:
   - test
   - build
+  - sbom
+  - sbom-publish
   - publish
 
 # Wires REGISTRY_URL + REGISTRY_KEY (project CI/CD variables) into npm so `npm
@@ -117,6 +127,79 @@ build:
     paths:
       - "*.tgz"
     expire_in: 1 week
+
+# Software Bill of Materials (CycloneDX, spec 1.6). Generated on every pipeline
+# from the installed dependency tree and kept as an artifact. cyclonedx-npm is
+# a devDependency resolved through package-lock.json, so `npm ci` always
+# installs the exact locked version regardless of the caret range in
+# package.json. Mirrors checker-npm's `sbom` job.
+sbom:
+  stage: sbom
+  extends: .private-registry-setup
+  script:
+    - npm run sbom
+  artifacts:
+    paths:
+      - sbom.json
+    expire_in: 30 days
+
+# Publish the SBOM to Dependency-Track for continuous supply-chain monitoring.
+# Default branch only. Runs in its own stage after `sbom` and consumes that
+# job's artifact (alpine:3 + curl, mirrors checker-npm's sbom-publish job).
+#
+# Text fields use `--form-string`, not `-F`: in a curl `-F` value, a leading
+# `@` means "read this file", which would misfire if the project/package name
+# ever gained an `@scope/` prefix. `--form-string` sends values verbatim with
+# no @/< interpretation; only the actual file upload keeps `-F "bom=@sbom.json"`.
+#
+# autoCreate stands the project up on first upload; projectVersion tracks the
+# package.json version (read with sed since the alpine image has no node) so
+# each release is a distinct BOM. Hard-fails when the Dependency-Track
+# variables aren't configured, mirroring `publish`'s REGISTRY_* guard.
+sbom-publish:
+  stage: sbom-publish
+  image: alpine:3
+  # External write (uploads the BOM to Dependency-Track) — never auto-cancel mid-upload.
+  interruptible: false
+  needs:
+    - job: sbom
+      artifacts: true
+  resource_group: sbom-publish
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache curl
+    - |
+      if [ -z "$dependencyTrack_url" ] || [ -z "$dependencyTrack_token" ]; then
+        echo "ERROR: dependencyTrack_url and dependencyTrack_token must be set as CI/CD variables." >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      if [ ! -s sbom.json ]; then
+        echo "ERROR: sbom.json (from the sbom job artifact) is missing. Directory contents:" >&2
+        ls -la >&2
+        exit 1
+      fi
+      BASE="${dependencyTrack_url%/}"
+      PROJECT="dependably-mcp"
+      VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' package.json | head -n1)
+      if [ -z "$VERSION" ]; then
+        echo "ERROR: could not determine version from package.json." >&2
+        exit 1
+      fi
+      echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE"
+      status=$(curl -sS -o /tmp/bom.out -w '%{http_code}' \
+        -X POST "$BASE/api/v1/bom" \
+        -H "X-Api-Key: $dependencyTrack_token" \
+        --form-string "autoCreate=true" \
+        --form-string "projectName=$PROJECT" \
+        --form-string "projectVersion=$VERSION" \
+        -F "bom=@sbom.json")
+      case "$status" in
+        200) echo "✓ SBOM uploaded";;
+        *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
+      esac
 
 publish:
   stage: publish

@@ -32,13 +32,15 @@
     "pretest": "npm run build",
     "test": "node scripts/smoke.mjs",
     "prepublishOnly": "npm test",
-    "prepare": "husky"
+    "prepare": "husky",
+    "sbom": "cyclonedx-npm --output-format json --output-file sbom.json"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@cyclonedx/cyclonedx-npm": "^5.0.0",
     "@types/node": "^22.10.2",
     "husky": "^9.1.7",
     "typescript": "^5.7.2"
