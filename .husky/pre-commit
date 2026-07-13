@@ -12,7 +12,7 @@ if [ -n "$staged_npm_deps" ]; then
   else
     echo "Auditing package-lock.json (@dependably/npm-check)…"
     if ! npx -y @dependably/npm-check@1.7.1 audit package-lock.json; then
-      echo "✗ npm-check found issues. Fix them, or allowlist a host in .dependably-check."
+      echo "✗ npm-check found issues. Fix them, or allowlist a host in .dependably."
       exit 1
     fi
   fi

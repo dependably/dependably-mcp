@@ -89,12 +89,23 @@ test:
   script:
     - npm test
 
-# Dogfoods our own supply-chain checker against our own lockfile.
+# Dogfoods our own supply-chain checker against our own lockfile. Deliberately
+# does NOT extend .private-registry-setup: that template overwrites .npmrc with
+# the resolved REGISTRY_KEY in plaintext, which is exactly what npm-check's own
+# valid-npmrc rule flags as a supply-chain anti-pattern — it would be auditing a
+# file we just made non-compliant. This job only needs the @dependably scope
+# (already mapped in the committed .npmrc via `${DEPENDABLY_TOKEN}`, an env-var
+# reference, not a literal secret) to resolve npm-check itself via npx; no
+# `npm ci` of our own deps is needed to lint a static lockfile.
 npm-check:
   stage: test
-  extends: .private-registry-setup
   script:
-    - npx -y @dependably/npm-check@1.7.1 audit package-lock.json
+    - |
+      if [ -z "${REGISTRY_KEY:-}" ]; then
+        echo "ERROR: REGISTRY_KEY must be set as a CI/CD variable (used here as DEPENDABLY_TOKEN for the @dependably scope)." >&2
+        exit 1
+      fi
+    - DEPENDABLY_TOKEN="$REGISTRY_KEY" npx -y @dependably/npm-check@1.7.1 audit package-lock.json
 
 build:
   stage: build
