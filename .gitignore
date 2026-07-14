@@ -7,3 +7,6 @@ dist/
 .claude/
 *.tgz
 sbom.json
+
+# npm-check write backups (timestamped lockfile/package.json snapshots)
+.backups/

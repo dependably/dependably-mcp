@@ -115,7 +115,7 @@ npm-check:
         echo "ERROR: REGISTRY_KEY must be set as a CI/CD variable (used here as DEPENDABLY_TOKEN for the @dependably scope)." >&2
         exit 1
       fi
-    - DEPENDABLY_TOKEN="$REGISTRY_KEY" npx -y @dependably/npm-check@1.7.1 audit package-lock.json
+    - DEPENDABLY_TOKEN="$REGISTRY_KEY" npx -y @dependably/npm-check@1.8.0 audit package-lock.json
 
 build:
   stage: build
