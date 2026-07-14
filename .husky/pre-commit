@@ -1,19 +1,26 @@
 # Supply-chain: audit package-lock.json with our own dogfooded checker whenever
-# it (or package.json) changes. @dependably/npm-check lives on the private
-# dependably registry (see root .npmrc), so this needs a DEPENDABLY_TOKEN with
-# read access to dependably.northwardlabs.ca. Without it the check is skipped
-# (a warning, not a failure) so contributors without feed access can still
-# commit — CI enforces it regardless.
+# it (or package.json) changes. @dependably/npm-check is a devDependency
+# (`npm ci` pulls it down like any other) — this hook never installs it itself;
+# it only checks whether a copy is already available (local node_modules, or a
+# global install) and hard-fails with instructions if not, so a missing tool
+# is loud rather than a silently-skipped security check.
 staged_npm_deps=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^package(-lock)?\.json$' || true)
 
 if [ -n "$staged_npm_deps" ]; then
-  if [ -z "${DEPENDABLY_TOKEN:-}" ]; then
-    echo "⚠ Skipping npm-check: DEPENDABLY_TOKEN not set (private feed unavailable). CI will still enforce it."
+  if [ -x "./node_modules/.bin/npm-check" ]; then
+    NPM_CHECK="./node_modules/.bin/npm-check"
+  elif command -v npm-check >/dev/null 2>&1; then
+    NPM_CHECK="npm-check"
   else
-    echo "Auditing package-lock.json (@dependably/npm-check)…"
-    if ! npx -y @dependably/npm-check@1.7.1 audit package-lock.json; then
-      echo "✗ npm-check found issues. Fix them, or allowlist a host in .dependably."
-      exit 1
-    fi
+    echo "✗ npm-check is not installed (needed to audit package-lock.json)." >&2
+    echo "  Run \`npm ci\` to install it as a devDependency, or install it globally:" >&2
+    echo "  npm install -g @dependably/npm-check" >&2
+    exit 1
+  fi
+
+  echo "Auditing package-lock.json (@dependably/npm-check)…"
+  if ! "$NPM_CHECK" audit package-lock.json; then
+    echo "✗ npm-check found issues. Fix them, or allowlist a host in .dependably."
+    exit 1
   fi
 fi
