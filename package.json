@@ -41,6 +41,7 @@
   },
   "devDependencies": {
     "@cyclonedx/cyclonedx-npm": "^5.0.0",
+    "@dependably/npm-check": "1.7.1",
     "@types/node": "^22.10.2",
     "husky": "^9.1.7",
     "typescript": "^5.7.2"
