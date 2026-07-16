@@ -1,6 +1,7 @@
 # CI/CD pipeline for dependably-mcp
 #
 # Flow:  test  →  build  →  sbom  →  sbom-publish  →  publish (manual, tag-driven)
+#                                                      publish-dev (manual, main)
 #
 #   Releases are TAG-DRIVEN: push a `vX.Y.Z` tag on main and the `publish` job
 #   appears as a manual gate on that tag's pipeline. It does NOT run on the
@@ -20,6 +21,9 @@
 #                 dir)
 #   publish       manual gate on a vX.Y.Z tag — pushes the built tarball to the
 #                 private dependably (dogfood) registry
+#   publish-dev   manual gate on the default branch — pushes an internal-testing
+#                 prerelease (<version>-dev.<iid>.<sha>, dist-tag `dev`) to the
+#                 same private registry
 #
 # All npm installs route through the private dependably registry (like every
 # other Dependably repo's CI) rather than the public registry: package-lock.json
@@ -235,5 +239,50 @@ publish:
     - echo "Verifying $PKG is live on the registry…"
     - npm view "$PKG" version --registry "$REGISTRY_URL"
     - echo "✓ $PKG published and verified on $REGISTRY_URL"
+  after_script:
+    - rm -f .npmrc.publish
+
+# Internal-testing publish: manual gate on the default branch, pushing to the
+# private dependably registry (mirrors the cslint / checker-python main-branch
+# publish jobs). npm has no equivalent of NuGet's --skip-duplicate and registry
+# versions are immutable, so publishing main's plain version would burn the
+# next release number; instead every run publishes a unique prerelease —
+# <version>-dev.<pipeline-iid>.<short-sha> — under the `dev` dist-tag, so
+# `npm install dependably-mcp` (latest) never resolves to an internal build.
+# Consume with:
+#   npm install dependably-mcp@dev --registry https://dependably.northwardlabs.ca/npm/
+# The version bump happens only in this job's checkout; nothing is committed.
+# Unlike `publish`, this builds its own tarball (it must re-pack with the dev
+# version), so it extends .private-registry-setup for the devDependency install.
+publish-dev:
+  stage: publish
+  extends: .private-registry-setup
+  # External write (pushes the tarball to the registry) — never auto-cancel it.
+  interruptible: false
+  resource_group: publish
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+      allow_failure: false
+  script:
+    - |
+      BASE=$(node -p "require('./package.json').version")
+      DEV_VERSION="${BASE}-dev.${CI_PIPELINE_IID}.${CI_COMMIT_SHORT_SHA}"
+      npm version "$DEV_VERSION" --no-git-tag-version
+      echo "Internal test version: $DEV_VERSION"
+    - npm run build
+    - TARBALL=$(npm pack | tail -1)
+    - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
+    - |
+      {
+        echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
+        echo "always-auth=true"
+      } > .npmrc.publish
+    - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
+    - echo "Publishing $TARBALL ($PKG, dist-tag dev) to $REGISTRY_URL"
+    - npm publish "$TARBALL" --tag dev --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "Verifying $PKG is live on the registry…"
+    - npm view "$PKG" version --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "✓ $PKG published (dist-tag dev) and verified on $REGISTRY_URL"
   after_script:
     - rm -f .npmrc.publish
