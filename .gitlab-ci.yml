@@ -227,18 +227,27 @@ publish:
         exit 1
       fi
     - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
+    # REGISTRY_URL is the instance BASE url; the npm registry lives under /npm/
+    # (same suffix .private-registry-setup appends). Publishing to the bare host
+    # PUTs into the SPA/API fallback and 405s (job #68222), and the authToken
+    # nerf-dart must carry the same /npm/ path or npm won't attach the token.
+    - NPM_REGISTRY="${REGISTRY_URL%/}/npm/"
+    # Neutralize the committed .npmrc: its ${DEPENDABLY_TOKEN} env reference
+    # hard-fails npm when the var is unset, and this job (artifact-only) never
+    # runs .private-registry-setup to overwrite it.
+    - printf 'registry=%s\nfund=false\n' "$NPM_REGISTRY" > .npmrc
     - |
       {
-        echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
+        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_KEY"
         echo "always-auth=true"
       } > .npmrc.publish
     - TARBALL=$(ls ./*.tgz)
     - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
-    - echo "Publishing $TARBALL ($PKG) to $REGISTRY_URL"
-    - npm publish "$TARBALL" --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "Publishing $TARBALL ($PKG) to $NPM_REGISTRY"
+    - npm publish "$TARBALL" --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
     - echo "Verifying $PKG is live on the registry…"
-    - npm view "$PKG" version --registry "$REGISTRY_URL"
-    - echo "✓ $PKG published and verified on $REGISTRY_URL"
+    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "✓ $PKG published and verified on $NPM_REGISTRY"
   after_script:
     - rm -f .npmrc.publish
 
@@ -273,16 +282,20 @@ publish-dev:
     - npm run build
     - TARBALL=$(npm pack | tail -1)
     - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
+    # The npm registry lives under /npm/, not at the instance base URL — a PUT
+    # to the bare host hits the SPA/API fallback and 405s (job #68222). The
+    # authToken nerf-dart must carry the same /npm/ path to match.
+    - NPM_REGISTRY="${REGISTRY_URL%/}/npm/"
     - |
       {
-        echo "//$REGISTRY_HOST/:_authToken=$REGISTRY_KEY"
+        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_KEY"
         echo "always-auth=true"
       } > .npmrc.publish
     - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
-    - echo "Publishing $TARBALL ($PKG, dist-tag dev) to $REGISTRY_URL"
-    - npm publish "$TARBALL" --tag dev --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "Publishing $TARBALL ($PKG, dist-tag dev) to $NPM_REGISTRY"
+    - npm publish "$TARBALL" --tag dev --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
     - echo "Verifying $PKG is live on the registry…"
-    - npm view "$PKG" version --registry "$REGISTRY_URL" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
-    - echo "✓ $PKG published (dist-tag dev) and verified on $REGISTRY_URL"
+    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - echo "✓ $PKG published (dist-tag dev) and verified on $NPM_REGISTRY"
   after_script:
     - rm -f .npmrc.publish
