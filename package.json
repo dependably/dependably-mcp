@@ -13,8 +13,12 @@
   "author": "Michael Hiland",
   "repository": {
     "type": "git",
-    "url": "git+https://gitlab.northwardlabs.ca/moonlitlabs/dependably-mcp.git"
+    "url": "git+https://github.com/dependably/dependably-mcp.git"
   },
+  "bugs": {
+    "url": "https://github.com/dependably/dependably-mcp/issues"
+  },
+  "homepage": "https://github.com/dependably/dependably-mcp#readme",
   "type": "module",
   "bin": {
     "dependably-mcp": "dist/index.js"
@@ -23,9 +27,11 @@
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsc --watch",
