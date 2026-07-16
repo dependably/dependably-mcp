@@ -2,24 +2,20 @@ import { statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
- * Runtime configuration for the v1, PAT-only Dependably MCP server.
+ * Runtime configuration for the PAT-only Dependably MCP server.
  *
  * Authentication is a single static Personal Access Token (`DEPENDABLY_TOKEN`),
  * sent as a bearer token on every request. There is intentionally no JWT/session
- * login: Dependably's management API reads the session JWT from the
- * `dependably_session` cookie and ignores the `Authorization` header, so a PAT
- * only reaches endpoints that opt into the `ApiToken` auth scheme (yank, import,
- * SIEM) plus anonymous / IP-allowlisted probes (health, readiness, version,
- * metrics). v1 ships exactly that surface: 9 tools by default (yank, SIEM,
- * observability, local install/publish command builders) plus the 2 admin
+ * login: a PAT reaches every endpoint that opts into the `ApiToken` auth scheme —
+ * since Dependably v0.3.0 that includes the read-only management surface
+ * (packages, search, vulnerabilities, activity, whoami, license policy, lookup)
+ * alongside yank, import, and SIEM — plus anonymous / IP-allowlisted probes
+ * (health, readiness, version, metrics). 18 tools by default, plus the 2 admin
  * import tools when `DEPENDABLY_IMPORT_ROOT` opts in.
  *
- * The read surface (package inventory, vulnerability list, audit logs, org
- * settings, whoami, setup snippet) is deferred to v2, once the server accepts
- * PATs on read endpoints (tracked as dependably-community#343).
- *
- * Use a user-owned PAT: service/M2M tokens currently 404 on capability-gated
- * endpoints (yank, import). MFA-required orgs may return 403 mfa_enrollment_required.
+ * Against a Dependably server older than v0.3.0 the read tools return 401,
+ * service/M2M tokens 404 on capability-gated endpoints, and MFA-required orgs
+ * may return 403 mfa_enrollment_required — all fixed server-side in v0.3.0.
  *
  * Tenancy is resolved from the request host, so there is no org-slug config:
  * the install/publish command builders template URLs directly on the base URL.

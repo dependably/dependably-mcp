@@ -5,6 +5,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DependablyClient } from './client.js';
 import type { Config } from './config.js';
 import { registerYankTools } from './tools/yank.js';
+import { registerReadTools } from './tools/read.js';
 import { registerSiemTools } from './tools/siem.js';
 import { registerImportTools } from './tools/import.js';
 import { registerObservabilityTools } from './tools/observability.js';
@@ -20,6 +21,7 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
     version,
   });
 
+  registerReadTools(server, client);
   registerYankTools(server, client);
   registerSiemTools(server, client);
   // The import tools read local files and upload them, so they are opt-in:
