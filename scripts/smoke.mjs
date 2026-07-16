@@ -28,13 +28,22 @@ const base = {
 
 const CORE_TOOLS = [
   'get_install_command',
+  'get_license_policy',
+  'get_package',
   'get_prometheus_metrics',
   'get_publish_command',
   'get_version',
+  'get_vulnerability',
   'health_check',
+  'list_activity',
+  'list_packages',
+  'list_vulnerabilities',
+  'lookup_package',
   'readiness_check',
+  'search_packages',
   'siem_list_auth_events',
   'siem_vulnerabilities_summary',
+  'whoami',
   'yank_version',
 ].sort();
 
