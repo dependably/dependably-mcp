@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { DependablyClient } from './client.js';
@@ -8,10 +10,14 @@ import { registerImportTools } from './tools/import.js';
 import { registerObservabilityTools } from './tools/observability.js';
 import { registerSetupTools } from './tools/setup.js';
 
+// The compiled file lives at dist/server.js, one level below the package root,
+// and package.json is always present in the published tarball.
+const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
+
 export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   const server = new McpServer({
     name: 'dependably-mcp',
-    version: '0.1.0',
+    version,
   });
 
   registerYankTools(server, client);

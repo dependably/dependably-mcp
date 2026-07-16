@@ -1,6 +1,6 @@
 # dependably-mcp
 
-An MCP (Model Context Protocol) server that lets an LLM client — Claude Desktop, Claude Code, Cursor, anything that speaks MCP — run supply-chain automation and incident triage against a [Dependably](https://github.com/dependably/dependably) instance over stdio.
+An MCP (Model Context Protocol) server that lets an LLM client — Claude Desktop, Claude Code, Cursor, anything that speaks MCP — run supply-chain automation and incident triage against a [Dependably](https://github.com/dependably/dependably-community) instance over stdio.
 
 Dependably is a self-hosted private artifact repository for npm, PyPI, NuGet, Maven, RPM, OCI, Go, and Cargo. This MCP server wraps the slice of its management API that a **static API token (PAT)** can reach today.
 
@@ -64,14 +64,13 @@ When #343 ships, these return in v2.
 
 ## Install
 
+The package is published to npm as [`dependably-mcp`](https://www.npmjs.com/package/dependably-mcp):
+
 ```bash
-git clone https://gitlab.northwardlabs.ca/moonlitlabs/dependably-mcp.git
-cd dependably-mcp
-npm install
-npm run build
+npm install -g dependably-mcp
 ```
 
-That produces `dist/index.js`, the stdio entry point.
+Or skip the install entirely — the MCP client configs below run it with `npx`, which fetches it on first use.
 
 ## Configure
 
@@ -89,9 +88,10 @@ The PAT's **capabilities** determine which tools succeed — see the capability 
 ### Claude Code
 
 ```bash
-claude mcp add dependably node /absolute/path/to/dependably-mcp/dist/index.js \
+claude mcp add dependably \
   --env DEPENDABLY_BASE_URL=https://dependably.example.com \
-  --env DEPENDABLY_TOKEN=dpb_xxx
+  --env DEPENDABLY_TOKEN=dpb_xxx \
+  -- npx -y dependably-mcp
 ```
 
 Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
@@ -100,8 +100,8 @@ Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
 {
   "mcpServers": {
     "dependably": {
-      "command": "node",
-      "args": ["/absolute/path/to/dependably-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "dependably-mcp"],
       "env": {
         "DEPENDABLY_BASE_URL": "https://dependably.example.com",
         "DEPENDABLY_TOKEN": "dpb_xxx"
@@ -110,6 +110,8 @@ Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
   }
 }
 ```
+
+(With a global install, `"command": "dependably-mcp"` with no args works too. If you built from source, point `command`/`args` at `node /path/to/dependably-mcp/dist/index.js` instead.)
 
 ### Claude Desktop
 
@@ -138,10 +140,15 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) o
 ## Development
 
 ```bash
+git clone https://github.com/dependably/dependably-mcp.git
+cd dependably-mcp
+npm install
 npm run dev   # tsc --watch
 npm run build # tsc once
 npm test      # build + smoke test (boots the server in-memory, asserts the tool surface)
 ```
+
+> **Note on the lockfile:** we dogfood a private Dependably instance as our npm registry, so the committed `package-lock.json` and `.npmrc` resolve against it. You don't need access to build: every dependency is also on the public registry, so point npm back at it for your clone (`echo 'registry=https://registry.npmjs.org/' > .npmrc` — it's what our public CI does) and install with `npm ci --replace-registry-host=always`. The lockfile's integrity hashes still pin the exact same bytes.
 
 Source layout:
 
