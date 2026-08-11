@@ -35,7 +35,8 @@
 # Required CI/CD variables (Settings → CI/CD → Variables):
 #   REGISTRY_URL          Protected          — base URL of the private
 #                         dependably instance, e.g. https://dependably.northwardlabs.ca/
-#   REGISTRY_KEY          Protected + Masked — npm token for that instance
+#   REGISTRY_PUBLISH_KEY  Protected + Masked — publish:npm token (the publish PUT)
+#   REGISTRY_KEY          Unprotected + Masked — read-only token (installs, read-back)
 #                         (install + publish)
 #   dependencyTrack_url   Protected          — Dependency-Track base URL, e.g.
 #                         https://dtrack.example.com
@@ -222,8 +223,14 @@ publish:
       allow_failure: false
   script:
     - |
-      if [ -z "$REGISTRY_URL" ] || [ -z "$REGISTRY_KEY" ]; then
-        echo "ERROR: REGISTRY_URL and REGISTRY_KEY must be set as CI/CD variables." >&2
+      # Split by capability: REGISTRY_PUBLISH_KEY (protected + masked, publish:npm)
+      # authenticates the PUT; REGISTRY_KEY (unprotected, scoped read-only on the
+      # registry) authenticates the read-back. The read token cannot publish, so it
+      # is not accepted as a fallback here.
+      if [ -z "$REGISTRY_URL" ] || [ -z "$REGISTRY_PUBLISH_KEY" ] || [ -z "$REGISTRY_KEY" ]; then
+        echo "ERROR: REGISTRY_URL, REGISTRY_PUBLISH_KEY and REGISTRY_KEY must all be set as CI/CD variables." >&2
+        echo "       REGISTRY_PUBLISH_KEY must be Protected + Masked; if it is set and still" >&2
+        echo "       empty here, this ref is not protected (add 'v*' to Protected Tags)." >&2
         exit 1
       fi
     - REGISTRY_HOST=$(printf '%s' "$REGISTRY_URL" | sed -E 's#^https?://##; s#/+$##')
@@ -238,18 +245,26 @@ publish:
     - printf 'registry=%s\nfund=false\n' "$NPM_REGISTRY" > .npmrc
     - |
       {
-        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_KEY"
+        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_PUBLISH_KEY"
         echo "always-auth=true"
       } > .npmrc.publish
+    - |
+      {
+        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_KEY"
+        echo "always-auth=true"
+      } > .npmrc.read
     - TARBALL=$(ls ./*.tgz)
     - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
     - echo "Publishing $TARBALL ($PKG) to $NPM_REGISTRY"
     - npm publish "$TARBALL" --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    # Read-back with the READ token: REGISTRY_PUBLISH_KEY carries publish:npm, not a
+    # read capability, and verifying with the credential you just wrote with is a
+    # weaker check than verifying with the one consumers actually use.
     - echo "Verifying $PKG is live on the registry…"
-    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.read"
     - echo "✓ $PKG published and verified on $NPM_REGISTRY"
   after_script:
-    - rm -f .npmrc.publish
+    - rm -f .npmrc.publish .npmrc.read
 
 # Internal-testing publish: manual gate on the default branch, pushing to the
 # private dependably registry (mirrors the cslint / checker-python main-branch
@@ -287,15 +302,30 @@ publish-dev:
     # authToken nerf-dart must carry the same /npm/ path to match.
     - NPM_REGISTRY="${REGISTRY_URL%/}/npm/"
     - |
+      : "${REGISTRY_PUBLISH_KEY:?must be set as a Protected + Masked CI/CD variable; if it is set and still empty here, this ref is not protected}"
+      # This job extends .private-registry-setup, which wrote a PROJECT-level .npmrc
+      # carrying the READ token so `npm ci` could resolve devDependencies. npm reads
+      # project config ahead of --userconfig, so leaving that token in place would
+      # override the publish credential below and send the read token on the PUT —
+      # silently, and only failing once the read token lost its write scope.
+      # Strip the credential now that the install is done; the registry line stays so
+      # the publish still targets the private instance.
+      printf 'registry=%s\nfund=false\n' "$NPM_REGISTRY" > .npmrc
+    - |
+      {
+        echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_PUBLISH_KEY"
+        echo "always-auth=true"
+      } > .npmrc.publish
+    - |
       {
         echo "//$REGISTRY_HOST/npm/:_authToken=$REGISTRY_KEY"
         echo "always-auth=true"
-      } > .npmrc.publish
+      } > .npmrc.read
     - PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
     - echo "Publishing $TARBALL ($PKG, dist-tag dev) to $NPM_REGISTRY"
     - npm publish "$TARBALL" --tag dev --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
     - echo "Verifying $PKG is live on the registry…"
-    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.publish"
+    - npm view "$PKG" version --registry "$NPM_REGISTRY" --userconfig "$CI_PROJECT_DIR/.npmrc.read"
     - echo "✓ $PKG published (dist-tag dev) and verified on $NPM_REGISTRY"
   after_script:
-    - rm -f .npmrc.publish
+    - rm -f .npmrc.publish .npmrc.read
