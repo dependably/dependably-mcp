@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Claude Desktop extension bundle.** `manifest.json` (MCPB manifest 0.3) at the repo root maps
+  the extension's config dialog — instance URL, keychain-stored token, timeout, optional import
+  folder — onto the existing `DEPENDABLY_*` environment variables, so the bundle is `dist/` plus
+  production dependencies with no new code path. `npm run bundle` builds
+  `dist-mcpb/dependably-<version>.mcpb` with a SHA-256 beside it; `npm run bundle:verify` also
+  boots the server from the unpacked bundle. `npm run manifest:sync` regenerates the manifest's
+  tool list from the running server, and `npm test` now fails when the manifest is stale.
+- `docs/distribution-plan.md`: the plan for the extension, the Anthropic directory listing, and
+  the other MCP harnesses.
+
 ## [0.2.0] - 2026-07-16
 
 The developer read surface.

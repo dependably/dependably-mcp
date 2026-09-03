@@ -1,0 +1,26 @@
+# Source, tests, tooling and docs stay out of the bundle. The bundle is
+# dist/ + production node_modules/ + manifest.json + assets/ + licence.
+src/
+scripts/
+docs/
+tests/
+test/
+.github/
+.husky/
+.gitlab-ci.yml
+.npmrc
+.dependably
+.backups/
+.mcpbignore
+.gitignore
+tsconfig.json
+CHANGELOG.md
+SECURITY.md
+sbom.json
+*.tgz
+*.mcpb
+*.sha256
+*.log
+.DS_Store
+.env
+.env.local

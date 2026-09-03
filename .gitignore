@@ -10,3 +10,7 @@ sbom.json
 
 # npm-check write backups (timestamped lockfile/package.json snapshots)
 .backups/
+
+# Extension bundle staging and output
+build/
+dist-mcpb/

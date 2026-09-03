@@ -1,0 +1,179 @@
+{
+  "manifest_version": "0.3",
+  "name": "dependably",
+  "display_name": "Dependably",
+  "version": "0.2.0",
+  "description": "Ask Claude about the packages, vulnerabilities, licences and audit trail in your self-hosted Dependably registry.",
+  "long_description": "Dependably is a self-hosted private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Read-only tools run without prompts; the one destructive tool (yanking a version) always asks first.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
+  "author": {
+    "name": "Michael Hiland",
+    "url": "https://dependably.ca"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dependably/dependably-mcp.git"
+  },
+  "homepage": "https://dependably.ca",
+  "documentation": "https://github.com/dependably/dependably-mcp#readme",
+  "support": "https://github.com/dependably/dependably-mcp/issues",
+  "icon": "assets/icon.png",
+  "icons": [
+    {
+      "src": "assets/icon.png",
+      "size": "512x512",
+      "theme": "light"
+    },
+    {
+      "src": "assets/icon-dark.png",
+      "size": "512x512",
+      "theme": "dark"
+    }
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/dist/index.js"
+      ],
+      "env": {
+        "DEPENDABLY_BASE_URL": "${user_config.base_url}",
+        "DEPENDABLY_TOKEN": "${user_config.token}",
+        "DEPENDABLY_TIMEOUT_MS": "${user_config.timeout_ms}",
+        "DEPENDABLY_IMPORT_ROOT": "${user_config.import_root}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "get_install_command",
+      "description": "Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it."
+    },
+    {
+      "name": "get_license_policy",
+      "description": "The org's license policy: enforcement mode (off/warn/block) plus the SPDX allowlist and blocklist (GET /api/v1/license-policy) — answers \"which licenses are approved here\". Requires read:packages capability."
+    },
+    {
+      "name": "get_package",
+      "description": "Full detail for one package: versions, per-version SPDX licenses, vulnerability links (GET /api/v1/packages/{ecosystem}/{name}). Requires read:packages capability."
+    },
+    {
+      "name": "get_prometheus_metrics",
+      "description": "Raw Prometheus exposition (GET /metrics). The endpoint is gated by an IP allowlist server-side — if your MCP host isn't in the allowlist this returns 403. Output is text, not JSON."
+    },
+    {
+      "name": "get_publish_command",
+      "description": "Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token."
+    },
+    {
+      "name": "get_version",
+      "description": "Server build version (GET /version). The endpoint is gated by the same IP allowlist as /metrics — if your MCP host isn't in the allowlist this returns 403."
+    },
+    {
+      "name": "get_vulnerability",
+      "description": "Rich detail for one advisory affecting the registry (GET /api/v1/vulnerabilities/{osvId}). 404 if the advisory does not touch any package in your org. Requires read:packages capability."
+    },
+    {
+      "name": "health_check",
+      "description": "Liveness probe (GET /health). Returns 200 with { status: \"ok\" } as long as the process is running."
+    },
+    {
+      "name": "list_activity",
+      "description": "Org activity feed: publishes, yanks, imports, policy changes, etc., paginated (GET /api/v1/activity). Requires read:audit capability."
+    },
+    {
+      "name": "list_packages",
+      "description": "List packages in the registry, paginated (GET /api/v1/packages). Returns { items, total, limit, offset }. Requires read:packages capability."
+    },
+    {
+      "name": "list_vulnerabilities",
+      "description": "Vulnerability report: packages in the registry affected by known advisories, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. Requires read:packages capability."
+    },
+    {
+      "name": "lookup_package",
+      "description": "Pre-adoption check of a package NOT necessarily in the registry: upstream metadata, OSV advisories, and the org-policy verdict, without ingesting anything (GET /api/v1/lookup). Use before adding a new dependency. Requires read:packages capability."
+    },
+    {
+      "name": "readiness_check",
+      "description": "Readiness probe (GET /ready). Returns { status: \"ready\"|\"degraded\", checks, errors }. 503 with details when a subsystem (DB, blob store, etc.) is failing — use this first when investigating an incident."
+    },
+    {
+      "name": "search_packages",
+      "description": "Quick search across the registry by name (GET /api/v1/search). Queries shorter than 2 characters return empty groups. Requires read:packages capability."
+    },
+    {
+      "name": "siem_list_auth_events",
+      "description": "Stream auth events from the audit log (GET /api/v1/siem/events/auth) — login successes/failures, lockouts, token mints/revocations, role changes. Default lookback 24h, capped at SIEM_MAX_LOOKBACK_DAYS (default 90). Requires read:audit capability or a system-admin token."
+    },
+    {
+      "name": "siem_vulnerabilities_summary",
+      "description": "Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }."
+    },
+    {
+      "name": "whoami",
+      "description": "Identity behind the configured token: user/token id, org, role (GET /api/v1/auth/me). Requires read:tenant capability on the token."
+    },
+    {
+      "name": "yank_version",
+      "description": "Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability. Pass the plain package name (e.g. \"@scope/pkg\", \"library/ubuntu\", \"github.com/x/y\") — URL encoding is handled."
+    }
+  ],
+  "tools_generated": true,
+  "keywords": [
+    "dependably",
+    "registry",
+    "artifact-repository",
+    "supply-chain",
+    "sbom",
+    "vulnerabilities",
+    "npm",
+    "pypi",
+    "nuget",
+    "maven"
+  ],
+  "license": "Apache-2.0",
+  "privacy_policies": [
+    "https://dependably.ca/privacy"
+  ],
+  "compatibility": {
+    "claude_desktop": ">=0.10.0",
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  },
+  "user_config": {
+    "base_url": {
+      "type": "string",
+      "title": "Dependably URL",
+      "description": "The address of your Dependably instance, for example https://registry.example.com. On a multi-tenant host, use your organization's subdomain.",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Personal access token",
+      "description": "Create one in Dependably under Tokens. Read capabilities are enough for everything except yanking a version.",
+      "required": true,
+      "sensitive": true
+    },
+    "timeout_ms": {
+      "type": "number",
+      "title": "Request timeout (milliseconds)",
+      "description": "How long to wait for a single request to your instance.",
+      "required": false,
+      "default": 30000,
+      "min": 1000,
+      "max": 300000
+    },
+    "import_root": {
+      "type": "directory",
+      "title": "Import folder (optional)",
+      "description": "Enables the two air-gapped import tools. They can only read files inside this folder.",
+      "required": false
+    }
+  }
+}

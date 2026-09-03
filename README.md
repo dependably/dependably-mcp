@@ -124,7 +124,26 @@ Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
 
 ### Claude Desktop
 
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your OS, same shape as above.
+Install the extension bundle instead of editing JSON. Download `dependably-<version>.mcpb` from the
+release page (verify it against the `.sha256` beside it), then either double-click it or drag it onto
+**Settings → Extensions** in Claude Desktop. The install dialog asks for your Dependably URL and a
+personal access token; the token is stored in your operating system's keychain, and the optional
+import folder enables the two air-gapped import tools scoped to that folder.
+
+To build the bundle from source:
+
+```bash
+npm ci
+npm run bundle:verify    # → dist-mcpb/dependably-<version>.mcpb + .sha256, then boots the server from the unpacked bundle
+```
+
+`manifest.json` at the repo root is the extension manifest. Its tool list is generated from the
+server by `npm run manifest:sync`, and `npm test` fails when it is stale. The bundle is unsigned for
+now; see `docs/distribution-plan.md` for why, and for the plan to list it in Anthropic's directory.
+
+If you would rather keep a hand-written config, edit
+`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your
+OS with the same shape as the Claude Code example above.
 
 ## Investigating logs / metrics / incidents
 
