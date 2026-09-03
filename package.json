@@ -36,16 +36,20 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "pretest": "npm run build",
-    "test": "node scripts/smoke.mjs",
+    "test": "node scripts/smoke.mjs && node scripts/sync-manifest.mjs --check",
     "prepublishOnly": "npm test",
     "prepare": "husky",
-    "sbom": "cyclonedx-npm --output-format json --output-file sbom.json"
+    "sbom": "cyclonedx-npm --output-format json --output-file sbom.json",
+    "manifest:sync": "node scripts/sync-manifest.mjs",
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:verify": "node scripts/bundle.mjs --verify"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2",
     "@cyclonedx/cyclonedx-npm": "5.0.0",
     "@dependably/npm-check": "1.8.0",
     "@types/node": "22.20.0",
