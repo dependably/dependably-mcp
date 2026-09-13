@@ -28,8 +28,9 @@ All notable changes to this project are documented here. The format follows
 - CI: the GitLab `build` job and a new GitHub `release-bundle` job build and verify the `.mcpb`
   on every tagged release and attach it, with its `.sha256`, to the GitLab and GitHub releases.
 - CI: `sbom-publish-dependably` uploads the CycloneDX SBOM to the Dependably instance's own
-  Projects (`PUT /api/v1/sbom`, token with `sbom:upload`) on `main`, alongside the existing
-  Dependency-Track upload.
+  Projects (`PUT /api/v1/sbom`) on `main`, alongside the existing Dependency-Track upload. It
+  authenticates with the pipeline's existing `REGISTRY_PUBLISH_KEY`, which therefore needs the
+  `sbom:upload` capability.
 - CI: `sonarqube-check` (advisory SonarQube scan on `main`, `sonar-project.properties`) and a
   manual `publish:github` job that mirrors `main` or a release tag to
   `github.com/dependably/dependably-mcp`, whose workflow publishes to public npm.
