@@ -44,9 +44,10 @@
 # Required CI/CD variables (Settings → CI/CD → Variables):
 #   REGISTRY_URL          Protected          — base URL of the private
 #                         dependably instance, e.g. https://dependably.northwardlabs.ca/
-#   REGISTRY_PUBLISH_KEY  Protected + Masked — publish:npm token (the publish PUT);
-#                         also needs sbom:upload for sbom-publish-dependably
+#   REGISTRY_PUBLISH_KEY  Protected + Masked — publish:npm token (the publish PUT)
 #   REGISTRY_KEY          Unprotected + Masked — read-only token (installs, read-back)
+#   DEPENDABLY_SBOM_TOKEN Masked — token with the sbom:upload capability, for
+#                         sbom-publish-dependably against REGISTRY_URL
 #   dependencyTrack_url   Protected          — Dependency-Track base URL, e.g.
 #                         https://dtrack.example.com
 #   dependencyTrack_token Protected + Masked — DT API key with BOM_UPLOAD +
@@ -288,12 +289,10 @@ sbom-publish:
 # query string (SbomController.PutSbom in dependably-community): autoCreate
 # stands the project and version up on first upload, isLatest promotes it. Both
 # success paths answer 200; a re-upload of the same version is a merge, not a
-# duplicate. Authenticates with REGISTRY_PUBLISH_KEY, the same Dependably
-# token the pipeline already pushes packages with (protected, so available on
-# main; the read-only REGISTRY_KEY cannot write). The endpoint checks the
-# `sbom:upload` capability, so that token must carry the "SBOM upload" scope as
-# well; a 403 naming sbom:upload means it does not yet. Hard-fails when
-# unconfigured, like sbom-publish.
+# duplicate. Authenticates with DEPENDABLY_SBOM_TOKEN, a token minted with the
+# "SBOM upload" scope (the endpoint checks the `sbom:upload` capability, which
+# the npm push and pull tokens do not carry). Targets REGISTRY_URL. Hard-fails
+# when unconfigured, like sbom-publish.
 sbom-publish-dependably:
   stage: sbom-publish
   image: alpine:3
@@ -308,9 +307,9 @@ sbom-publish-dependably:
   script:
     - apk add --no-cache curl
     - |
-      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${REGISTRY_PUBLISH_KEY:-}" ]; then
-        echo "ERROR: REGISTRY_URL and REGISTRY_PUBLISH_KEY must be set as CI/CD variables." >&2
-        echo "       REGISTRY_PUBLISH_KEY is Protected; if it is set and still empty here, this ref is not protected." >&2
+      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${DEPENDABLY_SBOM_TOKEN:-}" ]; then
+        echo "ERROR: REGISTRY_URL and DEPENDABLY_SBOM_TOKEN must be set as CI/CD variables." >&2
+        echo "       If DEPENDABLY_SBOM_TOKEN is Protected and still empty here, this ref is not protected." >&2
         exit 1
       fi
     - |
@@ -329,13 +328,13 @@ sbom-publish-dependably:
       echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE/api/v1/sbom"
       status=$(curl -sS -o /tmp/sbom.out -w '%{http_code}' \
         -X PUT "$BASE/api/v1/sbom?projectName=$PROJECT&projectVersion=$VERSION&autoCreate=true&isLatest=true" \
-        -H "Authorization: Bearer $REGISTRY_PUBLISH_KEY" \
+        -H "Authorization: Bearer $DEPENDABLY_SBOM_TOKEN" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, application/problem+json" \
         --data-binary @sbom.json)
       case "$status" in
         200) echo "✓ SBOM uploaded to Dependably:"; cat /tmp/sbom.out; echo;;
-        403) echo "SBOM upload to Dependably refused (HTTP 403): REGISTRY_PUBLISH_KEY lacks the sbom:upload capability. Add the SBOM upload scope to that token in Dependably (Tokens)." >&2; cat /tmp/sbom.out >&2; exit 1;;
+        403) echo "SBOM upload to Dependably refused (HTTP 403): DEPENDABLY_SBOM_TOKEN lacks the sbom:upload capability. Mint it with the SBOM upload scope in Dependably (Tokens)." >&2; cat /tmp/sbom.out >&2; exit 1;;
         *) echo "SBOM upload to Dependably failed (HTTP $status):" >&2; cat /tmp/sbom.out >&2; exit 1;;
       esac
 
