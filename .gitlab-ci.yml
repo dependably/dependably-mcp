@@ -21,6 +21,8 @@
 #   sbom-publish  upload the SBOM to Dependency-Track on the default branch (its
 #                 own stage so it never races the `sbom` job in the shared build
 #                 dir)
+#   sbom-publish-dependably  upload the same SBOM to the Dependably instance's
+#                 Projects (PUT /api/v1/sbom) on the default branch
 #   publish       manual gate on a vX.Y.Z tag — pushes the built tarball to the
 #                 private dependably (dogfood) registry
 #   release       automatic on a vX.Y.Z tag — GitLab release whose assets link
@@ -48,6 +50,9 @@
 #                         https://dtrack.example.com
 #   dependencyTrack_token Protected + Masked — DT API key with BOM_UPLOAD +
 #                         PROJECT_CREATION_UPLOAD perms
+#   SBOM_UPLOAD_TOKEN     Protected + Masked — Dependably API token with the
+#                         sbom:upload capability (sbom-publish-dependably);
+#                         targets REGISTRY_URL
 #   SONAR_HOST_URL        — SonarQube server URL (sonarqube-check)
 #   SONAR_TOKEN           Masked — SonarQube analysis token (sonarqube-check)
 #   GITHUB_TOKEN          Protected + Masked — contents:write on the GitHub
@@ -277,6 +282,58 @@ sbom-publish:
       case "$status" in
         200) echo "✓ SBOM uploaded";;
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
+      esac
+
+# Publish the same SBOM to the Dependably instance's Projects page (the product
+# dogfooding its own SBOM intake), alongside Dependency-Track. The endpoint is
+# PUT /api/v1/sbom with the CycloneDX JSON as the raw body and the target in the
+# query string (SbomController.PutSbom in dependably-community): autoCreate
+# stands the project and version up on first upload, isLatest promotes it. Both
+# success paths answer 200; a re-upload of the same version is a merge, not a
+# duplicate. Needs a token carrying the `sbom:upload` capability — deliberately
+# NOT REGISTRY_KEY (the npm push token), since sbom:upload is its own scope.
+# Hard-fails when unconfigured, like sbom-publish.
+sbom-publish-dependably:
+  stage: sbom-publish
+  image: alpine:3
+  # External write — never auto-cancel mid-upload.
+  interruptible: false
+  needs:
+    - job: sbom
+      artifacts: true
+  resource_group: sbom-publish-dependably
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache curl
+    - |
+      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${SBOM_UPLOAD_TOKEN:-}" ]; then
+        echo "ERROR: REGISTRY_URL and SBOM_UPLOAD_TOKEN must be set as CI/CD variables (token needs the sbom:upload capability)." >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      if [ ! -s sbom.json ]; then
+        echo "ERROR: sbom.json (from the sbom job artifact) is missing." >&2
+        exit 1
+      fi
+      BASE="${REGISTRY_URL%/}"
+      PROJECT="dependably-mcp"
+      VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' package.json | head -n1)
+      if [ -z "$VERSION" ]; then
+        echo "ERROR: could not determine version from package.json." >&2
+        exit 1
+      fi
+      echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE/api/v1/sbom"
+      status=$(curl -sS -o /tmp/sbom.out -w '%{http_code}' \
+        -X PUT "$BASE/api/v1/sbom?projectName=$PROJECT&projectVersion=$VERSION&autoCreate=true&isLatest=true" \
+        -H "Authorization: Bearer $SBOM_UPLOAD_TOKEN" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, application/problem+json" \
+        --data-binary @sbom.json)
+      case "$status" in
+        200) echo "✓ SBOM uploaded to Dependably:"; cat /tmp/sbom.out; echo;;
+        *) echo "SBOM upload to Dependably failed (HTTP $status):" >&2; cat /tmp/sbom.out >&2; exit 1;;
       esac
 
 publish:
