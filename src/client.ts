@@ -56,13 +56,7 @@ export class DependablyClient {
     try {
       res = await fetch(url, init);
     } catch (err) {
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new Error(
-          `${method} ${url} timed out after ${this.cfg.timeoutMs}ms. Raise DEPENDABLY_TIMEOUT_MS if the instance is just slow.`,
-        );
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`${method} ${url} failed: ${msg}`);
+      throw new Error(describeFetchError(method, url, err, this.cfg.timeoutMs));
     }
 
     const text = await res.text();
@@ -97,6 +91,53 @@ export class DependablyClient {
     }
     return url.toString();
   }
+}
+
+/**
+ * Turns a failed `fetch` (no HTTP response at all) into a message that says
+ * what to check. Node reports every transport failure as a bare "fetch failed"
+ * with the real reason on `cause`, which is useless to a user staring at a
+ * config dialog; surface the cause and the setting that fixes it.
+ */
+export function describeFetchError(method: string, url: string, err: unknown, timeoutMs: number): string {
+  if (err instanceof Error && err.name === 'TimeoutError') {
+    return `${method} ${url} timed out after ${timeoutMs}ms. Raise DEPENDABLY_TIMEOUT_MS if the instance is just slow.`;
+  }
+  const cause = err instanceof Error && err.cause instanceof Error ? err.cause : undefined;
+  const code = (cause as (Error & { code?: string }) | undefined)?.code ?? '';
+  const reason = cause?.message ?? (err instanceof Error ? err.message : String(err));
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url;
+    }
+  })();
+
+  let hint: string;
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    hint = `Could not resolve "${host}". Check DEPENDABLY_BASE_URL for a typo, and that this machine can reach the instance (VPN?).`;
+  } else if (code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
+    hint = `Nothing is listening at ${host}. Check DEPENDABLY_BASE_URL (scheme and port) and that the Dependably instance is up.`;
+  } else if (
+    code.startsWith('ERR_TLS_') ||
+    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
+    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+    code === 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' ||
+    code === 'CERT_HAS_EXPIRED' ||
+    code === 'ERR_SSL_WRONG_VERSION_NUMBER'
+  ) {
+    hint =
+      `TLS handshake with ${host} failed. If the instance uses a private CA, point NODE_EXTRA_CA_CERTS at the CA bundle (PEM) ` +
+      `in the environment that launches this server; never disable certificate verification. ` +
+      `If the instance is plain HTTP, use http:// in DEPENDABLY_BASE_URL.`;
+  } else if (code === 'ECONNRESET' || code === 'EPIPE') {
+    hint = `The connection to ${host} was dropped. Retry; if it persists, check a proxy or load balancer in front of the instance.`;
+  } else {
+    hint = `Check DEPENDABLY_BASE_URL and that the instance is reachable from this machine.`;
+  }
+  return `${method} ${url} failed: ${reason}${code ? ` (${code})` : ''}. ${hint}`;
 }
 
 export function formatHttpError(

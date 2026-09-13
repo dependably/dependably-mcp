@@ -11,7 +11,8 @@ import { resolve } from 'node:path';
  * (packages, search, vulnerabilities, activity, whoami, license policy, lookup)
  * alongside yank, import, and SIEM — plus anonymous / IP-allowlisted probes
  * (health, readiness, version, metrics). 18 tools by default, plus the 2 admin
- * import tools when `DEPENDABLY_IMPORT_ROOT` opts in.
+ * import tools when `DEPENDABLY_IMPORT_ROOT` opts in, minus the 2 loopback-only
+ * probes when `DEPENDABLY_TOOLSET=remote`.
  *
  * Against a Dependably server older than v0.3.0 the read tools return 401,
  * service/M2M tokens 404 on capability-gated endpoints, and MFA-required orgs
@@ -34,11 +35,34 @@ export interface Config {
    * tricked into calling admin_upload cannot exfiltrate arbitrary files).
    */
   importRoot?: string;
+  /**
+   * Which tools to register. `full` (default) is everything. `remote` drops the
+   * two probes Dependably allowlists to loopback (`get_version`,
+   * `get_prometheus_metrics`), which always 403 from any machine other than the
+   * Dependably host itself — the right setting for Claude Desktop, Cursor, and
+   * any other client that is not running on the server.
+   */
+  toolset: Toolset;
+}
+
+export type Toolset = 'full' | 'remote';
+
+/**
+ * Reads an environment variable, treating an unset value, whitespace, or an
+ * unexpanded `${…}` template as "not set". Desktop-extension hosts substitute
+ * `${user_config.key}` for each field; an optional field the user left blank
+ * arrives as an empty string, but a host that skips substitution would pass the
+ * literal placeholder, which must never be mistaken for a URL or a directory.
+ */
+function envValue(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw || /^\$\{[^}]*\}$/.test(raw)) return undefined;
+  return raw;
 }
 
 export function loadConfig(): Config {
-  const baseUrlRaw = process.env.DEPENDABLY_BASE_URL?.trim();
-  const token = process.env.DEPENDABLY_TOKEN?.trim();
+  const baseUrlRaw = envValue('DEPENDABLY_BASE_URL');
+  const token = envValue('DEPENDABLY_TOKEN');
 
   if (!baseUrlRaw) {
     throw new Error('DEPENDABLY_BASE_URL is required (e.g. https://dependably.example.com)');
@@ -59,7 +83,7 @@ export function loadConfig(): Config {
 
   const baseUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '')}`;
 
-  const timeoutRaw = process.env.DEPENDABLY_TIMEOUT_MS?.trim();
+  const timeoutRaw = envValue('DEPENDABLY_TIMEOUT_MS');
   let timeoutMs = 30000;
   if (timeoutRaw) {
     const n = Number(timeoutRaw);
@@ -69,7 +93,7 @@ export function loadConfig(): Config {
     timeoutMs = n;
   }
 
-  const importRootRaw = process.env.DEPENDABLY_IMPORT_ROOT?.trim();
+  const importRootRaw = envValue('DEPENDABLY_IMPORT_ROOT');
   let importRoot: string | undefined;
   if (importRootRaw) {
     importRoot = resolve(importRootRaw);
@@ -84,5 +108,10 @@ export function loadConfig(): Config {
     }
   }
 
-  return { baseUrl, token, timeoutMs, importRoot };
+  const toolsetRaw = envValue('DEPENDABLY_TOOLSET') ?? 'full';
+  if (toolsetRaw !== 'full' && toolsetRaw !== 'remote') {
+    throw new Error(`DEPENDABLY_TOOLSET must be "full" or "remote": ${toolsetRaw}`);
+  }
+
+  return { baseUrl, token, timeoutMs, importRoot, toolset: toolsetRaw };
 }

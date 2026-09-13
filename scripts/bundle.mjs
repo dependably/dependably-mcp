@@ -80,20 +80,42 @@ if (verify) {
   mkdirSync(unpacked, { recursive: true });
   const unzip = spawnSync('unzip', ['-q', bundlePath, '-d', unpacked], { stdio: 'inherit' });
   if (unzip.status !== 0) run('tar', ['-xf', bundlePath, '-C', unpacked]);
+  // Launch the server the way Claude Desktop would: the manifest's mcp_config,
+  // with the required user_config fields filled in and every optional one left
+  // blank (Desktop substitutes an empty string for a field the user skipped).
+  const sample = { base_url: 'https://dependably.example.com', token: 'verify' };
+  const substitute = (value) =>
+    String(value)
+      .replaceAll('${__dirname}', unpacked)
+      .replace(/\$\{user_config\.([a-z_]+)\}/g, (_, key) => sample[key] ?? '');
+  const mcp = manifest.server.mcp_config;
+  const command = substitute(mcp.command) === 'node' ? process.execPath : substitute(mcp.command);
+  const args = (mcp.args ?? []).map(substitute);
+  const env = Object.fromEntries(Object.entries(mcp.env ?? {}).map(([k, v]) => [k, substitute(v)]));
+  const expected = manifest.tools.map((t) => t.name).sort();
   const probe = `
     import { Client } from '@modelcontextprotocol/sdk/client/index.js';
     import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
     const transport = new StdioClientTransport({
-      command: process.execPath,
-      args: [${JSON.stringify(join(unpacked, 'dist', 'index.js'))}],
-      env: { ...process.env, DEPENDABLY_BASE_URL: 'https://dependably.example.com', DEPENDABLY_TOKEN: 'verify', DEPENDABLY_IMPORT_ROOT: '' },
+      command: ${JSON.stringify(command)},
+      args: ${JSON.stringify(args)},
+      env: { ...process.env, ...${JSON.stringify(env)} },
     });
     const client = new Client({ name: 'bundle-verify', version: '0.0.0' });
     await client.connect(transport);
     const { tools } = await client.listTools();
     await client.close();
-    if (tools.length === 0) throw new Error('bundle server exposed no tools');
-    console.log('bundle verify OK: server booted from the unpacked bundle with ' + tools.length + ' tools');
+    const got = tools.map((t) => t.name).sort();
+    const expected = ${JSON.stringify(expected)};
+    if (JSON.stringify(got) !== JSON.stringify(expected)) {
+      throw new Error('bundle exposes ' + JSON.stringify(got) + ' but manifest.json lists ' + JSON.stringify(expected));
+    }
+    for (const t of tools) {
+      if (!t.title || !t.annotations || typeof t.annotations.readOnlyHint !== 'boolean' || typeof t.annotations.destructiveHint !== 'boolean') {
+        throw new Error('tool ' + t.name + ' is missing title or readOnlyHint/destructiveHint annotations (directory review requires them)');
+      }
+    }
+    console.log('bundle verify OK: launched from the unpacked bundle via the manifest mcp_config; exposes exactly the ' + got.length + ' listed tools, all titled and annotated');
   `;
   run(process.execPath, ['--input-type=module', '-e', probe], root);
 }

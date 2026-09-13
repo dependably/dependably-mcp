@@ -29,7 +29,10 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   if (cfg.importRoot) {
     registerImportTools(server, cfg);
   }
-  registerObservabilityTools(server, client);
+  // /version and /metrics are IP-allowlisted to loopback on the server, so a
+  // client that is not on the Dependably host itself gets a 403 from both.
+  // `remote` leaves them out rather than shipping tools that can never succeed.
+  registerObservabilityTools(server, client, { loopbackProbes: cfg.toolset !== 'remote' });
   registerSetupTools(server, cfg);
 
   return server;

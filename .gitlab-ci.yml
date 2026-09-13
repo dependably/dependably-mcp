@@ -13,14 +13,23 @@
 #                 on every push/MR
 #   npm-check     audits package-lock.json with our own dogfooded checker
 #                 (@dependably/npm-check)
-#   build         `npm run build && npm pack` the publishable tarball, kept as a
-#                 job artifact
+#   sonarqube-check  SonarQube scan on main (advisory, needs SONAR_TOKEN)
+#   build         `npm run build && npm pack` the publishable tarball, plus
+#                 `npm run bundle:verify` for the Claude Desktop extension
+#                 (dist-mcpb/*.mcpb + .sha256); both kept as job artifacts
 #   sbom          generate a CycloneDX SBOM (every pipeline), kept as an artifact
 #   sbom-publish  upload the SBOM to Dependency-Track on the default branch (its
 #                 own stage so it never races the `sbom` job in the shared build
 #                 dir)
+#   sbom-publish-dependably  upload the same SBOM to the Dependably instance's
+#                 Projects (PUT /api/v1/sbom) on the default branch
 #   publish       manual gate on a vX.Y.Z tag — pushes the built tarball to the
 #                 private dependably (dogfood) registry
+#   release       automatic on a vX.Y.Z tag — GitLab release whose assets link
+#                 to the .mcpb bundle and checksum from that tag's build job
+#   publish:github manual on main or a vX.Y.Z tag — mirrors the commit (and tag)
+#                 to github.com/dependably/dependably-mcp, whose own workflow
+#                 publishes to public npm and attaches the bundle to the release
 #   publish-dev   manual gate on the default branch — pushes an internal-testing
 #                 prerelease (<version>-dev.<iid>.<sha>, dist-tag `dev`) to the
 #                 same private registry
@@ -42,6 +51,13 @@
 #                         https://dtrack.example.com
 #   dependencyTrack_token Protected + Masked — DT API key with BOM_UPLOAD +
 #                         PROJECT_CREATION_UPLOAD perms
+#   SBOM_UPLOAD_TOKEN     Protected + Masked — Dependably API token with the
+#                         sbom:upload capability (sbom-publish-dependably);
+#                         targets REGISTRY_URL
+#   SONAR_HOST_URL        — SonarQube server URL (sonarqube-check)
+#   SONAR_TOKEN           Masked — SonarQube analysis token (sonarqube-check)
+#   GITHUB_TOKEN          Protected + Masked — contents:write on the GitHub
+#                         mirror (publish:github)
 
 # Run ONE pipeline per change: a merge-request pipeline when an MR is open (so
 # the full suite gates the MR, not a redundant branch pipeline), the branch
@@ -122,15 +138,78 @@ npm-check:
       fi
     - DEPENDABLY_TOKEN="$REGISTRY_KEY" npx -y @dependably/npm-check@1.8.0 audit package-lock.json
 
+# SonarQube analysis on the default branch. Advisory (allow_failure:true): with
+# sonar.qualitygate.wait=true the scanner exits non-zero on a red quality gate,
+# and the pipeline shows it without blocking. Needs SONAR_HOST_URL and
+# SONAR_TOKEN (masked) as CI/CD variables; the job is skipped when the token is
+# absent rather than failing on every main pipeline.
+sonarqube-check:
+  stage: test
+  image:
+    name: sonarsource/sonar-scanner-cli:latest
+    entrypoint: [""]
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+    GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  script:
+    - sonar-scanner
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $SONAR_TOKEN'
+
+# Mirror to the public GitHub repository (github.com/dependably/dependably-mcp),
+# same shape as dependably-documentation's publish:github. Manual: a main push
+# mirrors main; a vX.Y.Z tag pipeline mirrors that tag, which is what triggers
+# the GitHub workflow's public npm publish and release-bundle jobs. Needs a
+# GITHUB_TOKEN CI/CD variable (masked) with contents:write on the mirror.
+publish:github:
+  stage: publish
+  image: alpine/git:latest
+  interruptible: false
+  resource_group: github-mirror
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+      when: manual
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+  script:
+    - '[ -n "$GITHUB_TOKEN" ] || { echo "GITHUB_TOKEN not set in CI/CD variables" >&2; exit 1; }'
+    - git remote add github "https://x-access-token:${GITHUB_TOKEN}@github.com/dependably/dependably-mcp.git"
+    - |
+      if [ -n "${CI_COMMIT_TAG:-}" ]; then
+        echo "Mirroring tag $CI_COMMIT_TAG ($CI_COMMIT_SHA) to github.com/dependably/dependably-mcp"
+        git push github "$CI_COMMIT_SHA:refs/heads/main"
+        git push github "refs/tags/$CI_COMMIT_TAG:refs/tags/$CI_COMMIT_TAG"
+      else
+        echo "Mirroring $CI_COMMIT_SHA to github.com/dependably/dependably-mcp main"
+        git push github HEAD:refs/heads/main
+      fi
+
 build:
   stage: build
   extends: .private-registry-setup
   script:
     - npm run build
     - npm pack
+    # Claude Desktop extension: dist-mcpb/dependably-<version>.mcpb + .sha256,
+    # built from the same checkout as the tarball and booted once from the
+    # unpacked bundle to prove it is self-contained. Same version, same tag.
+    - apt-get update -qq && apt-get install -y -qq unzip > /dev/null
+    - npm run bundle:verify
+    - echo "BUILD_JOB_ID=$CI_JOB_ID" > build.env
   artifacts:
     paths:
       - "*.tgz"
+      - dist-mcpb/
+    reports:
+      dotenv: build.env
     expire_in: 1 week
 
 # Software Bill of Materials (CycloneDX, spec 1.6). Generated on every pipeline
@@ -206,6 +285,58 @@ sbom-publish:
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
       esac
 
+# Publish the same SBOM to the Dependably instance's Projects page (the product
+# dogfooding its own SBOM intake), alongside Dependency-Track. The endpoint is
+# PUT /api/v1/sbom with the CycloneDX JSON as the raw body and the target in the
+# query string (SbomController.PutSbom in dependably-community): autoCreate
+# stands the project and version up on first upload, isLatest promotes it. Both
+# success paths answer 200; a re-upload of the same version is a merge, not a
+# duplicate. Needs a token carrying the `sbom:upload` capability — deliberately
+# NOT REGISTRY_KEY (the npm push token), since sbom:upload is its own scope.
+# Hard-fails when unconfigured, like sbom-publish.
+sbom-publish-dependably:
+  stage: sbom-publish
+  image: alpine:3
+  # External write — never auto-cancel mid-upload.
+  interruptible: false
+  needs:
+    - job: sbom
+      artifacts: true
+  resource_group: sbom-publish-dependably
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache curl
+    - |
+      if [ -z "${REGISTRY_URL:-}" ] || [ -z "${SBOM_UPLOAD_TOKEN:-}" ]; then
+        echo "ERROR: REGISTRY_URL and SBOM_UPLOAD_TOKEN must be set as CI/CD variables (token needs the sbom:upload capability)." >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      if [ ! -s sbom.json ]; then
+        echo "ERROR: sbom.json (from the sbom job artifact) is missing." >&2
+        exit 1
+      fi
+      BASE="${REGISTRY_URL%/}"
+      PROJECT="dependably-mcp"
+      VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' package.json | head -n1)
+      if [ -z "$VERSION" ]; then
+        echo "ERROR: could not determine version from package.json." >&2
+        exit 1
+      fi
+      echo "Publishing SBOM ($(wc -c < sbom.json) bytes) for $PROJECT@$VERSION to $BASE/api/v1/sbom"
+      status=$(curl -sS -o /tmp/sbom.out -w '%{http_code}' \
+        -X PUT "$BASE/api/v1/sbom?projectName=$PROJECT&projectVersion=$VERSION&autoCreate=true&isLatest=true" \
+        -H "Authorization: Bearer $SBOM_UPLOAD_TOKEN" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, application/problem+json" \
+        --data-binary @sbom.json)
+      case "$status" in
+        200) echo "✓ SBOM uploaded to Dependably:"; cat /tmp/sbom.out; echo;;
+        *) echo "SBOM upload to Dependably failed (HTTP $status):" >&2; cat /tmp/sbom.out >&2; exit 1;;
+      esac
+
 publish:
   stage: publish
   # External write (pushes the tarball to the registry) — never auto-cancel it.
@@ -265,6 +396,43 @@ publish:
     - echo "✓ $PKG published and verified on $NPM_REGISTRY"
   after_script:
     - rm -f .npmrc.publish .npmrc.read
+
+# GitLab release on a vX.Y.Z tag: attaches the extension bundle and its checksum
+# from the tag pipeline's `build` job, so a Desktop user has a stable download
+# URL per version. Runs automatically (no external write beyond this project);
+# the npm publish above stays a manual gate.
+release:
+  stage: publish
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  interruptible: false
+  needs:
+    - job: build
+      artifacts: true
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+  variables:
+    ARTIFACT_BASE: "$CI_PROJECT_URL/-/jobs/$BUILD_JOB_ID/artifacts/raw/dist-mcpb"
+  script:
+    - |
+      set -eu
+      VERSION="${CI_COMMIT_TAG#v}"
+      if [ ! -f "dist-mcpb/dependably-$VERSION.mcpb" ]; then
+        echo "ERROR: bundle for $VERSION missing from build artifacts" >&2
+        exit 1
+      fi
+      echo "Releasing $CI_COMMIT_TAG with dependably-$VERSION.mcpb"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "dependably-mcp $CI_COMMIT_TAG"
+    description: "See CHANGELOG.md for this release. The Claude Desktop extension is attached; verify it against the .sha256 before installing."
+    assets:
+      links:
+        - name: "dependably-${CI_COMMIT_TAG#v}.mcpb (Claude Desktop extension)"
+          url: "$ARTIFACT_BASE/dependably-${CI_COMMIT_TAG#v}.mcpb"
+          link_type: package
+        - name: "dependably-${CI_COMMIT_TAG#v}.mcpb.sha256"
+          url: "$ARTIFACT_BASE/dependably-${CI_COMMIT_TAG#v}.mcpb.sha256"
+          link_type: other
 
 # Internal-testing publish: manual gate on the default branch, pushing to the
 # private dependably registry (mirrors the cslint / checker-python main-branch

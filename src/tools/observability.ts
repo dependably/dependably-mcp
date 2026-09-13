@@ -15,7 +15,16 @@ const READ_ANNOTATIONS = {
 //   - get_prometheus_metrics → raw Prometheus text (IP-allowlisted server-side; bearer token is ignored)
 // These endpoints are anonymous / IP-allowlisted, so they work without a PAT
 // (subject to the /metrics IP allowlist).
-export function registerObservabilityTools(server: McpServer, client: DependablyClient): void {
+export interface ObservabilityOptions {
+  /** Register get_version and get_prometheus_metrics (loopback-only on the server). */
+  loopbackProbes: boolean;
+}
+
+export function registerObservabilityTools(
+  server: McpServer,
+  client: DependablyClient,
+  { loopbackProbes }: ObservabilityOptions = { loopbackProbes: true },
+): void {
   server.registerTool(
     'health_check',
     {
@@ -37,6 +46,8 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
     },
     async () => run(async () => json(await client.get('/ready'))),
   );
+
+  if (!loopbackProbes) return;
 
   server.registerTool(
     'get_version',

@@ -15,7 +15,7 @@
   },
   "homepage": "https://dependably.ca",
   "documentation": "https://github.com/dependably/dependably-mcp#readme",
-  "support": "https://github.com/dependably/dependably-mcp/issues",
+  "support": "https://dependably.ca/contact",
   "icon": "assets/icon.png",
   "icons": [
     {
@@ -41,7 +41,9 @@
         "DEPENDABLY_BASE_URL": "${user_config.base_url}",
         "DEPENDABLY_TOKEN": "${user_config.token}",
         "DEPENDABLY_TIMEOUT_MS": "${user_config.timeout_ms}",
-        "DEPENDABLY_IMPORT_ROOT": "${user_config.import_root}"
+        "DEPENDABLY_IMPORT_ROOT": "${user_config.import_root}",
+        "DEPENDABLY_TOOLSET": "remote",
+        "NODE_EXTRA_CA_CERTS": "${user_config.ca_bundle}"
       }
     }
   },
@@ -59,16 +61,8 @@
       "description": "Full detail for one package: versions, per-version SPDX licenses, vulnerability links (GET /api/v1/packages/{ecosystem}/{name}). Requires read:packages capability."
     },
     {
-      "name": "get_prometheus_metrics",
-      "description": "Raw Prometheus exposition (GET /metrics). The endpoint is gated by an IP allowlist server-side — if your MCP host isn't in the allowlist this returns 403. Output is text, not JSON."
-    },
-    {
       "name": "get_publish_command",
       "description": "Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token."
-    },
-    {
-      "name": "get_version",
-      "description": "Server build version (GET /version). The endpoint is gated by the same IP allowlist as /metrics — if your MCP host isn't in the allowlist this returns 403."
     },
     {
       "name": "get_vulnerability",
@@ -173,6 +167,12 @@
       "type": "directory",
       "title": "Import folder (optional)",
       "description": "Enables the two air-gapped import tools. They can only read files inside this folder.",
+      "required": false
+    },
+    "ca_bundle": {
+      "type": "file",
+      "title": "Private CA bundle (optional)",
+      "description": "Only if your Dependably instance uses a certificate from a private CA: a PEM file containing the CA certificate chain. Leave empty for public certificates.",
       "required": false
     }
   }

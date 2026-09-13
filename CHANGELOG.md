@@ -17,6 +17,34 @@ All notable changes to this project are documented here. The format follows
   tool list from the running server, and `npm test` now fails when the manifest is stale.
 - `docs/distribution-plan.md`: the plan for the extension, the Anthropic directory listing, and
   the other MCP harnesses.
+- **`DEPENDABLY_TOOLSET`** (`full` | `remote`, default `full`). `remote` leaves out `get_version`
+  and `get_prometheus_metrics`, whose endpoints Dependably allowlists to loopback, so any client
+  not running on the Dependably host would only ever see a `403` from them. The extension
+  manifest sets `remote`, and `npm run manifest:sync` boots the server with the toolset the
+  manifest declares, so the listed tools are exactly what a Desktop install exposes (16).
+- Extension config dialog: an optional **private CA bundle** file, mapped onto Node's standard
+  `NODE_EXTRA_CA_CERTS`, for instances behind an internal certificate authority. There is no
+  option to disable certificate verification.
+- CI: the GitLab `build` job and a new GitHub `release-bundle` job build and verify the `.mcpb`
+  on every tagged release and attach it, with its `.sha256`, to the GitLab and GitHub releases.
+- CI: `sbom-publish-dependably` uploads the CycloneDX SBOM to the Dependably instance's own
+  Projects (`PUT /api/v1/sbom`, token with `sbom:upload`) on `main`, alongside the existing
+  Dependency-Track upload.
+- CI: `sonarqube-check` (advisory SonarQube scan on `main`, `sonar-project.properties`) and a
+  manual `publish:github` job that mirrors `main` or a release tag to
+  `github.com/dependably/dependably-mcp`, whose workflow publishes to public npm.
+- `docs/listing.md` (directory listing pack and pre-submission checklist) and
+  `docs/desktop-e2e.md` (manual Claude Desktop install runbook, macOS and Windows).
+
+### Changed
+
+- Transport failures now say what to check instead of Node's bare `fetch failed`: an unresolvable
+  host, a refused connection, a TLS chain the runtime does not trust (with the
+  `NODE_EXTRA_CA_CERTS` remedy), or a dropped connection, each with the underlying error code.
+  The smoke test asserts this against a refused loopback port.
+- Optional settings that arrive as an unexpanded `${…}` placeholder from a host that skipped
+  substitution are treated as unset rather than as a URL or directory.
+- Extension manifest: the support link points at <https://dependably.ca/contact>.
 
 ## [0.2.0] - 2026-07-16
 
