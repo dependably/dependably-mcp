@@ -17,12 +17,13 @@
 #   build         `npm run build && npm pack` the publishable tarball, plus
 #                 `npm run bundle:verify` for the Claude Desktop extension
 #                 (dist-mcpb/*.mcpb + .sha256); both kept as job artifacts
-#   sbom          generate a CycloneDX SBOM (every pipeline), kept as an artifact
+#   sbom          sbom-reach generate mode: CycloneDX SBOM + reachability SARIF
+#                 (every pipeline), kept as artifacts
 #   sbom-publish  upload the SBOM to Dependency-Track on the default branch (its
 #                 own stage so it never races the `sbom` job in the shared build
 #                 dir)
-#   sbom-publish-dependably  upload the same SBOM to the Dependably instance's
-#                 Projects (PUT /api/v1/sbom) on the default branch
+#   sbom-publish-dependably  upload the SBOM and SARIF to the Dependably
+#                 instance's Projects (PUT /api/v1/sbom, /api/v1/sarif) on main
 #   publish       manual gate on a vX.Y.Z tag — pushes the built tarball to the
 #                 private dependably (dogfood) registry
 #   release       automatic on a vX.Y.Z tag — GitLab release whose assets link
@@ -210,19 +211,72 @@ build:
       dotenv: build.env
     expire_in: 1 week
 
-# Software Bill of Materials (CycloneDX, spec 1.6). Generated on every pipeline
-# from the installed dependency tree and kept as an artifact. cyclonedx-npm is
-# a devDependency resolved through package-lock.json, so `npm ci` always
-# installs the exact locked version regardless of the caret range in
-# package.json. Mirrors checker-npm's `sbom` job.
+# Software Bill of Materials (CycloneDX 1.6) and package-level reachability,
+# both produced by our own sbom-reach (gitlab.northwardlabs.ca/moonlitlabs/
+# sbom-reachability) in generate mode: it builds the SBOM from package-lock.json
+# with the dev/runtime marker explicit on every component, asks OSV.dev for
+# advisories, and follows first-party imports through node_modules (installed
+# by .private-registry-setup) to say which vulnerable packages are actually
+# reached. Two artefacts: sbom.json (with vulnerabilities[] embedded) for the
+# SBOM uploads, sbom-reach.sarif for Dependably's SARIF ingest, which writes
+# reachability facts and the dev/prod signal onto the components.
+#
+# Installing sbom-reach: it has no published release yet (its README, "Not
+# published yet"), so the job asks the registry first — the day a release
+# exists, `SBOM_REACH_VERSION` resolves through the private proxy and nothing
+# else changes — and otherwise falls back to the tarball sbom-reachability's own
+# `pack-verify` job packs on every main push (kept 7 days). That fetch uses
+# CI_JOB_TOKEN, so sbom-reachability must list this project in its job token
+# allowlist (Settings → CI/CD → Job token permissions).
+#
+# --fail-on none: generation and gating are separate concerns. The verdicts
+# go to Dependably, whose policy decides; the summary table on stderr still
+# shows what is reachable. The SBOM itself is unchanged by that flag.
 sbom:
   stage: sbom
   extends: .private-registry-setup
+  variables:
+    SBOM_REACH_VERSION: "0.2.0"
+    SBOM_REACH_PROJECT_ID: "37"   # moonlitlabs/sbom-reachability
   script:
-    - npm run sbom
+    - |
+      set -eu
+      TOOL_DIR="$CI_PROJECT_DIR/.sbom-reach"
+      mkdir -p "$TOOL_DIR"
+      # npm scopes its project config to the nearest package.json, so the
+      # private-registry .npmrc the setup wrote at the repo root must travel.
+      cp .npmrc "$TOOL_DIR/.npmrc"
+      cd "$TOOL_DIR"
+      npm init -y --silent > /dev/null
+      if npm view "sbom-reach@$SBOM_REACH_VERSION" version > /dev/null 2>&1; then
+        echo "Installing sbom-reach@$SBOM_REACH_VERSION from the registry"
+        npm install --no-audit --no-fund --silent "sbom-reach@$SBOM_REACH_VERSION"
+      else
+        TARBALL="sbom-reach-$SBOM_REACH_VERSION.tgz"
+        echo "sbom-reach@$SBOM_REACH_VERSION is not on the registry; fetching $TARBALL from sbom-reachability's latest main pack-verify job"
+        status=$(curl -sS -o "$TARBALL" -w '%{http_code}' \
+          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+          "$CI_API_V4_URL/projects/$SBOM_REACH_PROJECT_ID/jobs/artifacts/main/raw/pack-verify-out/$TARBALL?job=pack-verify")
+        if [ "$status" != "200" ]; then
+          echo "ERROR: could not fetch $TARBALL (HTTP $status)." >&2
+          echo "       403/404: add this project (moonlitlabs/dependably-mcp) to sbom-reachability's CI/CD job token allowlist," >&2
+          echo "       or the pack-verify artifact on its main branch has expired (7 days) — re-run that pipeline," >&2
+          echo "       or SBOM_REACH_VERSION no longer matches packages/cli/package.json there." >&2
+          echo "       The durable fix is the first vX.Y.Z release of sbom-reach (its docs/releasing.md)." >&2
+          exit 1
+        fi
+        npm install --no-audit --no-fund --silent "./$TARBALL"
+      fi
+      cd "$CI_PROJECT_DIR"
+      SBOM_REACH="$TOOL_DIR/node_modules/.bin/sbom-reach"
+      "$SBOM_REACH" --version
+      "$SBOM_REACH" analyze --src . --vuln-source osv \
+        --sbom-output sbom.json --sarif-category sbom-reach -o sbom-reach.sarif --fail-on none
+      test -s sbom.json && test -s sbom-reach.sarif
   artifacts:
     paths:
       - sbom.json
+      - sbom-reach.sarif
     expire_in: 30 days
 
 # Publish the SBOM to Dependency-Track for continuous supply-chain monitoring.
@@ -283,13 +337,14 @@ sbom-publish:
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
       esac
 
-# Publish the same SBOM to the Dependably instance's Projects page (the product
-# dogfooding its own SBOM intake), alongside Dependency-Track. The endpoint is
-# PUT /api/v1/sbom with the CycloneDX JSON as the raw body and the target in the
-# query string (SbomController.PutSbom in dependably-community): autoCreate
-# stands the project and version up on first upload, isLatest promotes it. Both
-# success paths answer 200; a re-upload of the same version is a merge, not a
-# duplicate. Authenticates with DEPENDABLY_SBOM_TOKEN, a token minted with the
+# Publish the SBOM and the reachability SARIF to the Dependably instance's
+# Projects page (the product dogfooding its own intake), alongside Dependency-
+# Track. SBOM first: PUT /api/v1/sbom with the CycloneDX JSON as the raw body
+# and the target in the query string (SbomController.PutSbom in
+# dependably-community): autoCreate stands the project and version up on first
+# upload, isLatest promotes it. Both success paths answer 200; a re-upload of
+# the same version is a merge, not a duplicate. Then PUT /api/v1/sarif against
+# the same version, which writes reachability facts and the dev/prod signal. Authenticates with DEPENDABLY_SBOM_TOKEN, a token minted with the
 # "SBOM upload" scope (the endpoint checks the `sbom:upload` capability, which
 # the npm push and pull tokens do not carry). Targets REGISTRY_URL. Hard-fails
 # when unconfigured, like sbom-publish.
@@ -336,6 +391,24 @@ sbom-publish-dependably:
         200) echo "✓ SBOM uploaded to Dependably:"; cat /tmp/sbom.out; echo;;
         403) echo "SBOM upload to Dependably refused (HTTP 403): DEPENDABLY_SBOM_TOKEN lacks the sbom:upload capability. Mint it with the SBOM upload scope in Dependably (Tokens)." >&2; cat /tmp/sbom.out >&2; exit 1;;
         *) echo "SBOM upload to Dependably failed (HTTP $status):" >&2; cat /tmp/sbom.out >&2; exit 1;;
+      esac
+      # Reachability + dev/prod signal for the version the SBOM just created.
+      # Same target, PUT /api/v1/sarif; must follow the SBOM, since only an SBOM
+      # upload creates a project version.
+      if [ ! -s sbom-reach.sarif ]; then
+        echo "ERROR: sbom-reach.sarif (from the sbom job artifact) is missing." >&2
+        exit 1
+      fi
+      echo "Publishing reachability SARIF ($(wc -c < sbom-reach.sarif) bytes) for $PROJECT@$VERSION to $BASE/api/v1/sarif"
+      status=$(curl -sS -o /tmp/sarif.out -w '%{http_code}' \
+        -X PUT "$BASE/api/v1/sarif?projectName=$PROJECT&projectVersion=$VERSION" \
+        -H "Authorization: Bearer $DEPENDABLY_SBOM_TOKEN" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, application/problem+json" \
+        --data-binary @sbom-reach.sarif)
+      case "$status" in
+        200) echo "✓ SARIF uploaded to Dependably:"; cat /tmp/sarif.out; echo;;
+        *) echo "SARIF upload to Dependably failed (HTTP $status):" >&2; cat /tmp/sarif.out >&2; exit 1;;
       esac
 
 publish:

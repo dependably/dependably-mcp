@@ -185,6 +185,7 @@ npm install
 npm run dev   # tsc --watch
 npm run build # tsc once
 npm test      # build + smoke test (boots the server in-memory, asserts the tool surface)
+npm run sbom  # local CycloneDX SBOM (cyclonedx-npm); CI generates the shipped one with sbom-reach, see .gitlab-ci.yml
 ```
 
 > **Note on the lockfile:** we dogfood a private Dependably instance as our npm registry, so the committed `package-lock.json` and `.npmrc` resolve against it. You don't need access to build: every dependency is also on the public registry, so point npm back at it for your clone (`echo 'registry=https://registry.npmjs.org/' > .npmrc` — it's what our public CI does) and install with `npm ci --replace-registry-host=always`. The lockfile's integrity hashes still pin the exact same bytes.

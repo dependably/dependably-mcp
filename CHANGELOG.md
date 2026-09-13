@@ -27,9 +27,14 @@ All notable changes to this project are documented here. The format follows
   option to disable certificate verification.
 - CI: the GitLab `build` job and a new GitHub `release-bundle` job build and verify the `.mcpb`
   on every tagged release and attach it, with its `.sha256`, to the GitLab and GitHub releases.
-- CI: `sbom-publish-dependably` uploads the CycloneDX SBOM to the Dependably instance's own
-  Projects (`PUT /api/v1/sbom`) on `main`, alongside the existing Dependency-Track upload. It
-  authenticates with `DEPENDABLY_SBOM_TOKEN`, a token minted with the `sbom:upload` capability.
+- CI: the `sbom` job now runs our own sbom-reach in generate mode. It builds the CycloneDX SBOM
+  from the lockfile with the dev/runtime marker explicit on every component, embeds OSV.dev
+  advisories, and writes a reachability SARIF. Until sbom-reach has a published release the job
+  installs the tarball its own `pack-verify` job packs on every `main` push.
+- CI: `sbom-publish-dependably` uploads the SBOM (`PUT /api/v1/sbom`) and then the reachability
+  SARIF (`PUT /api/v1/sarif`) to the Dependably instance's own Projects on `main`, alongside the
+  existing Dependency-Track upload. It authenticates with `DEPENDABLY_SBOM_TOKEN`, a token minted
+  with the `sbom:upload` capability.
 - CI: `sonarqube-check` (advisory SonarQube scan on `main`, `sonar-project.properties`) and a
   manual `publish:github` job that mirrors `main` or a release tag to
   `github.com/dependably/dependably-mcp`, whose workflow publishes to public npm.
