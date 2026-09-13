@@ -1,5 +1,6 @@
 # GitHub CI for the public mirror: test on every push/PR, publish to the
-# PUBLIC npm registry on a vX.Y.Z tag. The internal GitLab pipeline
+# PUBLIC npm registry on a vX.Y.Z tag, and attach the Claude Desktop extension
+# bundle (.mcpb + .sha256) to the GitHub release for that tag. The internal GitLab pipeline
 # (.gitlab-ci.yml) remains the dogfood pipeline against the private registry;
 # this one exists so outsiders get artifacts without needing to build.
 #
@@ -105,3 +106,37 @@ jobs:
           done
           echo "ERROR: $PKG not visible on the public registry after 5 attempts" >&2
           exit 1
+
+  # Claude Desktop extension. Built from the same tag as the npm publish and
+  # attached to the GitHub release, which is the download URL the README and
+  # the directory listing point at. Separate job so the npm token never shares
+  # a job with the release-writing token; `contents: write` is scoped here.
+  release-bundle:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Use the public npm registry
+        run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --replace-registry-host=always
+      - run: npm run build
+      # Validates the manifest, packs, writes the .sha256, then boots the server
+      # from the unpacked bundle.
+      - run: npm run bundle:verify
+      - name: Attach the bundle to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --title "dependably-mcp $TAG" \
+              --notes "See CHANGELOG.md for this release. The Claude Desktop extension is attached; verify it against the .sha256 before installing."
+          fi
+          gh release upload "$TAG" dist-mcpb/*.mcpb dist-mcpb/*.sha256 --clobber

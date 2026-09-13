@@ -3,6 +3,11 @@
 Status: approved 2026-09-02. Supersedes the plan drafted in the (now redundant)
 `dependably-claude-connector` directory; the connector lives in this repository.
 
+Progress 2026-09-12: M1 steps 1 to 3 done and the bundle verifies; M2 steps 1 and 3 done
+(actionable reachability errors, private-CA file setting); M3 step 1 done (bundle attached to
+GitLab and GitHub releases). Open decision 1 resolved with `DEPENDABLY_TOOLSET`. What remains is
+tracked in `docs/listing.md`, which is the pre-submission checklist.
+
 ## 1. Goal
 
 Let a Claude Desktop user open **Settings → Extensions**, find **Dependably**, install it, paste the
@@ -190,11 +195,9 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
 
 ## 7. Open decisions
 
-1. **`get_version` and `get_prometheus_metrics`.** They only work on the Dependably host itself.
-   Options: drop them from the bundle by an environment variable such as
-   `DEPENDABLY_TOOLSET=remote` (any harness could set it), or keep them with a description that
-   says so. Recommendation: the environment variable, because Cursor and Claude Code users hit the
-   same 403.
+1. **`get_version` and `get_prometheus_metrics`.** Resolved 2026-09-12: `DEPENDABLY_TOOLSET=remote`
+   (any harness can set it) leaves them out; the manifest sets it, and `sync-manifest` boots the
+   server with the manifest's toolset so the listed tools match the install. Default stays `full`.
 2. **Reviewer access.** The verified tier requires Anthropic to exercise every tool. A public demo
    instance with a scoped read-only token is the cleanest answer and also serves marketing.
 3. **Community tier.** MCPB listings may stay in the Community tier. Accepted; org-scoped installs

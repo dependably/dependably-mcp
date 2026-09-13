@@ -32,10 +32,12 @@ Dependably's management API accepts PATs on endpoints that opt into the `ApiToke
 | `admin_upload` — air-gapped bulk upload of N local artefact files (ecosystem auto-detected) | import† | `import:*` + `tenant:configure` (admin-grade token) |
 | `health_check` — liveness (`GET /health`) | observability | none (anonymous) |
 | `readiness_check` — readiness + per-subsystem checks (`GET /ready`) | observability | none (anonymous) |
-| `get_version` — server build version (`GET /version`) | observability | none (anonymous / IP-allowlisted) |
-| `get_prometheus_metrics` — raw `/metrics` text | observability | none (IP-allowlisted server-side) |
+| `get_version` — server build version (`GET /version`) ‡ | observability | none (anonymous / IP-allowlisted) |
+| `get_prometheus_metrics` — raw `/metrics` text ‡ | observability | none (IP-allowlisted server-side) |
 | `get_install_command` — build the install shell command (does **not** execute) | setup | none (local, no server call) |
 | `get_publish_command` — build the publish shell command (does **not** execute) | setup | none (local, no server call) |
+
+‡ **The two loopback probes are opt-out.** `/version` and `/metrics` are IP-allowlisted to the Dependably host itself, so from any other machine they return `403`. Set `DEPENDABLY_TOOLSET=remote` to leave them out (the Claude Desktop extension does); the default `full` keeps them for a client running on the server.
 
 † **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 18-tool surface, which performs no local file reads at all.
 
@@ -91,6 +93,9 @@ The server is configured entirely through environment variables, supplied by you
 | `DEPENDABLY_TOKEN` | yes | — | A Dependably **Personal Access Token (PAT)**. Mint one from the web UI under *Tokens*. Sent as a bearer token. Use a **user-owned** PAT (service/M2M tokens currently `404` on gated endpoints). |
 | `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
 | `DEPENDABLY_IMPORT_ROOT` | no | *(unset)* | Opt-in for the two import tools. Set it to the directory holding your artefact files; `import_manifest` / `admin_upload` are only registered when it is set, and refuse to read files outside it. |
+| `DEPENDABLY_TOOLSET` | no | `full` | `remote` drops `get_version` and `get_prometheus_metrics`, which only succeed from the Dependably host itself. Use it for any client that is not running on the server. |
+
+If the instance presents a certificate from a **private CA**, point Node's standard `NODE_EXTRA_CA_CERTS` at the PEM bundle in the environment that launches the server. There is deliberately no switch to disable certificate verification. A connection failure names the setting to check (URL typo, nothing listening, TLS chain) rather than a bare `fetch failed`.
 
 The PAT's **capabilities** determine which tools succeed — see the capability column in [the 20 tools](#the-20-tools).
 
@@ -127,8 +132,14 @@ Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
 Install the extension bundle instead of editing JSON. Download `dependably-<version>.mcpb` from the
 release page (verify it against the `.sha256` beside it), then either double-click it or drag it onto
 **Settings → Extensions** in Claude Desktop. The install dialog asks for your Dependably URL and a
-personal access token; the token is stored in your operating system's keychain, and the optional
-import folder enables the two air-gapped import tools scoped to that folder.
+personal access token; the token is stored in your operating system's keychain, the optional
+import folder enables the two air-gapped import tools scoped to that folder, and the optional
+private-CA bundle covers instances behind an internal certificate authority. The extension runs
+with `DEPENDABLY_TOOLSET=remote`, so it exposes 16 tools: everything except the two probes that
+only work on the Dependably host itself.
+
+The listing pack for Anthropic's directory and the pre-submission checklist live in
+[`docs/listing.md`](docs/listing.md); the manual install runbook is [`docs/desktop-e2e.md`](docs/desktop-e2e.md).
 
 To build the bundle from source:
 

@@ -4,7 +4,7 @@ import { basename, resolve, sep } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
-import { DependablyApiError, formatHttpError } from '../client.js';
+import { DependablyApiError, describeFetchError, formatHttpError } from '../client.js';
 import type { Config } from '../config.js';
 import { run, withSummary } from '../format.js';
 
@@ -68,8 +68,7 @@ async function multipartPost(
       signal: AbortSignal.timeout(cfg.timeoutMs),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`POST ${url} failed: ${msg}`);
+    throw new Error(describeFetchError('POST', url, err, cfg.timeoutMs));
   }
 
   const text = await res.text();
