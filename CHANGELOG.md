@@ -38,6 +38,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `npm run sbom` now runs `scripts/sbom.mjs`, which wraps cyclonedx-npm and writes an explicit
+  `cdx:npm:package:development=false` on every component the generator left unmarked. Consumers
+  that read the marker as a tri-state (Dependably maps an absent marker to an `unknown` dependency
+  scope) now see production dependencies as runtime instead of unknown.
 - Transport failures now say what to check instead of Node's bare `fetch failed`: an unresolvable
   host, a refused connection, a TLS chain the runtime does not trust (with the
   `NODE_EXTRA_CA_CERTS` remedy), or a dropped connection, each with the underlying error code.

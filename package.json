@@ -39,7 +39,7 @@
     "test": "node scripts/smoke.mjs && node scripts/sync-manifest.mjs --check",
     "prepublishOnly": "npm test",
     "prepare": "husky",
-    "sbom": "cyclonedx-npm --output-format json --output-file sbom.json",
+    "sbom": "node scripts/sbom.mjs",
     "manifest:sync": "node scripts/sync-manifest.mjs",
     "bundle": "node scripts/bundle.mjs",
     "bundle:verify": "node scripts/bundle.mjs --verify"
