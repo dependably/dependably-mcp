@@ -398,9 +398,14 @@ release:
   variables:
     ARTIFACT_BASE: "$CI_PROJECT_URL/-/jobs/$BUILD_JOB_ID/artifacts/raw/dist-mcpb"
   script:
-    - VERSION="${CI_COMMIT_TAG#v}"
-    - test -f "dist-mcpb/dependably-$VERSION.mcpb" || { echo "ERROR: bundle for $VERSION missing from build artifacts" >&2; exit 1; }
-    - echo "Releasing $CI_COMMIT_TAG with dependably-$VERSION.mcpb"
+    - |
+      set -eu
+      VERSION="${CI_COMMIT_TAG#v}"
+      if [ ! -f "dist-mcpb/dependably-$VERSION.mcpb" ]; then
+        echo "ERROR: bundle for $VERSION missing from build artifacts" >&2
+        exit 1
+      fi
+      echo "Releasing $CI_COMMIT_TAG with dependably-$VERSION.mcpb"
   release:
     tag_name: "$CI_COMMIT_TAG"
     name: "dependably-mcp $CI_COMMIT_TAG"
