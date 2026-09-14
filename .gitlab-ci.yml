@@ -233,7 +233,7 @@ sbom:
   stage: sbom
   extends: .private-registry-setup
   variables:
-    SBOM_REACH_VERSION: "0.2.2"
+    SBOM_REACH_VERSION: "0.2.3"
   script:
     - |
       set -eu
@@ -254,15 +254,28 @@ sbom:
       "$SBOM_REACH" analyze --src . --vuln-source osv \
         --sbom-output sbom.json --sarif-category sbom-reach -o sbom-reach.sarif --fail-on none
       test -s sbom.json && test -s sbom-reach.sarif
+    # A second, independent CycloneDX generator over the SAME tree (cyclonedx-npm,
+    # via scripts/sbom.mjs) — no vulnerabilities[], just components. Uploaded to
+    # Dependency-Track as its own project (sbom-publish-cyclonedx-npm below) so the
+    # two generators' output can be compared side by side, and so Dependency-Track
+    # can run its own NVD/OSS-Index scan independent of sbom-reach's OSV-sourced
+    # one. node_modules (incl. cyclonedx-npm) is already installed by
+    # .private-registry-setup's `npm ci` above.
+    - npm run sbom
+    - test -s cyclonedx-sbom.json
   artifacts:
     paths:
       - sbom.json
       - sbom-reach.sarif
+      - cyclonedx-sbom.json
     expire_in: 30 days
 
 # Publish the SBOM to Dependency-Track for continuous supply-chain monitoring.
 # Default branch only. Runs in its own stage after `sbom` and consumes that
 # job's artifact (alpine:3 + curl, mirrors checker-npm's sbom-publish job).
+# Its sibling below, sbom-publish-cyclonedx-npm, uploads the SAME tree's
+# cyclonedx-npm-generated SBOM to a SEPARATE Dependency-Track project, purely
+# so the two generators can be compared side by side.
 #
 # Text fields use `--form-string`, not `-F`: in a curl `-F` value, a leading
 # `@` means "read this file", which would misfire if the project/package name
@@ -313,6 +326,59 @@ sbom-publish:
         --form-string "projectName=$PROJECT" \
         --form-string "projectVersion=$VERSION" \
         -F "bom=@sbom.json")
+      case "$status" in
+        200) echo "✓ SBOM uploaded";;
+        *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;
+      esac
+
+# A second, independent CycloneDX document over the same tree — cyclonedx-npm
+# (via scripts/sbom.mjs), no vulnerabilities[] at all — uploaded to
+# Dependency-Track as its OWN project (a different projectName, same
+# instance), purely so the two generators' output can be compared side by
+# side and so Dependency-Track's own NVD/OSS-Index scan runs against a bare
+# component list independent of whatever sbom-reach's OSV-sourced SBOM above
+# already asserts. Comparison tooling, not a release gate: allow_failure so a
+# hiccup here never blocks a release the way sbom-publish above does.
+sbom-publish-cyclonedx-npm:
+  stage: sbom-publish
+  image: alpine:3
+  interruptible: false
+  allow_failure: true
+  needs:
+    - job: sbom
+      artifacts: true
+  resource_group: sbom-publish-cyclonedx-npm
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache curl
+    - |
+      if [ -z "$dependencyTrack_url" ] || [ -z "$dependencyTrack_token" ]; then
+        echo "ERROR: dependencyTrack_url and dependencyTrack_token must be set as CI/CD variables." >&2
+        exit 1
+      fi
+    - |
+      set -eu
+      if [ ! -s cyclonedx-sbom.json ]; then
+        echo "ERROR: cyclonedx-sbom.json (from the sbom job artifact) is missing. Directory contents:" >&2
+        ls -la >&2
+        exit 1
+      fi
+      BASE="${dependencyTrack_url%/}"
+      PROJECT="dependably-mcp-cyclonedx-npm"
+      VERSION=$(sed -n 's/^[[:space:]]*"version": *"\([^"]*\)".*/\1/p' package.json | head -n1)
+      if [ -z "$VERSION" ]; then
+        echo "ERROR: could not determine version from package.json." >&2
+        exit 1
+      fi
+      echo "Publishing SBOM ($(wc -c < cyclonedx-sbom.json) bytes) for $PROJECT@$VERSION to $BASE"
+      status=$(curl -sS -o /tmp/bom.out -w '%{http_code}' \
+        -X POST "$BASE/api/v1/bom" \
+        -H "X-Api-Key: $dependencyTrack_token" \
+        --form-string "autoCreate=true" \
+        --form-string "projectName=$PROJECT" \
+        --form-string "projectVersion=$VERSION" \
+        -F "bom=@cyclonedx-sbom.json")
       case "$status" in
         200) echo "✓ SBOM uploaded";;
         *) echo "SBOM upload failed (HTTP $status):" >&2; cat /tmp/bom.out >&2; exit 1;;

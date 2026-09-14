@@ -7,6 +7,7 @@ dist/
 .claude/
 *.tgz
 sbom.json
+cyclonedx-sbom.json
 sbom-reach.sarif
 # sbom-reach install dir used by the CI sbom job
 .sbom-reach/
