@@ -43,7 +43,7 @@ jobs:
         run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci --replace-registry-host=always
       - run: npm test
@@ -59,7 +59,7 @@ jobs:
         run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 20
+          node-version: 22
       - run: npx -y @dependably/npm-check@1.8.0 audit package-lock.json
 
   publish:
@@ -77,7 +77,7 @@ jobs:
         run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           # Writes an auth-enabled user-level npmrc wired to NODE_AUTH_TOKEN.
           registry-url: https://registry.npmjs.org
@@ -123,7 +123,7 @@ jobs:
         run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci --replace-registry-host=always
       - run: npm run build

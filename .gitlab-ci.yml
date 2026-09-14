@@ -72,7 +72,7 @@ workflow:
     on_new_commit: interruptible
 
 default:
-  image: node:20
+  image: node:22
   interruptible: true
 
 stages:
