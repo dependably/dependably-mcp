@@ -233,7 +233,7 @@ sbom:
   stage: sbom
   extends: .private-registry-setup
   variables:
-    SBOM_REACH_VERSION: "0.2.2"
+    SBOM_REACH_VERSION: "0.2.3"
   script:
     - |
       set -eu
