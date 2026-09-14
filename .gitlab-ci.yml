@@ -221,13 +221,10 @@ build:
 # SBOM uploads, sbom-reach.sarif for Dependably's SARIF ingest, which writes
 # reachability facts and the dev/prod signal onto the components.
 #
-# Installing sbom-reach: it has no published release yet (its README, "Not
-# published yet"), so the job asks the registry first — the day a release
-# exists, `SBOM_REACH_VERSION` resolves through the private proxy and nothing
-# else changes — and otherwise falls back to the tarball sbom-reachability's own
-# `pack-verify` job packs on every main push (kept 7 days). That fetch uses
-# CI_JOB_TOKEN, so sbom-reachability must list this project in its job token
-# allowlist (Settings → CI/CD → Job token permissions).
+# Installing sbom-reach: it publishes to the private Dependably npm registry
+# (sbom-reachability's docs/releasing.md; 0.2.2 was the first release), so
+# `SBOM_REACH_VERSION` resolves through the same private proxy every other npm
+# install here uses. Pinned exactly, like npm-check below; bump deliberately.
 #
 # --fail-on none: generation and gating are separate concerns. The verdicts
 # go to Dependably, whose policy decides; the summary table on stderr still
@@ -236,8 +233,7 @@ sbom:
   stage: sbom
   extends: .private-registry-setup
   variables:
-    SBOM_REACH_VERSION: "0.2.0"
-    SBOM_REACH_PROJECT_ID: "37"   # moonlitlabs/sbom-reachability
+    SBOM_REACH_VERSION: "0.2.2"
   script:
     - |
       set -eu
@@ -250,25 +246,8 @@ sbom:
       # Not `npm init -y`: it names the package after the directory, and a
       # leading dot is an invalid package name, so it exits 1.
       printf '{ "name": "sbom-reach-runner", "private": true }\n' > package.json
-      if npm view "sbom-reach@$SBOM_REACH_VERSION" version > /dev/null 2>&1; then
-        echo "Installing sbom-reach@$SBOM_REACH_VERSION from the registry"
-        npm install --no-audit --no-fund "sbom-reach@$SBOM_REACH_VERSION"
-      else
-        TARBALL="sbom-reach-$SBOM_REACH_VERSION.tgz"
-        echo "sbom-reach@$SBOM_REACH_VERSION is not on the registry; fetching $TARBALL from sbom-reachability's latest main pack-verify job"
-        status=$(curl -sS -o "$TARBALL" -w '%{http_code}' \
-          --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-          "$CI_API_V4_URL/projects/$SBOM_REACH_PROJECT_ID/jobs/artifacts/main/raw/pack-verify-out/$TARBALL?job=pack-verify")
-        if [ "$status" != "200" ]; then
-          echo "ERROR: could not fetch $TARBALL (HTTP $status)." >&2
-          echo "       403/404: add this project (moonlitlabs/dependably-mcp) to sbom-reachability's CI/CD job token allowlist," >&2
-          echo "       or the pack-verify artifact on its main branch has expired (7 days) — re-run that pipeline," >&2
-          echo "       or SBOM_REACH_VERSION no longer matches packages/cli/package.json there." >&2
-          echo "       The durable fix is the first vX.Y.Z release of sbom-reach (its docs/releasing.md)." >&2
-          exit 1
-        fi
-        npm install --no-audit --no-fund "./$TARBALL"
-      fi
+      echo "Installing sbom-reach@$SBOM_REACH_VERSION from the registry"
+      npm install --no-audit --no-fund "sbom-reach@$SBOM_REACH_VERSION"
       cd "$CI_PROJECT_DIR"
       SBOM_REACH="$TOOL_DIR/node_modules/.bin/sbom-reach"
       "$SBOM_REACH" --version
