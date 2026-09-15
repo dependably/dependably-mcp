@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: `publish:github` pulled bare `alpine/git:latest`, which is not a Docker Hub official
+  image and so is not reliably warm in the org's OCI pull-through cache; a cold pull fails on
+  this network (Docker Hub's CDN does not resolve). It now pulls
+  `${DEP_IMAGE_REGISTRY}/alpine/git:latest` with its entrypoint cleared, matching
+  dependably-documentation's job of the same name.
+
 ### Added
 
 - **Claude Desktop extension bundle.** `manifest.json` (MCPB manifest 0.3) at the repo root maps
