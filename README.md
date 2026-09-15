@@ -6,21 +6,23 @@ Dependably is a self-hosted private artifact repository for npm, PyPI, NuGet, Ma
 
 ## PAT-only, read + ops
 
-The server authenticates **only** with a Dependably Personal Access Token (`DEPENDABLY_TOKEN`) sent as a bearer token — 20 tools across 6 groups (18 by default; the 2 import tools are opt-in, see below).
+The server authenticates **only** with a Dependably Personal Access Token (`DEPENDABLY_TOKEN`) sent as a bearer token — 22 tools across 6 groups (20 by default; the 2 import tools are opt-in, see below).
 
 Dependably's management API accepts PATs on endpoints that opt into the `ApiToken` auth scheme. Since Dependably **v0.3.0** that includes the whole read-only management surface, which is what the read group below talks to; yank, admin import, and SIEM opted in earlier, and the health/readiness/version/metrics probes are anonymous / IP-allowlisted. The install/publish command builders run entirely locally and never call the server.
 
 > **Minimum server version:** the read tools need Dependably **≥ v0.3.0**; `get_license_policy` and `lookup_package` need the release after v0.3.1. Against an older server the read tools return `401`.
 
-### The 20 tools
+### The 22 tools
 
 | Tool | Group | Capability the PAT needs |
 |---|---|---|
 | `list_packages` — paginated package inventory with ecosystem/search filters | read | `read:packages` |
 | `get_package` — one package: versions, SPDX licenses, vulnerability links | read | `read:packages` |
 | `search_packages` — quick name search across the registry | read | `read:packages` |
-| `list_vulnerabilities` — paginated report of affected packages | read | `read:packages` |
+| `check_dependencies` — scope the org report to **one project's** dependency list; returns only what affects it, each package annotated with the version to bump to § | read | `read:packages` |
+| `list_vulnerabilities` — paginated **org-wide** report of affected packages (compact by default) | read | `read:packages` |
 | `get_vulnerability` — rich advisory detail incl. remediation guidance | read | `read:packages` |
+| `get_remediation` — fixed versions for up to 200 advisories at once, without the advisory prose | read | `read:packages` |
 | `lookup_package` — pre-adoption verdict on a package **not yet** in the registry (upstream metadata + OSV + org policy, ingests nothing) | read | `read:packages` |
 | `get_license_policy` — enforcement mode + SPDX allowlist/blocklist ("which licenses are approved") | read | `read:packages` |
 | `list_activity` — org activity feed (publishes, yanks, policy changes) | read | `read:audit` |
@@ -39,7 +41,9 @@ Dependably's management API accepts PATs on endpoints that opt into the `ApiToke
 
 ‡ **The two loopback probes are opt-out.** `/version` and `/metrics` are IP-allowlisted to the Dependably host itself, so from any other machine they return `403`. Set `DEPENDABLY_TOOLSET=remote` to leave them out (the Claude Desktop extension does); the default `full` keeps them for a client running on the server.
 
-† **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 18-tool surface, which performs no local file reads at all.
+† **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 20-tool surface, which performs no local file reads at all.
+
+§ **`check_dependencies` is the one to reach for** when the question is about a project rather than the whole org. Pass the dependency list as `packages` (`{name, version, dev}`) and it performs no local file reads. Setting `DEPENDABLY_PROJECT_ROOT` additionally offers a `lockfile` parameter that reads an npm `package-lock.json` from disk, under the same containment rule the import tools use.
 
 `get_install_command` / `get_publish_command` cover all eight ecosystems (npm, pypi, nuget, maven, rpm, oci, golang, cargo). Go is proxy-only: it has an install command but no hosted publish endpoint, so `get_publish_command` returns guidance to push a VCS tag instead.
 
@@ -93,11 +97,12 @@ The server is configured entirely through environment variables, supplied by you
 | `DEPENDABLY_TOKEN` | yes | — | A Dependably **Personal Access Token (PAT)**. Mint one from the web UI under *Tokens*. Sent as a bearer token. Use a **user-owned** PAT (service/M2M tokens currently `404` on gated endpoints). |
 | `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
 | `DEPENDABLY_IMPORT_ROOT` | no | *(unset)* | Opt-in for the two import tools. Set it to the directory holding your artefact files; `import_manifest` / `admin_upload` are only registered when it is set, and refuse to read files outside it. |
+| `DEPENDABLY_PROJECT_ROOT` | no | *(unset)* | Opt-in for `check_dependencies`' `lockfile` parameter. Set it to the directory holding the projects you scan; lockfiles outside it are refused (symlinks included). `check_dependencies` itself is always available via its `packages` argument. |
 | `DEPENDABLY_TOOLSET` | no | `full` | `remote` drops `get_version` and `get_prometheus_metrics`, which only succeed from the Dependably host itself. Use it for any client that is not running on the server. |
 
 If the instance presents a certificate from a **private CA**, point Node's standard `NODE_EXTRA_CA_CERTS` at the PEM bundle in the environment that launches the server. There is deliberately no switch to disable certificate verification. A connection failure names the setting to check (URL typo, nothing listening, TLS chain) rather than a bare `fetch failed`.
 
-The PAT's **capabilities** determine which tools succeed — see the capability column in [the 20 tools](#the-20-tools).
+The PAT's **capabilities** determine which tools succeed — see the capability column in [the 22 tools](#the-22-tools).
 
 ### Claude Code
 
@@ -135,7 +140,7 @@ release page (verify it against the `.sha256` beside it), then either double-cli
 personal access token; the token is stored in your operating system's keychain, the optional
 import folder enables the two air-gapped import tools scoped to that folder, and the optional
 private-CA bundle covers instances behind an internal certificate authority. The extension runs
-with `DEPENDABLY_TOOLSET=remote`, so it exposes 16 tools: everything except the two probes that
+with `DEPENDABLY_TOOLSET=remote`, so it exposes 18 tools: everything except the two probes that
 only work on the Dependably host itself.
 
 The listing pack for Anthropic's directory and the pre-submission checklist live in
@@ -205,6 +210,7 @@ src/
     ├── yank.ts         # yank_version
     ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary
     ├── import.ts       # import_manifest, admin_upload (opt-in via DEPENDABLY_IMPORT_ROOT)
+    ├── vuln.ts         # check_dependencies, get_remediation
     ├── observability.ts# health_check, readiness_check, get_version, get_prometheus_metrics
     └── setup.ts        # get_install_command, get_publish_command
 ```

@@ -61,7 +61,7 @@ documentation.
 
 **This repository**
 
-- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.29, 20 tools in six modules, each with `title`
+- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.30, 22 tools in seven modules, each with `title`
   and read-only or destructive annotations. Stdio only. Four environment variables.
 - Strong client layer: RFC 7807 parsing, capability-name extraction on 403, `Retry-After` on 429.
 - No prompts or resources. One smoke test, no HTTP-mocked unit tests.

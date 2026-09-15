@@ -30,7 +30,7 @@ Record the outcome in `docs/listing.md` §6.
 
 2. **Configure with the dialog only.** Fill in the URL and token. Leave the timeout at its
    default, and leave the import folder and CA bundle empty. Expected: the extension turns on
-   and 16 tools appear under the Dependably entry in the tools list. The two loopback probes
+   and 18 tools appear under the Dependably entry in the tools list. The two loopback probes
    (`get_version`, `get_prometheus_metrics`) must **not** be there.
 
 3. **Blank optional fields are really unset.** Ask: "Which Dependably tools do you have?"

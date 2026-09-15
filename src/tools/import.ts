@@ -1,5 +1,5 @@
-import { readFile, realpath } from 'node:fs/promises';
-import { basename, resolve, sep } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { DependablyApiError, describeFetchError, formatHttpError } from '../client.js';
 import type { Config } from '../config.js';
 import { run, withSummary } from '../format.js';
+import { resolveWithinRoot } from '../paths.js';
 
 // Admin import writes new "uploaded" package versions. Non-destructive (it only adds
 // versions; existing ones are deduped, never overwritten) but decidedly not read-only,
@@ -106,29 +107,8 @@ function buildUrl(
   return url.toString();
 }
 
-/**
- * Resolve a user-supplied path and require it to live under the import root.
- * realpath both requires the file to exist and resolves symlinks, so a link
- * placed inside the root that points outside it is refused as well.
- */
-async function resolveWithinRoot(root: string, path: string): Promise<string> {
-  let real: string;
-  try {
-    real = await realpath(resolve(path));
-  } catch {
-    throw new Error(`File not found: ${path}`);
-  }
-  const rootReal = await realpath(root);
-  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
-    throw new Error(
-      `Refusing to read ${path}: it resolves outside DEPENDABLY_IMPORT_ROOT (${root}).`,
-    );
-  }
-  return real;
-}
-
 async function appendFile(form: FormData, field: string, root: string, path: string): Promise<void> {
-  const real = await resolveWithinRoot(root, path);
+  const real = await resolveWithinRoot(root, path, 'DEPENDABLY_IMPORT_ROOT');
   const buf = await readFile(real);
   // new Uint8Array(buf) avoids a SharedArrayBuffer typing mismatch on Blob's BlobPart.
   form.append(field, new Blob([new Uint8Array(buf)]), basename(real));
