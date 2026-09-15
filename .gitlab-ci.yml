@@ -71,6 +71,15 @@ workflow:
   auto_cancel:
     on_new_commit: interruptible
 
+# Docker Hub's CDN (production.cloudfront.docker.com and similar) does not
+# resolve from these runners — only images already warm in Dependably's own
+# OCI pull-through cache pull without it, which is not guaranteed for a less
+# common image. Route an uncached-risk image explicitly through the mirror
+# (same convention as dependably-community / dependably-documentation) rather
+# than relying on that cache being warm.
+variables:
+  DEP_IMAGE_REGISTRY: "dependably.northwardlabs.ca"
+
 default:
   image: node:22
   interruptible: true
@@ -167,7 +176,17 @@ sonarqube-check:
 # GITHUB_TOKEN CI/CD variable (masked) with contents:write on the mirror.
 publish:github:
   stage: publish
-  image: alpine/git:latest
+  # Bare `alpine/git:latest` is not a Docker Hub official (`library/`) image,
+  # so it is not reliably warm in the org's OCI pull-through cache; a cold pull
+  # falls through to real Docker Hub, whose CDN this network cannot reach
+  # (job 135114: "lookup production.cloudfront.docker.com: no such host").
+  # The explicit ${DEP_IMAGE_REGISTRY} prefix forces the pull through
+  # Dependably's own proxy instead, matching dependably-documentation's
+  # publish:github job. Its ENTRYPOINT is `git`, not a shell, so it must be
+  # cleared for GitLab Runner to execute the job script at all.
+  image:
+    name: ${DEP_IMAGE_REGISTRY}/alpine/git:latest
+    entrypoint: [""]
   interruptible: false
   resource_group: github-mirror
   rules:
