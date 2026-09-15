@@ -106,38 +106,49 @@ export function describeFetchError(method: string, url: string, err: unknown, ti
   const cause = err instanceof Error && err.cause instanceof Error ? err.cause : undefined;
   const code = (cause as (Error & { code?: string }) | undefined)?.code ?? '';
   const reason = cause?.message ?? (err instanceof Error ? err.message : String(err));
-  const host = (() => {
-    try {
-      return new URL(url).host;
-    } catch {
-      return url;
-    }
-  })();
+  const codeSuffix = code ? ` (${code})` : '';
+  return `${method} ${url} failed: ${reason}${codeSuffix}. ${transportHint(code, hostOf(url))}`;
+}
 
-  let hint: string;
-  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    hint = `Could not resolve "${host}". Check DEPENDABLY_BASE_URL for a typo, and that this machine can reach the instance (VPN?).`;
-  } else if (code === 'ECONNREFUSED' || code === 'EHOSTUNREACH' || code === 'ENETUNREACH') {
-    hint = `Nothing is listening at ${host}. Check DEPENDABLY_BASE_URL (scheme and port) and that the Dependably instance is up.`;
-  } else if (
-    code.startsWith('ERR_TLS_') ||
-    code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
-    code === 'SELF_SIGNED_CERT_IN_CHAIN' ||
-    code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
-    code === 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' ||
-    code === 'CERT_HAS_EXPIRED' ||
-    code === 'ERR_SSL_WRONG_VERSION_NUMBER'
-  ) {
-    hint =
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN']);
+const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
+const DROPPED_CODES = new Set(['ECONNRESET', 'EPIPE']);
+const TLS_CODES = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_HAS_EXPIRED',
+  'ERR_SSL_WRONG_VERSION_NUMBER',
+]);
+
+/** Which setting to check, given the transport-level failure code. */
+function transportHint(code: string, host: string): string {
+  if (DNS_CODES.has(code)) {
+    return `Could not resolve "${host}". Check DEPENDABLY_BASE_URL for a typo, and that this machine can reach the instance (VPN?).`;
+  }
+  if (UNREACHABLE_CODES.has(code)) {
+    return `Nothing is listening at ${host}. Check DEPENDABLY_BASE_URL (scheme and port) and that the Dependably instance is up.`;
+  }
+  if (TLS_CODES.has(code) || code.startsWith('ERR_TLS_')) {
+    return (
       `TLS handshake with ${host} failed. If the instance uses a private CA, point NODE_EXTRA_CA_CERTS at the CA bundle (PEM) ` +
       `in the environment that launches this server; never disable certificate verification. ` +
-      `If the instance is plain HTTP, use http:// in DEPENDABLY_BASE_URL.`;
-  } else if (code === 'ECONNRESET' || code === 'EPIPE') {
-    hint = `The connection to ${host} was dropped. Retry; if it persists, check a proxy or load balancer in front of the instance.`;
-  } else {
-    hint = `Check DEPENDABLY_BASE_URL and that the instance is reachable from this machine.`;
+      `If the instance is plain HTTP, use http:// in DEPENDABLY_BASE_URL.`
+    );
   }
-  return `${method} ${url} failed: ${reason}${code ? ` (${code})` : ''}. ${hint}`;
+  if (DROPPED_CODES.has(code)) {
+    return `The connection to ${host} was dropped. Retry; if it persists, check a proxy or load balancer in front of the instance.`;
+  }
+  return `Check DEPENDABLY_BASE_URL and that the instance is reachable from this machine.`;
 }
 
 export function formatHttpError(
@@ -150,63 +161,70 @@ export function formatHttpError(
 ): string {
   const problem = parseProblem(ctype, body);
   const detail = problem?.detail ?? '';
+  const where = `(${method} ${url})`;
 
-  if (status === 401) {
-    return [
-      '401 Authentication failed.',
-      'Check that DEPENDABLY_TOKEN is set, has not expired, and is for the right Dependably instance.',
-      detail ? `Server detail: ${detail}` : '',
-      `(${method} ${url})`,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
+  if (status === 401) return authFailed(detail, where);
+  if (status === 403) return permissionDenied(detail, body, where);
+  if (status === 429) return rateLimited(detail, headers, where);
+  if (status >= 500) return serverError(status, detail, where);
+  if (problem) return problemMessage(status, problem, detail, where);
+  return bareMessage(status, method, url, body);
+}
 
-  if (status === 403) {
-    const cap = extractCapability(detail) ?? extractCapability(body);
-    return [
-      '403 Permission denied.',
-      cap
-        ? `Your token lacks the "${cap}" capability.`
-        : 'Your token lacks the capability required for this operation.',
-      detail && !cap ? `Server detail: ${detail}` : '',
-      `(${method} ${url})`,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
+/** Join the non-empty parts of a message with single spaces. */
+function sentence(...parts: Array<string | false | undefined>): string {
+  return parts.filter(Boolean).join(' ');
+}
 
-  if (status === 429) {
-    const retryAfter = headers.get('retry-after');
-    return [
-      '429 Rate limited.',
-      retryAfter ? `Retry after ${retryAfter} (seconds or HTTP date).` : 'Retry after a short delay.',
-      detail ? `Server detail: ${detail}` : '',
-      `(${method} ${url})`,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
+function authFailed(detail: string, where: string): string {
+  return sentence(
+    '401 Authentication failed.',
+    'Check that DEPENDABLY_TOKEN is set, has not expired, and is for the right Dependably instance.',
+    detail && `Server detail: ${detail}`,
+    where,
+  );
+}
 
-  if (status >= 500) {
-    return [
-      `${status} Dependably server error.`,
-      detail ? `Server detail: ${detail}.` : '',
-      'Check that DEPENDABLY_BASE_URL is correct and the instance is reachable.',
-      `(${method} ${url})`,
-    ]
-      .filter(Boolean)
-      .join(' ');
-  }
+function permissionDenied(detail: string, body: string, where: string): string {
+  const cap = extractCapability(detail) ?? extractCapability(body);
+  return sentence(
+    '403 Permission denied.',
+    cap ? `Your token lacks the "${cap}" capability.` : 'Your token lacks the capability required for this operation.',
+    !cap && detail && `Server detail: ${detail}`,
+    where,
+  );
+}
 
-  if (problem) {
-    const title = problem.title ?? `HTTP ${status}`;
-    const errors = problem.errors ? ` ${JSON.stringify(problem.errors)}` : '';
-    return `${status} ${title}${detail ? `: ${detail}` : ''}${errors} (${method} ${url})`;
-  }
+function rateLimited(detail: string, headers: Headers, where: string): string {
+  const retryAfter = headers.get('retry-after');
+  return sentence(
+    '429 Rate limited.',
+    retryAfter ? `Retry after ${retryAfter} (seconds or HTTP date).` : 'Retry after a short delay.',
+    detail && `Server detail: ${detail}`,
+    where,
+  );
+}
 
+function serverError(status: number, detail: string, where: string): string {
+  return sentence(
+    `${status} Dependably server error.`,
+    detail && `Server detail: ${detail}.`,
+    'Check that DEPENDABLY_BASE_URL is correct and the instance is reachable.',
+    where,
+  );
+}
+
+function problemMessage(status: number, problem: Problem, detail: string, where: string): string {
+  const title = problem.title ?? `HTTP ${status}`;
+  const detailPart = detail ? `: ${detail}` : '';
+  const errorsPart = problem.errors ? ` ${JSON.stringify(problem.errors)}` : '';
+  return `${status} ${title}${detailPart}${errorsPart} ${where}`;
+}
+
+function bareMessage(status: number, method: string, url: string, body: string): string {
   const snippet = body.length > 500 ? `${body.slice(0, 500)}…` : body;
-  return `${status} ${method} ${url}${snippet ? `: ${snippet}` : ''}`;
+  const snippetPart = snippet ? `: ${snippet}` : '';
+  return `${status} ${method} ${url}${snippetPart}`;
 }
 
 type Problem = { title?: string; detail?: string; errors?: unknown };

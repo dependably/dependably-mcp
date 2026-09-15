@@ -206,6 +206,47 @@ export function summarizeRemediation(detail: Record<string, unknown> | null): Re
   };
 }
 
+/** Turn one report row plus its remediation into the advisory we report. */
+function toAdvisory(hit: ReportItem, rem: RemediationLookup | undefined): Advisory {
+  return {
+    osvId: hit.osvId,
+    severity: normalizeSeverity(hit.severity),
+    cvss: hit.cvssScore ?? null,
+    epss: hit.epssScore ?? null,
+    kev: hit.isKev === true,
+    summary: hit.summary ?? '',
+    fixedVersion: rem?.fixedVersion ?? null,
+    ...(rem?.cwes.length ? { cwes: rem.cwes } : {}),
+    ...(rem?.owasp.length ? { owasp: rem.owasp } : {}),
+    ...(rem?.skills.length ? { skills: rem.skills } : {}),
+  };
+}
+
+/**
+ * The version to bump to: the highest fixed version across the package's
+ * advisories, or null when the installed version already clears them all.
+ * The ceiling matters because several advisories are explicit incomplete-fix
+ * follow-ups, where the lowest fix leaves the rest open.
+ */
+function bumpTarget(installed: string, advisories: readonly Advisory[]): string | null {
+  const fixes = advisories.map((a) => a.fixedVersion).filter((v): v is string => !!v);
+  const ceiling = maxVersion(fixes);
+  if (!ceiling) return null;
+  return gte(installed, ceiling) ? null : ceiling;
+}
+
+function bySeverityThenScore(a: Advisory, b: Advisory): number {
+  return severityRank(b.severity) - severityRank(a.severity) || (b.cvss ?? 0) - (a.cvss ?? 0);
+}
+
+function byWorstAdvisory(a: Finding, b: Finding): number {
+  return (
+    severityRank(b.advisories[0]?.severity) - severityRank(a.advisories[0]?.severity) ||
+    b.advisories.length - a.advisories.length ||
+    a.package.localeCompare(b.package)
+  );
+}
+
 /** Group matched rows into one finding per package, with a single bump target. */
 export function buildFindings(
   hits: readonly ReportItem[],
@@ -216,82 +257,50 @@ export function buildFindings(
 
   for (const hit of hits) {
     const key = `${hit.packageName}@${hit.version}`;
-    const rem = remediations.get(`${hit.osvId}@@${hit.version}`);
-    let finding = byPackage.get(key);
-    if (!finding) {
-      finding = {
-        package: hit.packageName,
-        installed: hit.version,
-        dev: devOf.get(key) === true,
-        bumpTo: null,
-        advisories: [],
-      };
-      byPackage.set(key, finding);
-    }
-    finding.advisories.push({
-      osvId: hit.osvId,
-      severity: normalizeSeverity(hit.severity),
-      cvss: hit.cvssScore ?? null,
-      epss: hit.epssScore ?? null,
-      kev: hit.isKev === true,
-      summary: hit.summary ?? '',
-      fixedVersion: rem?.fixedVersion ?? null,
-      ...(rem?.cwes.length ? { cwes: rem.cwes } : {}),
-      ...(rem?.owasp.length ? { owasp: rem.owasp } : {}),
-      ...(rem?.skills.length ? { skills: rem.skills } : {}),
-    });
+    const finding = byPackage.get(key) ?? {
+      package: hit.packageName,
+      installed: hit.version,
+      dev: devOf.get(key) === true,
+      bumpTo: null,
+      advisories: [],
+    };
+    finding.advisories.push(toAdvisory(hit, remediations.get(`${hit.osvId}@@${hit.version}`)));
+    byPackage.set(key, finding);
   }
 
   for (const finding of byPackage.values()) {
-    // The bump target is the highest fixed version across the package's
-    // advisories: several of these advisories are explicit incomplete-fix
-    // follow-ups, so the lowest fix does not clear the rest.
-    const fixes = finding.advisories.map((a) => a.fixedVersion).filter((v): v is string => !!v);
-    const ceiling = maxVersion(fixes);
-    finding.bumpTo = ceiling && !gte(finding.installed, ceiling) ? ceiling : null;
-    finding.advisories.sort(
-      (a, b) => severityRank(b.severity) - severityRank(a.severity) || (b.cvss ?? 0) - (a.cvss ?? 0),
-    );
+    finding.advisories.sort(bySeverityThenScore);
+    finding.bumpTo = bumpTarget(finding.installed, finding.advisories);
   }
 
-  return [...byPackage.values()].sort((a, b) => {
-    const as = severityRank(a.advisories[0]?.severity);
-    const bs = severityRank(b.advisories[0]?.severity);
-    return bs - as || b.advisories.length - a.advisories.length || a.package.localeCompare(b.package);
-  });
+  return [...byPackage.values()].sort(byWorstAdvisory);
 }
 
+type SeverityCounts = { critical: number; high: number; medium: number; low: number; unknown: number };
+
+const SEVERITY_BUCKET: Record<string, keyof SeverityCounts> = {
+  CRITICAL: 'critical',
+  HIGH: 'high',
+  MEDIUM: 'medium',
+  LOW: 'low',
+};
+
 export function summarize(findings: readonly Finding[], checked: number) {
-  const counts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+  const bySeverity: SeverityCounts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
   let advisories = 0;
   let kev = 0;
-  let prod = 0;
-  let dev = 0;
-  let unfixable = 0;
+  let runtime = 0;
+  let devOnly = 0;
+  let withoutFixedVersion = 0;
 
-  for (const f of findings) {
-    for (const a of f.advisories) {
+  for (const finding of findings) {
+    for (const advisory of finding.advisories) {
       advisories++;
-      if (a.kev) kev++;
-      if (f.dev) dev++;
-      else prod++;
-      if (!a.fixedVersion) unfixable++;
-      switch (a.severity) {
-        case 'CRITICAL':
-          counts.critical++;
-          break;
-        case 'HIGH':
-          counts.high++;
-          break;
-        case 'MEDIUM':
-          counts.medium++;
-          break;
-        case 'LOW':
-          counts.low++;
-          break;
-        default:
-          counts.unknown++;
-      }
+      bySeverity[SEVERITY_BUCKET[advisory.severity] ?? 'unknown']++;
+      if (advisory.kev) kev++;
+      if (!advisory.fixedVersion) withoutFixedVersion++;
+      if (finding.dev) devOnly++;
+      else runtime++;
     }
   }
 
@@ -299,11 +308,11 @@ export function summarize(findings: readonly Finding[], checked: number) {
     packagesChecked: checked,
     packagesAffected: findings.length,
     advisories,
-    bySeverity: counts,
+    bySeverity,
     kev,
-    runtime: prod,
-    devOnly: dev,
-    withoutFixedVersion: unfixable,
+    runtime,
+    devOnly,
+    withoutFixedVersion,
   };
 }
 

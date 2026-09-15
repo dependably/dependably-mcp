@@ -11,6 +11,7 @@ import {
   summarize,
   summarizeRemediation,
   mapLimit,
+  type Finding,
 } from '../vuln.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
@@ -82,16 +83,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
           hits.map((h) => ({ osvId: h.osvId, version: h.version })),
         );
         const findings = buildFindings(hits, devOf, remediations);
-
-        if (!args.includeAdvisoryDetail) {
-          for (const f of findings) {
-            for (const a of f.advisories) {
-              delete a.cwes;
-              delete a.owasp;
-              delete a.skills;
-            }
-          }
-        }
+        if (!args.includeAdvisoryDetail) stripAdvisoryDetail(findings);
 
         return json({
           ecosystem: args.ecosystem,
@@ -125,28 +117,47 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
       },
     },
     async (args) =>
-      run(async () => {
-        const results = await mapLimit(args.advisories, 8, async (a) => {
-          try {
-            const detail = (await client.get(`/api/v1/vulnerabilities/${encodeURIComponent(a.osvId)}`, {
-              version: a.version,
-            })) as Record<string, unknown> | null;
-            const rem = summarizeRemediation(detail);
-            return {
-              osvId: a.osvId,
-              ...(a.version ? { installed: a.version } : {}),
-              fixedVersion: rem.fixedVersion,
-              severity: rem.severity ?? null,
-              summary: rem.summary ?? null,
-              ...(rem.cwes.length ? { cwes: rem.cwes } : {}),
-              ...(rem.owasp.length ? { owasp: rem.owasp } : {}),
-              ...(rem.skills.length ? { skills: rem.skills } : {}),
-            };
-          } catch (e) {
-            return { osvId: a.osvId, error: e instanceof Error ? e.message : String(e) };
-          }
-        });
-        return json({ advisories: results });
-      }),
+      run(async () =>
+        json({ advisories: await mapLimit(args.advisories, 8, (a) => resolveRemediation(client, a)) }),
+      ),
   );
+}
+
+/** Drop the CWE/OWASP/skill detail callers did not ask for. */
+function stripAdvisoryDetail(findings: readonly Finding[]): void {
+  for (const finding of findings) {
+    for (const advisory of finding.advisories) {
+      delete advisory.cwes;
+      delete advisory.owasp;
+      delete advisory.skills;
+    }
+  }
+}
+
+/**
+ * One advisory's remediation, or a per-advisory error. A failed lookup is
+ * reported in place rather than thrown, so one bad id cannot sink the batch.
+ */
+async function resolveRemediation(
+  client: DependablyClient,
+  advisory: { osvId: string; version?: string },
+): Promise<Record<string, unknown>> {
+  try {
+    const detail = (await client.get(`/api/v1/vulnerabilities/${encodeURIComponent(advisory.osvId)}`, {
+      version: advisory.version,
+    })) as Record<string, unknown> | null;
+    const rem = summarizeRemediation(detail);
+    return {
+      osvId: advisory.osvId,
+      ...(advisory.version ? { installed: advisory.version } : {}),
+      fixedVersion: rem.fixedVersion,
+      severity: rem.severity ?? null,
+      summary: rem.summary ?? null,
+      ...(rem.cwes.length ? { cwes: rem.cwes } : {}),
+      ...(rem.owasp.length ? { owasp: rem.owasp } : {}),
+      ...(rem.skills.length ? { skills: rem.skills } : {}),
+    };
+  } catch (e) {
+    return { osvId: advisory.osvId, error: e instanceof Error ? e.message : String(e) };
+  }
 }

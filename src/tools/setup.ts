@@ -30,58 +30,7 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
         version: z.string().optional().describe('Optional pinned version.'),
       },
     },
-    async (args) => {
-      const base = cfg.baseUrl;
-      const pkg = args.package;
-      const ver = args.version;
-      switch (args.ecosystem) {
-        case 'npm': {
-          const spec = ver ? `${pkg}@${ver}` : pkg;
-          return fenced('bash', `npm install --registry=${base}/npm/ ${spec}`);
-        }
-        case 'pypi': {
-          const spec = ver ? `${pkg}==${ver}` : pkg;
-          return fenced('bash', `pip install --index-url ${base}/simple/ ${spec}`);
-        }
-        case 'nuget': {
-          const verFlag = ver ? ` --version ${ver}` : '';
-          return fenced(
-            'bash',
-            `dotnet add package ${pkg}${verFlag} --source ${base}/nuget/v3/index.json`,
-          );
-        }
-        case 'maven': {
-          const coord = ver ? `${pkg}:${ver}` : pkg;
-          return fenced(
-            'bash',
-            `# Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then:\nmvn dependency:get -Dartifact=${coord}`,
-          );
-        }
-        case 'rpm': {
-          const spec = ver ? `${pkg}-${ver}` : pkg;
-          return fenced(
-            'bash',
-            `# Add ${base}/rpm/ as a dnf repo (baseurl) first, then:\ndnf install ${spec}`,
-          );
-        }
-        case 'oci': {
-          const host = stripScheme(base);
-          const ref = `${host}/${pkg}:${ver ?? 'latest'}`;
-          return fenced('bash', `docker pull ${ref}`);
-        }
-        case 'golang': {
-          const spec = ver ? `${pkg}@${ver}` : `${pkg}@latest`;
-          return fenced('bash', `GOPROXY=${base}/go go get ${spec}`);
-        }
-        case 'cargo': {
-          const spec = ver ? `${pkg}@${ver}` : pkg;
-          return fenced(
-            'bash',
-            `# Requires [registries.dependably] = { index = "sparse+${base}/cargo/" } in ~/.cargo/config.toml, then:\ncargo add ${spec} --registry dependably`,
-          );
-        }
-      }
-    },
+    async (args) => installCommand(cfg.baseUrl, args.ecosystem, args.package, args.version),
   );
 
   server.registerTool(
@@ -150,4 +99,64 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
 
 function stripScheme(url: string): string {
   return url.replace(/^https?:\/\//, '');
+}
+
+/**
+ * Build the install command for one ecosystem.
+ *
+ * Lifted out of the tool handler so the handler is a single delegation. The
+ * branching is inherent — eight ecosystems, each with its own flag spelling and
+ * version syntax — and reads better as one table-like switch than as a map of
+ * closures that would hide the shape of each command.
+ */
+function installCommand(base: string, ecosystem: string, pkg: string, ver: string | undefined): ToolResult {
+  switch (ecosystem) {
+    case 'npm': {
+      const spec = ver ? `${pkg}@${ver}` : pkg;
+      return fenced('bash', `npm install --registry=${base}/npm/ ${spec}`);
+    }
+    case 'pypi': {
+      const spec = ver ? `${pkg}==${ver}` : pkg;
+      return fenced('bash', `pip install --index-url ${base}/simple/ ${spec}`);
+    }
+    case 'nuget': {
+      const verFlag = ver ? ` --version ${ver}` : '';
+      return fenced(
+        'bash',
+        `dotnet add package ${pkg}${verFlag} --source ${base}/nuget/v3/index.json`,
+      );
+    }
+    case 'maven': {
+      const coord = ver ? `${pkg}:${ver}` : pkg;
+      return fenced(
+        'bash',
+        `# Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then:\nmvn dependency:get -Dartifact=${coord}`,
+      );
+    }
+    case 'rpm': {
+      const spec = ver ? `${pkg}-${ver}` : pkg;
+      return fenced(
+        'bash',
+        `# Add ${base}/rpm/ as a dnf repo (baseurl) first, then:\ndnf install ${spec}`,
+      );
+    }
+    case 'oci': {
+      const host = stripScheme(base);
+      const ref = `${host}/${pkg}:${ver ?? 'latest'}`;
+      return fenced('bash', `docker pull ${ref}`);
+    }
+    case 'golang': {
+      const spec = ver ? `${pkg}@${ver}` : `${pkg}@latest`;
+      return fenced('bash', `GOPROXY=${base}/go go get ${spec}`);
+    }
+    case 'cargo': {
+      const spec = ver ? `${pkg}@${ver}` : pkg;
+      return fenced(
+        'bash',
+        `# Requires [registries.dependably] = { index = "sparse+${base}/cargo/" } in ~/.cargo/config.toml, then:\ncargo add ${spec} --registry dependably`,
+      );
+    }
+  }
+
+  throw new Error(`Unsupported ecosystem: ${ecosystem}`);
 }

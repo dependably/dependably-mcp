@@ -24,6 +24,24 @@ All notable changes to this project are documented here. The format follows
   failing fast with a named reason if the artefact is missing rather than silently scanning
   with no coverage and failing the quality gate for the wrong reason.
 
+### Changed
+
+- **Cleared the SonarQube quality gate's 1 security hotspot and 12 code smells**, read from the
+  API rather than guessed at.
+  - `typescript:S5852` (hotspot, `src/config.ts`): the base-URL normalizer trimmed trailing
+    slashes with `/\/+$/`, which backtracks super-linearly on a long run of slashes. Replaced
+    with a loop. The input comes from the environment rather than a request, so this was not
+    exploitable, but the pattern is worth not having.
+  - `typescript:S3776` (cognitive complexity, 8 sites): `loadConfig`, `describeFetchError`,
+    `formatHttpError`, `installCommand`'s handler, both vuln tool handlers, `buildFindings` and
+    `summarize` are each split into named helpers. `formatHttpError` was the worst at 27; its
+    per-status branches are now one function each, and the transport-failure hints in
+    `describeFetchError` are a code lookup rather than an if/else chain.
+  - `typescript:S4624` (nested template literals, 3 sites in `src/client.ts`): the conditional
+    fragments are computed into named variables first.
+  - Behaviour is unchanged throughout — the 129 tests added alongside were written against the
+    previous shapes and all still pass, which is what made the refactor safe to do at all.
+
 ### Fixed
 
 - `compare` in `src/semver.ts` returned 0 for any two versions with non-numeric release
