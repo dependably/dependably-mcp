@@ -8,6 +8,32 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Unit tests and coverage reporting.** 129 tests across `test/`, covering the pure logic
+  (version ordering, report scoping, lockfile parsing, remediation extraction), the HTTP
+  client's URL building and its whole error-message surface, config validation, and every
+  tool's handler through an in-memory MCP client with a stubbed `fetch`. 97.78% lines /
+  94.19% branches / 99.10% functions; `npm run test:unit` fails below 90/85.
+- Coverage is wired into SonarQube. The project previously reported **0%** — not because
+  nothing was tested, but because nothing produced an lcov file and
+  `sonar.javascript.lcov.reportPaths` was never set. Node's V8 coverage also names
+  `dist/*.js`, which `sonar.sources=src` excludes, so the fix is `--enable-source-maps`,
+  which remaps each `SF:` line onto the `src/*.ts` file Sonar actually analyses. Verified on
+  `node:22`, the CI image. No new dependencies: this is Node's built-in test runner and
+  coverage, not c8 or nyc.
+- CI: the `test` job publishes `coverage/lcov.info` and `sonarqube-check` now `needs` it,
+  failing fast with a named reason if the artefact is missing rather than silently scanning
+  with no coverage and failing the quality gate for the wrong reason.
+
+### Fixed
+
+- `compare` in `src/semver.ts` returned 0 for any two versions with non-numeric release
+  segments (`1.a.0` vs `1.b.0`), because both coerced to `NaN` and then stringified to the
+  same `"NaN"`. The doc comment claimed lexical ordering, which was never true. Segments are
+  now kept as strings and compared numerically only when both sides are numeric. Inert for
+  real lockfile and advisory versions, which are numeric — found by the new tests.
+
+### Added
+
 - **`check_dependencies` — scope the vulnerability report to one project.** The Dependably
   API reports per *org*, so answering "what is wrong with this project?" previously meant
   fetching every page and joining against a lockfile by hand. This tool does the join and
