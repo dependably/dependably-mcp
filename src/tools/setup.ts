@@ -44,56 +44,7 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
         artifact_path: z.string().describe('Path to the built artifact (e.g. ./dist/*, ./bin/Release/*.nupkg, package.tgz).'),
       },
     },
-    async (args) => {
-      const base = cfg.baseUrl;
-      const p = args.artifact_path;
-      switch (args.ecosystem) {
-        case 'npm':
-          return fenced(
-            'bash',
-            `# Requires .npmrc with //${stripScheme(base)}/npm/:_authToken=<token>\nnpm publish --registry=${base}/npm/ ${p}`,
-          );
-        case 'pypi':
-          return fenced(
-            'bash',
-            `twine upload --repository-url ${base}/pypi/legacy/ -u user -p <token> ${p}`,
-          );
-        case 'nuget':
-          return fenced(
-            'bash',
-            `dotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key <token>`,
-          );
-        case 'maven':
-          return fenced(
-            'bash',
-            `# Configure ${base}/maven/ as a distributionManagement repo in pom.xml,\n# add server credentials (user / <token>) to settings.xml, then:\nmvn deploy`,
-          );
-        case 'rpm':
-          return fenced('bash', `curl -u <user>:<token> --upload-file ${p} ${base}/rpm/upload`);
-        case 'oci': {
-          const host = stripScheme(base);
-          return fenced(
-            'bash',
-            `docker login ${host}\ndocker tag ${p} ${host}/<image>:<tag>\ndocker push ${host}/<image>:<tag>`,
-          );
-        }
-        case 'golang':
-          // Informational, not an error: there is simply no publish command to return.
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.',
-              },
-            ],
-          };
-        case 'cargo':
-          return fenced(
-            'bash',
-            `# Requires [registries.dependably] in ~/.cargo/config.toml.\n# Run from the crate directory (${p}):\ncargo publish --registry dependably`,
-          );
-      }
-    },
+    async (args) => publishCommand(cfg.baseUrl, args.ecosystem, args.artifact_path),
   );
 }
 
@@ -109,54 +60,109 @@ function stripScheme(url: string): string {
  * version syntax — and reads better as one table-like switch than as a map of
  * closures that would hide the shape of each command.
  */
+/**
+ * Join a package name to an optional pinned version with the separator the
+ * ecosystem uses (`@`, `==`, `:`, `-`). Unpinned yields the bare name.
+ *
+ * Each case used to do this inline with its own ternary; hoisting it keeps the
+ * switch a flat table of command shapes, which is the part worth reading.
+ */
+function pinned(pkg: string, separator: string, ver: string | undefined): string {
+  return ver ? `${pkg}${separator}${ver}` : pkg;
+}
+
+/** `<prefix><ver>` when a version is pinned, otherwise the empty string. */
+function flag(prefix: string, ver: string | undefined): string {
+  return ver ? `${prefix}${ver}` : '';
+}
+
 function installCommand(base: string, ecosystem: string, pkg: string, ver: string | undefined): ToolResult {
   switch (ecosystem) {
-    case 'npm': {
-      const spec = ver ? `${pkg}@${ver}` : pkg;
-      return fenced('bash', `npm install --registry=${base}/npm/ ${spec}`);
-    }
-    case 'pypi': {
-      const spec = ver ? `${pkg}==${ver}` : pkg;
-      return fenced('bash', `pip install --index-url ${base}/simple/ ${spec}`);
-    }
-    case 'nuget': {
-      const verFlag = ver ? ` --version ${ver}` : '';
+    case 'npm':
+      return fenced('bash', `npm install --registry=${base}/npm/ ${pinned(pkg, '@', ver)}`);
+    case 'pypi':
+      return fenced('bash', `pip install --index-url ${base}/simple/ ${pinned(pkg, '==', ver)}`);
+    case 'nuget':
       return fenced(
         'bash',
-        `dotnet add package ${pkg}${verFlag} --source ${base}/nuget/v3/index.json`,
+        `dotnet add package ${pkg}${flag(' --version ', ver)} --source ${base}/nuget/v3/index.json`,
       );
-    }
-    case 'maven': {
-      const coord = ver ? `${pkg}:${ver}` : pkg;
+    case 'maven':
       return fenced(
         'bash',
-        `# Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then:\nmvn dependency:get -Dartifact=${coord}`,
+        `# Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then:\nmvn dependency:get -Dartifact=${pinned(pkg, ':', ver)}`,
       );
-    }
-    case 'rpm': {
-      const spec = ver ? `${pkg}-${ver}` : pkg;
+    case 'rpm':
       return fenced(
         'bash',
-        `# Add ${base}/rpm/ as a dnf repo (baseurl) first, then:\ndnf install ${spec}`,
+        `# Add ${base}/rpm/ as a dnf repo (baseurl) first, then:\ndnf install ${pinned(pkg, '-', ver)}`,
       );
-    }
+    case 'oci':
+      return fenced('bash', `docker pull ${stripScheme(base)}/${pkg}:${ver ?? 'latest'}`);
+    case 'golang':
+      return fenced('bash', `GOPROXY=${base}/go go get ${pkg}@${ver ?? 'latest'}`);
+    case 'cargo':
+      return fenced(
+        'bash',
+        `# Requires [registries.dependably] = { index = "sparse+${base}/cargo/" } in ~/.cargo/config.toml, then:\ncargo add ${pinned(pkg, '@', ver)} --registry dependably`,
+      );
+    default:
+      throw new Error(`Unsupported ecosystem: ${ecosystem}`);
+  }
+}
+
+/**
+ * Build the publish command for one ecosystem. Split from the tool handler for
+ * the same reason as {@link installCommand}: the per-ecosystem branching is the
+ * content, and it does not belong inline in a registration.
+ */
+function publishCommand(base: string, ecosystem: string, artifactPath: string): ToolResult {
+  const p = artifactPath;
+  switch (ecosystem) {
+    case 'npm':
+      return fenced(
+        'bash',
+        `# Requires .npmrc with //${stripScheme(base)}/npm/:_authToken=<token>\nnpm publish --registry=${base}/npm/ ${p}`,
+      );
+    case 'pypi':
+      return fenced(
+        'bash',
+        `twine upload --repository-url ${base}/pypi/legacy/ -u user -p <token> ${p}`,
+      );
+    case 'nuget':
+      return fenced(
+        'bash',
+        `dotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key <token>`,
+      );
+    case 'maven':
+      return fenced(
+        'bash',
+        `# Configure ${base}/maven/ as a distributionManagement repo in pom.xml,\n# add server credentials (user / <token>) to settings.xml, then:\nmvn deploy`,
+      );
+    case 'rpm':
+      return fenced('bash', `curl -u <user>:<token> --upload-file ${p} ${base}/rpm/upload`);
     case 'oci': {
       const host = stripScheme(base);
-      const ref = `${host}/${pkg}:${ver ?? 'latest'}`;
-      return fenced('bash', `docker pull ${ref}`);
-    }
-    case 'golang': {
-      const spec = ver ? `${pkg}@${ver}` : `${pkg}@latest`;
-      return fenced('bash', `GOPROXY=${base}/go go get ${spec}`);
-    }
-    case 'cargo': {
-      const spec = ver ? `${pkg}@${ver}` : pkg;
       return fenced(
         'bash',
-        `# Requires [registries.dependably] = { index = "sparse+${base}/cargo/" } in ~/.cargo/config.toml, then:\ncargo add ${spec} --registry dependably`,
+        `docker login ${host}\ndocker tag ${p} ${host}/<image>:<tag>\ndocker push ${host}/<image>:<tag>`,
       );
     }
+    case 'golang':
+      // Informational, not an error: there is simply no publish command to return.
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.',
+          },
+        ],
+      };
+    case 'cargo':
+      return fenced(
+        'bash',
+        `# Requires [registries.dependably] in ~/.cargo/config.toml.\n# Run from the crate directory (${p}):\ncargo publish --registry dependably`,
+      );
   }
-
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
 }

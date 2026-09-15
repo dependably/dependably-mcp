@@ -32,9 +32,15 @@ function compareSegment(a: string, b: string): number {
   const na = Number(a);
   const nb = Number(b);
   if (a !== '' && b !== '' && Number.isFinite(na) && Number.isFinite(nb)) {
-    return na === nb ? 0 : na < nb ? -1 : 1;
+    return sign(na, nb);
   }
-  return a === b ? 0 : a < b ? -1 : 1;
+  return sign(a, b);
+}
+
+/** -1, 0 or 1 for two values of the same comparable type. */
+function sign<T extends number | string>(a: T, b: T): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }
 
 function compareRelease(a: readonly string[], b: readonly string[]): number {

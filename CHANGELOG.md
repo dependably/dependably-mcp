@@ -39,8 +39,15 @@ All notable changes to this project are documented here. The format follows
     `describeFetchError` are a code lookup rather than an if/else chain.
   - `typescript:S4624` (nested template literals, 3 sites in `src/client.ts`): the conditional
     fragments are computed into named variables first.
+  - `typescript:S3358` (nested ternaries, `src/semver.ts`): two sites introduced by this
+    branch's own `compare` rewrite, caught by scanning before merge rather than after.
   - Behaviour is unchanged throughout — the 129 tests added alongside were written against the
-    previous shapes and all still pass, which is what made the refactor safe to do at all.
+    previous shapes and all still pass, and the 16 generated install commands were diffed
+    byte-for-byte across all eight ecosystems, pinned and unpinned.
+  - Verified by running the scanner against a throwaway project key (Community Edition has no
+    branch analysis, so scanning under the real key would have overwritten `main`'s results):
+    0 issues, 0 hotspots, 97.0% coverage, quality gate **OK**. The throwaway project was
+    deleted afterwards.
 
 ### Fixed
 
