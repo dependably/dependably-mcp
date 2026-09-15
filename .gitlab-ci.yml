@@ -127,6 +127,15 @@ test:
   extends: .private-registry-setup
   script:
     - npm test
+  # coverage/lcov.info is produced by `npm test` (node --test --experimental-test-coverage
+  # --enable-source-maps) and consumed by sonarqube-check, which runs in a scanner image
+  # with no node_modules of its own and so cannot regenerate it.
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - coverage/lcov.info
+  coverage: '/all files\s*\|\s*(\d+\.\d+)/'
 
 # Dogfoods our own supply-chain checker against our own lockfile. Deliberately
 # does NOT extend .private-registry-setup: that template overwrites .npmrc with
@@ -163,7 +172,18 @@ sonarqube-check:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
+  # Needs the coverage artifact from `test`; without it sonar.javascript.lcov.reportPaths
+  # resolves to nothing and the project reports 0% coverage, failing the quality gate.
+  needs:
+    - job: test
+      artifacts: true
   script:
+    - |
+      if [ ! -s coverage/lcov.info ]; then
+        echo "ERROR: coverage/lcov.info is missing or empty — the test job did not publish it." >&2
+        echo "       Sonar would report 0% coverage and fail the quality gate for the wrong reason." >&2
+        exit 1
+      fi
     - sonar-scanner
   allow_failure: true
   rules:

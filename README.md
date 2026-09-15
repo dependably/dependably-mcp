@@ -188,7 +188,8 @@ cd dependably-mcp
 npm install
 npm run dev   # tsc --watch
 npm run build # tsc once
-npm test      # build + smoke test (boots the server in-memory, asserts the tool surface)
+npm test      # build + unit tests with coverage + smoke test + manifest freshness check
+npm run test:unit  # just the unit tests; writes coverage/lcov.info, fails below 90% lines / 85% branches
 npm run sbom  # local CycloneDX SBOM (cyclonedx-npm) -> cyclonedx-sbom.json; CI runs this ALONGSIDE sbom-reach's
               # generate mode and uploads both to Dependency-Track as separate projects for comparison, see .gitlab-ci.yml
 ```
@@ -202,7 +203,7 @@ src/
 ├── index.ts           # entry: load config, start stdio
 ├── config.ts          # env parsing (PAT-only)
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
-├── server.ts          # registers the 6 tool modules
+├── server.ts          # registers the 7 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
 └── tools/
     ├── read.ts         # list/get/search packages, vulns, activity, whoami, license policy, lookup
@@ -212,7 +213,22 @@ src/
     ├── vuln.ts         # check_dependencies, get_remediation (no local file reads)
     ├── observability.ts# health_check, readiness_check, get_version, get_prometheus_metrics
     └── setup.ts        # get_install_command, get_publish_command
+
+test/                  # node:test unit tests, run against dist/ with source maps
+├── semver.test.mjs    # version ordering (what bumpTo depends on)
+├── vuln.test.mjs      # report paging, scoping, findings, lockfile parsing
+├── client.test.mjs    # url building and the full error-message surface
+├── config.test.mjs    # env validation
+└── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
 ```
+
+### Coverage
+
+`npm run test:unit` uses Node's built-in test runner and V8 coverage — no c8, no nyc, no
+extra dependencies. `--enable-source-maps` is load-bearing: without it V8 reports coverage
+against `dist/*.js`, which `sonar.sources=src` excludes, and SonarQube reads the project as
+0% covered. CI publishes `coverage/lcov.info` from the `test` job and `sonarqube-check`
+consumes it via `needs:`.
 
 Adding a tool: import `server` and `client`, call `server.registerTool(name, config, handler)`. Wrap the handler body in the `run()` helper from `format.ts` so HTTP errors become readable text. Keep the surface PAT-reachable — do not add JWT-only or `scope=system` endpoints.
 

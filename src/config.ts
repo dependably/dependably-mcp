@@ -61,57 +61,87 @@ function envValue(name: string): string | undefined {
 }
 
 export function loadConfig(): Config {
-  const baseUrlRaw = envValue('DEPENDABLY_BASE_URL');
-  const token = envValue('DEPENDABLY_TOKEN');
+  const baseUrl = parseBaseUrl(requireEnv('DEPENDABLY_BASE_URL', 'DEPENDABLY_BASE_URL is required (e.g. https://dependably.example.com)'));
+  const token = requireEnv(
+    'DEPENDABLY_TOKEN',
+    'DEPENDABLY_TOKEN is required — a user-owned Personal Access Token minted in the Dependably UI',
+  );
 
-  if (!baseUrlRaw) {
-    throw new Error('DEPENDABLY_BASE_URL is required (e.g. https://dependably.example.com)');
-  }
-  if (!token) {
-    throw new Error('DEPENDABLY_TOKEN is required — a user-owned Personal Access Token minted in the Dependably UI');
-  }
+  return {
+    baseUrl,
+    token,
+    timeoutMs: parseTimeout(envValue('DEPENDABLY_TIMEOUT_MS')),
+    importRoot: readRoot('DEPENDABLY_IMPORT_ROOT'),
+    toolset: parseToolset(envValue('DEPENDABLY_TOOLSET')),
+  };
+}
 
+function requireEnv(name: string, message: string): string {
+  const value = envValue(name);
+  if (!value) throw new Error(message);
+  return value;
+}
+
+/**
+ * Normalize the instance URL to `scheme://host[/path]` with no trailing slash.
+ *
+ * The trailing slashes are trimmed with a loop rather than a `/\/+$/` replace:
+ * that pattern backtracks super-linearly on a long run of slashes, which is a
+ * denial-of-service shape even though this particular input comes from the
+ * environment rather than a request.
+ */
+function parseBaseUrl(raw: string): string {
   let parsed: URL;
   try {
-    parsed = new URL(baseUrlRaw);
+    parsed = new URL(raw);
   } catch {
-    throw new Error(`DEPENDABLY_BASE_URL is not a valid URL: ${baseUrlRaw}`);
+    throw new Error(`DEPENDABLY_BASE_URL is not a valid URL: ${raw}`);
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`DEPENDABLY_BASE_URL must be http(s): ${baseUrlRaw}`);
+    throw new Error(`DEPENDABLY_BASE_URL must be http(s): ${raw}`);
   }
+  return `${parsed.protocol}//${parsed.host}${trimTrailingSlashes(parsed.pathname)}`;
+}
 
-  const baseUrl = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '')}`;
+function trimTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path[end - 1] === '/') end--;
+  return path.slice(0, end);
+}
 
-  const timeoutRaw = envValue('DEPENDABLY_TIMEOUT_MS');
-  let timeoutMs = 30000;
-  if (timeoutRaw) {
-    const n = Number(timeoutRaw);
-    if (!Number.isFinite(n) || n <= 0) {
-      throw new Error(`DEPENDABLY_TIMEOUT_MS must be a positive number: ${timeoutRaw}`);
-    }
-    timeoutMs = n;
+function parseTimeout(raw: string | undefined): number {
+  if (!raw) return 30000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`DEPENDABLY_TIMEOUT_MS must be a positive number: ${raw}`);
   }
+  return n;
+}
 
-  const importRootRaw = envValue('DEPENDABLY_IMPORT_ROOT');
-  let importRoot: string | undefined;
-  if (importRootRaw) {
-    importRoot = resolve(importRootRaw);
-    let stat;
-    try {
-      stat = statSync(importRoot);
-    } catch {
-      throw new Error(`DEPENDABLY_IMPORT_ROOT does not exist: ${importRoot}`);
-    }
-    if (!stat.isDirectory()) {
-      throw new Error(`DEPENDABLY_IMPORT_ROOT must be a directory: ${importRoot}`);
-    }
+function parseToolset(raw: string | undefined): Toolset {
+  const value = raw ?? 'full';
+  if (value !== 'full' && value !== 'remote') {
+    throw new Error(`DEPENDABLY_TOOLSET must be "full" or "remote": ${value}`);
   }
+  return value;
+}
 
-  const toolsetRaw = envValue('DEPENDABLY_TOOLSET') ?? 'full';
-  if (toolsetRaw !== 'full' && toolsetRaw !== 'remote') {
-    throw new Error(`DEPENDABLY_TOOLSET must be "full" or "remote": ${toolsetRaw}`);
+/**
+ * Read an environment variable naming a directory the server may read from,
+ * and require it to exist. Unset means the tools it gates are not registered.
+ */
+function readRoot(name: string): string | undefined {
+  const raw = envValue(name);
+  if (!raw) return undefined;
+  const root = resolve(raw);
+  let stat;
+  try {
+    stat = statSync(root);
+  } catch {
+    throw new Error(`${name} does not exist: ${root}`);
   }
-
-  return { baseUrl, token, timeoutMs, importRoot, toolset: toolsetRaw };
+  if (!stat.isDirectory()) {
+    throw new Error(`${name} must be a directory: ${root}`);
+  }
+  return root;
 }

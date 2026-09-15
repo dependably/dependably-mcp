@@ -8,6 +8,57 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **Unit tests and coverage reporting.** 129 tests across `test/`, covering the pure logic
+  (version ordering, report scoping, lockfile parsing, remediation extraction), the HTTP
+  client's URL building and its whole error-message surface, config validation, and every
+  tool's handler through an in-memory MCP client with a stubbed `fetch`. 97.78% lines /
+  94.19% branches / 99.10% functions; `npm run test:unit` fails below 90/85.
+- Coverage is wired into SonarQube. The project previously reported **0%** — not because
+  nothing was tested, but because nothing produced an lcov file and
+  `sonar.javascript.lcov.reportPaths` was never set. Node's V8 coverage also names
+  `dist/*.js`, which `sonar.sources=src` excludes, so the fix is `--enable-source-maps`,
+  which remaps each `SF:` line onto the `src/*.ts` file Sonar actually analyses. Verified on
+  `node:22`, the CI image. No new dependencies: this is Node's built-in test runner and
+  coverage, not c8 or nyc.
+- CI: the `test` job publishes `coverage/lcov.info` and `sonarqube-check` now `needs` it,
+  failing fast with a named reason if the artefact is missing rather than silently scanning
+  with no coverage and failing the quality gate for the wrong reason.
+
+### Changed
+
+- **Cleared the SonarQube quality gate's 1 security hotspot and 12 code smells**, read from the
+  API rather than guessed at.
+  - `typescript:S5852` (hotspot, `src/config.ts`): the base-URL normalizer trimmed trailing
+    slashes with `/\/+$/`, which backtracks super-linearly on a long run of slashes. Replaced
+    with a loop. The input comes from the environment rather than a request, so this was not
+    exploitable, but the pattern is worth not having.
+  - `typescript:S3776` (cognitive complexity, 8 sites): `loadConfig`, `describeFetchError`,
+    `formatHttpError`, `installCommand`'s handler, both vuln tool handlers, `buildFindings` and
+    `summarize` are each split into named helpers. `formatHttpError` was the worst at 27; its
+    per-status branches are now one function each, and the transport-failure hints in
+    `describeFetchError` are a code lookup rather than an if/else chain.
+  - `typescript:S4624` (nested template literals, 3 sites in `src/client.ts`): the conditional
+    fragments are computed into named variables first.
+  - `typescript:S3358` (nested ternaries, `src/semver.ts`): two sites introduced by this
+    branch's own `compare` rewrite, caught by scanning before merge rather than after.
+  - Behaviour is unchanged throughout — the 129 tests added alongside were written against the
+    previous shapes and all still pass, and the 16 generated install commands were diffed
+    byte-for-byte across all eight ecosystems, pinned and unpinned.
+  - Verified by running the scanner against a throwaway project key (Community Edition has no
+    branch analysis, so scanning under the real key would have overwritten `main`'s results):
+    0 issues, 0 hotspots, 97.0% coverage, quality gate **OK**. The throwaway project was
+    deleted afterwards.
+
+### Fixed
+
+- `compare` in `src/semver.ts` returned 0 for any two versions with non-numeric release
+  segments (`1.a.0` vs `1.b.0`), because both coerced to `NaN` and then stringified to the
+  same `"NaN"`. The doc comment claimed lexical ordering, which was never true. Segments are
+  now kept as strings and compared numerically only when both sides are numeric. Inert for
+  real lockfile and advisory versions, which are numeric — found by the new tests.
+
+### Added
+
 - **`check_dependencies` — scope the vulnerability report to one project.** The Dependably
   API reports per *org*, so answering "what is wrong with this project?" previously meant
   fetching every page and joining against a lockfile by hand. This tool does the join and
