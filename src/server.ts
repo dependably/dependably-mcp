@@ -10,6 +10,7 @@ import { registerSiemTools } from './tools/siem.js';
 import { registerImportTools } from './tools/import.js';
 import { registerObservabilityTools } from './tools/observability.js';
 import { registerSetupTools } from './tools/setup.js';
+import { registerVulnTools } from './tools/vuln.js';
 
 // The compiled file lives at dist/server.js, one level below the package root,
 // and package.json is always present in the published tarball.
@@ -22,6 +23,9 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   });
 
   registerReadTools(server, client);
+  // Project-scoped vulnerability tools. These take the dependency list as an
+  // argument and read no local files, so they need no opt-in.
+  registerVulnTools(server, client);
   registerYankTools(server, client);
   registerSiemTools(server, client);
   // The import tools read local files and upload them, so they are opt-in:

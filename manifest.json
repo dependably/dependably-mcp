@@ -49,6 +49,10 @@
   },
   "tools": [
     {
+      "name": "check_dependencies",
+      "description": "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability."
+    },
+    {
       "name": "get_install_command",
       "description": "Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it."
     },
@@ -63,6 +67,10 @@
     {
       "name": "get_publish_command",
       "description": "Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token."
+    },
+    {
+      "name": "get_remediation",
+      "description": "Fixed version (plus CWE / OWASP / remediation-skill ids) for one or more advisories, without the full advisory prose. Pass the installed version alongside each id to get the fix for that release line — for @hono/node-server 1.19.14 that is 1.19.15, not the 2.x fix. Use get_vulnerability instead when you need the write-up, PoC, or workarounds. Requires read:packages capability."
     },
     {
       "name": "get_vulnerability",
@@ -82,7 +90,7 @@
     },
     {
       "name": "list_vulnerabilities",
-      "description": "Vulnerability report: packages in the registry affected by known advisories, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. Requires read:packages capability."
+      "description": "Org-wide vulnerability report: every package in the registry affected by a known advisory, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. This is the whole org, NOT one project — to scope it to a project's dependencies and get bump targets, use check_dependencies. Items are compact by default; pass verbosity \"full\" for the raw server fields. Requires read:packages capability."
     },
     {
       "name": "lookup_package",

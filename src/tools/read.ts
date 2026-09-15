@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
+import { compactReportItem, type ReportItem } from '../vuln.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
 
@@ -83,7 +84,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
     {
       title: 'List vulnerabilities',
       description:
-        'Vulnerability report: packages in the registry affected by known advisories, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. Requires read:packages capability.',
+        'Org-wide vulnerability report: every package in the registry affected by a known advisory, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. This is the whole org, NOT one project — to scope it to a project\'s dependencies and get bump targets, use check_dependencies. Items are compact by default; pass verbosity "full" for the raw server fields. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
       inputSchema: {
         ecosystem: ecosystem.optional().describe('Filter to one ecosystem.'),
@@ -92,21 +93,27 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
         page: z.number().int().positive().optional().describe('1-based page number, default 1.'),
         sort: z.string().optional().describe('Sort column.'),
         dir: z.enum(['asc', 'desc']).optional().describe('Sort direction.'),
+        verbosity: z
+          .enum(['compact', 'full'])
+          .default('compact')
+          .describe(
+            'compact (default) keeps name, version, osvId, severity, cvss, epss, kev and summary — roughly half the bytes. full returns every server field (purl, orgSlug, revokedAt, timestamps).',
+          ),
       },
     },
     async (args) =>
-      run(async () =>
-        json(
-          await client.get('/api/v1/vuln-report', {
-            ecosystem: args.ecosystem,
-            name: args.name,
-            limit: args.limit,
-            page: args.page,
-            sort: args.sort,
-            dir: args.dir,
-          }),
-        ),
-      ),
+      run(async () => {
+        const res = (await client.get('/api/v1/vuln-report', {
+          ecosystem: args.ecosystem,
+          name: args.name,
+          limit: args.limit,
+          page: args.page,
+          sort: args.sort,
+          dir: args.dir,
+        })) as { items?: ReportItem[] } | null;
+        if (args.verbosity === 'full' || !res?.items) return json(res);
+        return json({ ...res, items: res.items.map(compactReportItem) });
+      }),
   );
 
   server.registerTool(

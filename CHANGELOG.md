@@ -6,6 +6,49 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`check_dependencies` — scope the vulnerability report to one project.** The Dependably
+  API reports per *org*, so answering "what is wrong with this project?" previously meant
+  fetching every page and joining against a lockfile by hand. This tool does the join and
+  returns one finding per affected package, each annotated with `bumpTo`: the highest fixed
+  version across that package's advisories, because several are explicit incomplete-fix
+  follow-ups where the lowest fix does not clear the rest. `clean: true` when nothing
+  matched, so the same call answers "did my fix land?". Measured on this repo's own tree:
+  one call, ~150 ms, replacing roughly 30 calls of manual cross-referencing.
+  - The dependency list is passed as `packages`; the tool reads no files. An earlier draft
+    accepted a lockfile path behind a `DEPENDABLY_PROJECT_ROOT` opt-in and it was removed
+    before merge: every host that could set such a root is one where the agent can already
+    read the file, and reporting a parse failure usefully means surfacing the JSON error,
+    which V8 fills with the offending bytes — turning any path under the root into a
+    read oracle. The file-read rule stays one sentence: only the two import tools read
+    local files. `parseNpmLockfile` remains exported and tested for callers assembling the
+    argument.
+  - Taking the dev marker from the lockfile rather than by eye also fixes a real
+    misclassification: `fast-uri` reads as dev-only from `npm ls`, which shows one path per
+    package, but is in the production tree via `@modelcontextprotocol/sdk` → `ajv`.
+- **`get_remediation` — fixed versions in bulk.** Up to 200 advisories per call, returning
+  the fixed version plus CWE / OWASP / remediation-skill ids and nothing else. The
+  per-advisory endpoint returns the full write-up — PoC code, reproduction tables — which is
+  the right thing when you want the analysis and enormously wasteful when you want a version
+  string. Installed versions are passed through, so the answer stays release-line aware:
+  `@hono/node-server` 1.19.14 resolves to 1.19.15, not the 2.x fix.
+
+### Changed
+
+- **`list_vulnerabilities` items are compact by default**, dropping the fields that are
+  redundant (`purl` alongside `packageName`/`version`/`ecosystem`) or rarely actionable
+  (`orgSlug`, `revokedAt`, `firstSeenAt`, `vulnCheckedAt`). Measured 54% smaller on a
+  50-item page. Pass `verbosity: "full"` for the raw server response.
+- **`list_vulnerabilities` now says it is org-wide** and points at `check_dependencies` for
+  project-scoped questions. The old description read as though it reported on your project.
+
+### Docs
+
+- `docs/api-asks.md`: the server-side changes that would let the MCP delete this client-side
+  work — `fixedVersion`, a dev marker and reachability on each report item, and a `purls`
+  filter. Each ask is written against measured cost from a real session.
+
 ### Security
 
 - **Cleared all 26 known advisories in the dependency tree** (9 packages), verified against the
