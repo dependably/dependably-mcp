@@ -43,6 +43,7 @@
     "manifest:sync": "node scripts/sync-manifest.mjs",
     "bundle": "node scripts/bundle.mjs",
     "bundle:verify": "node scripts/bundle.mjs --verify",
+    "pretest:unit": "mkdir -p coverage",
     "test:unit": "node --test --experimental-test-coverage --enable-source-maps --test-coverage-exclude='test/**' --test-coverage-exclude='scripts/**' --test-reporter=lcov --test-reporter-destination=coverage/lcov.info --test-reporter=spec --test-reporter-destination=stdout --test-coverage-lines=90 --test-coverage-branches=85 test/*.test.mjs"
   },
   "dependencies": {
