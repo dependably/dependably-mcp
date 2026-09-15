@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Cleared all 26 known advisories in the dependency tree** (9 packages), verified against the
+  Dependably registry's vulnerability report. Every one was transitive; neither direct dependency
+  was itself affected.
+  - `@modelcontextprotocol/sdk` 1.29.0 -> 1.30.0, whose refreshed ranges carry `hono` 4.12.27 ->
+    4.13.7, `@hono/node-server` 1.19.14 -> 2.1.1, `qs` 6.15.3 -> 6.16.0, `ip-address` 10.2.0 ->
+    10.7.0 and `fast-uri` (via `ajv`) 3.1.3 -> 3.1.7 — 19 advisories, including six HIGH
+    host-confusion/SSRF issues in `fast-uri` and `ip-address`'s octal-octet SSRF bypass
+    (`GHSA-mwp4-54f8-5fhr`, CVSS 7.7).
+  - Dev tooling: `js-yaml` 4.3.0 -> 4.3.2, `brace-expansion` 2.1.2 -> 2.1.4, `tar` 7.5.20 ->
+    7.5.22 — 5 advisories, all DoS.
+  - `tmp` 0.0.33 -> 0.2.7 via a pinned `overrides` entry, since `external-editor` pins
+    `tmp@^0.0.33` and cannot reach the 0.2.6 fix for `GHSA-ph9p-34f9-6g65`. That call site uses
+    only `tmpNameSync({ postfix })`, unchanged in 0.2.x, so the forced bump is compatible. Drop
+    the override once `@anthropic-ai/mcpb` ships a newer `@inquirer/prompts`.
+  - None were reachable at runtime: the server instantiates only `StdioServerTransport`, so the
+    SDK's HTTP path (Express/Hono, `qs` body parsing, `express-rate-limit`'s `ip-address`) is
+    never loaded. They shipped on disk in the `.mcpb` bundle regardless, which is why they are
+    fixed rather than waived.
+
 ### Fixed
 
 - CI: `publish:github` pulled bare `alpine/git:latest`, which is not a Docker Hub official

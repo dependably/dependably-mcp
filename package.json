@@ -45,7 +45,7 @@
     "bundle:verify": "node scripts/bundle.mjs --verify"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
@@ -55,6 +55,9 @@
     "@types/node": "22.20.0",
     "husky": "9.1.7",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "tmp": "0.2.7"
   },
   "engines": {
     "node": ">=22.0.0"
