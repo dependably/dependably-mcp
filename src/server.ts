@@ -23,10 +23,9 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   });
 
   registerReadTools(server, client);
-  // Project-scoped vulnerability tools. Always registered: the lockfile-reading
-  // parameter appears only when DEPENDABLY_PROJECT_ROOT scopes it, so the
-  // default surface still reads no local files.
-  registerVulnTools(server, client, cfg);
+  // Project-scoped vulnerability tools. These take the dependency list as an
+  // argument and read no local files, so they need no opt-in.
+  registerVulnTools(server, client);
   registerYankTools(server, client);
   registerSiemTools(server, client);
   // The import tools read local files and upload them, so they are opt-in:

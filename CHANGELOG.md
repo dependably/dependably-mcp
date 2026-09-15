@@ -16,11 +16,15 @@ All notable changes to this project are documented here. The format follows
   follow-ups where the lowest fix does not clear the rest. `clean: true` when nothing
   matched, so the same call answers "did my fix land?". Measured on this repo's own tree:
   one call, ~150 ms, replacing roughly 30 calls of manual cross-referencing.
-  - The dependency list is passed as `packages`, so the default tool surface still performs
-    no local file reads. Setting `DEPENDABLY_PROJECT_ROOT` additionally offers a `lockfile`
-    parameter for npm `package-lock.json` (v2/v3), under the same containment rule the
-    import tools use — symlinks out of the root are refused.
-  - Deriving dev-vs-runtime from the lockfile rather than by eye also fixes a real
+  - The dependency list is passed as `packages`; the tool reads no files. An earlier draft
+    accepted a lockfile path behind a `DEPENDABLY_PROJECT_ROOT` opt-in and it was removed
+    before merge: every host that could set such a root is one where the agent can already
+    read the file, and reporting a parse failure usefully means surfacing the JSON error,
+    which V8 fills with the offending bytes — turning any path under the root into a
+    read oracle. The file-read rule stays one sentence: only the two import tools read
+    local files. `parseNpmLockfile` remains exported and tested for callers assembling the
+    argument.
+  - Taking the dev marker from the lockfile rather than by eye also fixes a real
     misclassification: `fast-uri` reads as dev-only from `npm ls`, which shows one path per
     package, but is in the production tree via `@modelcontextprotocol/sdk` → `ajv`.
 - **`get_remediation` — fixed versions in bulk.** Up to 200 advisories per call, returning

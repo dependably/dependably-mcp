@@ -10,7 +10,7 @@ import { resolve } from 'node:path';
  * since Dependably v0.3.0 that includes the read-only management surface
  * (packages, search, vulnerabilities, activity, whoami, license policy, lookup)
  * alongside yank, import, and SIEM — plus anonymous / IP-allowlisted probes
- * (health, readiness, version, metrics). 20 tools by default, plus the 2 admin
+ * (health, readiness, version, metrics). 18 tools by default, plus the 2 admin
  * import tools when `DEPENDABLY_IMPORT_ROOT` opts in, minus the 2 loopback-only
  * probes when `DEPENDABLY_TOOLSET=remote`.
  *
@@ -35,13 +35,6 @@ export interface Config {
    * tricked into calling admin_upload cannot exfiltrate arbitrary files).
    */
   importRoot?: string;
-  /**
-   * Absolute directory `check_dependencies` may read a lockfile from.
-   * Unset ⇒ that tool still works, but only via its `packages` argument; the
-   * `lockfile` parameter is not offered. Same opt-in shape as `importRoot`:
-   * no local-file read is reachable unless an operator scopes it.
-   */
-  projectRoot?: string;
   /**
    * Which tools to register. `full` (default) is everything. `remote` drops the
    * two probes Dependably allowlists to loopback (`get_version`,
@@ -100,33 +93,25 @@ export function loadConfig(): Config {
     timeoutMs = n;
   }
 
-  const importRoot = readRoot('DEPENDABLY_IMPORT_ROOT');
-  const projectRoot = readRoot('DEPENDABLY_PROJECT_ROOT');
+  const importRootRaw = envValue('DEPENDABLY_IMPORT_ROOT');
+  let importRoot: string | undefined;
+  if (importRootRaw) {
+    importRoot = resolve(importRootRaw);
+    let stat;
+    try {
+      stat = statSync(importRoot);
+    } catch {
+      throw new Error(`DEPENDABLY_IMPORT_ROOT does not exist: ${importRoot}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`DEPENDABLY_IMPORT_ROOT must be a directory: ${importRoot}`);
+    }
+  }
 
   const toolsetRaw = envValue('DEPENDABLY_TOOLSET') ?? 'full';
   if (toolsetRaw !== 'full' && toolsetRaw !== 'remote') {
     throw new Error(`DEPENDABLY_TOOLSET must be "full" or "remote": ${toolsetRaw}`);
   }
 
-  return { baseUrl, token, timeoutMs, importRoot, projectRoot, toolset: toolsetRaw };
-}
-
-/**
- * Read an environment variable naming a directory the server may read from,
- * and require it to exist. Unset means the tools it gates are not registered.
- */
-function readRoot(name: string): string | undefined {
-  const raw = envValue(name);
-  if (!raw) return undefined;
-  const root = resolve(raw);
-  let stat;
-  try {
-    stat = statSync(root);
-  } catch {
-    throw new Error(`${name} does not exist: ${root}`);
-  }
-  if (!stat.isDirectory()) {
-    throw new Error(`${name} must be a directory: ${root}`);
-  }
-  return root;
+  return { baseUrl, token, timeoutMs, importRoot, toolset: toolsetRaw };
 }

@@ -326,15 +326,20 @@ export function compactReportItem(item: ReportItem): Record<string, unknown> {
 /**
  * Extract `{ name, version, dev }` from an npm `package-lock.json` (v2/v3).
  *
- * v1 lockfiles have no `packages` map; they are refused with a message that
- * names the fix rather than silently scanning nothing.
+ * Exported for callers assembling the `packages` argument to `check_dependencies`,
+ * which reads no files itself — see the design note in tools/vuln.ts. v1 lockfiles
+ * have no `packages` map; they are refused with a message that names the fix rather
+ * than silently scanning nothing.
  */
 export function parseNpmLockfile(text: string): InputPackage[] {
   let lock: { packages?: Record<string, { name?: string; version?: string; dev?: boolean; link?: boolean }> };
   try {
     lock = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`Could not parse lockfile as JSON: ${e instanceof Error ? e.message : String(e)}`);
+  } catch {
+    // Deliberately does not echo the underlying JSON error: V8 embeds the offending
+    // bytes in it, which would turn this into a read oracle if the input ever came
+    // from a path rather than from the caller's own memory.
+    throw new Error('Could not parse lockfile: not valid JSON.');
   }
   if (!lock.packages) {
     throw new Error(

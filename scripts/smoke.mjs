@@ -45,10 +45,6 @@ async function toolSchema(cfg, name) {
   });
 }
 
-async function callTool(cfg, name, args) {
-  return withClient(cfg, (client) => client.callTool({ name, arguments: args }));
-}
-
 const base = {
   baseUrl: 'https://dependably.example.com',
   token: 'dpb_smoke',
@@ -180,44 +176,34 @@ deepStrictEqual(
   ok(threw.includes('lockfileVersion 1'), `v1 lockfile should be refused by name, got: ${threw}`);
 }
 
-// check_dependencies is on the default surface, but its lockfile parameter is not:
-// reading a local file stays gated behind DEPENDABLY_PROJECT_ROOT.
+// check_dependencies is on the default surface and takes its input as an argument:
+// it must expose no way to name a local file. Only the import tools read from disk.
 {
-  const withoutRoot = await toolSchema(base, 'check_dependencies');
-  ok(!('lockfile' in (withoutRoot.properties ?? {})), 'lockfile must not be offered without DEPENDABLY_PROJECT_ROOT');
-  ok('packages' in (withoutRoot.properties ?? {}), 'packages must always be offered');
-
-  const withRoot = await toolSchema({ ...base, projectRoot: process.cwd() }, 'check_dependencies');
-  ok('lockfile' in (withRoot.properties ?? {}), 'lockfile must be offered once DEPENDABLY_PROJECT_ROOT is set');
-}
-
-// Containment: the same rule the import tools enforce applies to lockfile reads.
-{
-  const cfg = { ...base, projectRoot: process.cwd() };
-  const res = await callTool(cfg, 'check_dependencies', { ecosystem: 'npm', lockfile: '/etc/hosts' });
-  ok(res.isError, 'check_dependencies must refuse a lockfile outside DEPENDABLY_PROJECT_ROOT');
-  ok(
-    res.content[0].text.includes('DEPENDABLY_PROJECT_ROOT'),
-    `refusal should name DEPENDABLY_PROJECT_ROOT, got: ${res.content[0].text}`,
+  const schema = await toolSchema(base, 'check_dependencies');
+  const props = Object.keys(schema.properties ?? {});
+  ok(props.includes('packages'), 'packages must be offered');
+  for (const forbidden of ['lockfile', 'path', 'file', 'dir']) {
+    ok(!props.includes(forbidden), `check_dependencies must not accept a ${forbidden} argument`);
+  }
+  deepStrictEqual(
+    (schema.required ?? []).includes('packages'),
+    true,
+    'packages must be required, so there is no path-shaped fallback',
   );
 }
 
-// Argument validation happens before any network I/O, so these fail fast with a
-// usable message rather than a transport error against the unreachable example host.
+// The lockfile parser stays available to callers, but must never echo input bytes
+// back in an error: V8 embeds the offending content in JSON parse messages.
 {
-  const res = await callTool(base, 'check_dependencies', { ecosystem: 'npm' });
-  ok(res.isError, 'check_dependencies with neither packages nor lockfile must error');
-  ok(res.content[0].text.includes('packages'), `error should name the packages argument, got: ${res.content[0].text}`);
-}
-{
-  const cfg = { ...base, projectRoot: process.cwd() };
-  const res = await callTool(cfg, 'check_dependencies', {
-    ecosystem: 'npm',
-    lockfile: 'package-lock.json',
-    packages: [{ name: 'x', version: '1.0.0' }],
-  });
-  ok(res.isError, 'check_dependencies must refuse both packages and lockfile');
-  ok(res.content[0].text.includes('not both'), `error should say not both, got: ${res.content[0].text}`);
+  let msg = '';
+  try {
+    parseNpmLockfile('root:x:0:0:SECRET-CONTENT:/root:/bin/bash');
+  } catch (e) {
+    msg = e.message;
+  }
+  ok(msg.includes('not valid JSON'), `parse failure should be reported, got: ${msg}`);
+  ok(!msg.includes('SECRET-CONTENT'), `parse failure must not echo input, got: ${msg}`);
+  ok(!msg.includes('root:x'), `parse failure must not echo input, got: ${msg}`);
 }
 
 // Reachability: a transport failure must name the setting to fix, not a bare "fetch failed".
@@ -248,5 +234,5 @@ deepStrictEqual(
 }
 
 console.log(
-  `smoke OK: ${CORE_TOOLS.length} core tools, ${REMOTE_TOOLS.length} with DEPENDABLY_TOOLSET=remote, +${IMPORT_TOOLS.length} import tools when opted in, version ordering + lockfile parsing checked, import + project containment enforced, unreachable-instance errors actionable`,
+  `smoke OK: ${CORE_TOOLS.length} core tools, ${REMOTE_TOOLS.length} with DEPENDABLY_TOOLSET=remote, +${IMPORT_TOOLS.length} import tools when opted in, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, import containment enforced, unreachable-instance errors actionable`,
 );

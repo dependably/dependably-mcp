@@ -43,7 +43,7 @@ Dependably's management API accepts PATs on endpoints that opt into the `ApiToke
 
 † **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 20-tool surface, which performs no local file reads at all.
 
-§ **`check_dependencies` is the one to reach for** when the question is about a project rather than the whole org. Pass the dependency list as `packages` (`{name, version, dev}`) and it performs no local file reads. Setting `DEPENDABLY_PROJECT_ROOT` additionally offers a `lockfile` parameter that reads an npm `package-lock.json` from disk, under the same containment rule the import tools use.
+§ **`check_dependencies` is the one to reach for** when the question is about a project rather than the whole org. It takes the dependency list as an argument — `packages`, an array of `{name, version, dev}` — and reads no files itself, which keeps the file-read rule to a single sentence: only the two import tools ever touch local files. For an npm `package-lock.json` (v2/v3) the argument is every entry of its `packages` map; read the lockfile with whatever file access you already have and pass the result.
 
 `get_install_command` / `get_publish_command` cover all eight ecosystems (npm, pypi, nuget, maven, rpm, oci, golang, cargo). Go is proxy-only: it has an install command but no hosted publish endpoint, so `get_publish_command` returns guidance to push a VCS tag instead.
 
@@ -97,7 +97,6 @@ The server is configured entirely through environment variables, supplied by you
 | `DEPENDABLY_TOKEN` | yes | — | A Dependably **Personal Access Token (PAT)**. Mint one from the web UI under *Tokens*. Sent as a bearer token. Use a **user-owned** PAT (service/M2M tokens currently `404` on gated endpoints). |
 | `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
 | `DEPENDABLY_IMPORT_ROOT` | no | *(unset)* | Opt-in for the two import tools. Set it to the directory holding your artefact files; `import_manifest` / `admin_upload` are only registered when it is set, and refuse to read files outside it. |
-| `DEPENDABLY_PROJECT_ROOT` | no | *(unset)* | Opt-in for `check_dependencies`' `lockfile` parameter. Set it to the directory holding the projects you scan; lockfiles outside it are refused (symlinks included). `check_dependencies` itself is always available via its `packages` argument. |
 | `DEPENDABLY_TOOLSET` | no | `full` | `remote` drops `get_version` and `get_prometheus_metrics`, which only succeed from the Dependably host itself. Use it for any client that is not running on the server. |
 
 If the instance presents a certificate from a **private CA**, point Node's standard `NODE_EXTRA_CA_CERTS` at the PEM bundle in the environment that launches the server. There is deliberately no switch to disable certificate verification. A connection failure names the setting to check (URL typo, nothing listening, TLS chain) rather than a bare `fetch failed`.
@@ -210,7 +209,7 @@ src/
     ├── yank.ts         # yank_version
     ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary
     ├── import.ts       # import_manifest, admin_upload (opt-in via DEPENDABLY_IMPORT_ROOT)
-    ├── vuln.ts         # check_dependencies, get_remediation
+    ├── vuln.ts         # check_dependencies, get_remediation (no local file reads)
     ├── observability.ts# health_check, readiness_check, get_version, get_prometheus_metrics
     └── setup.ts        # get_install_command, get_publish_command
 ```

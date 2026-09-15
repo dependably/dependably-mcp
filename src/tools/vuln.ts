@@ -1,22 +1,16 @@
-import { readFile } from 'node:fs/promises';
-
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
-import type { Config } from '../config.js';
 import { json, run } from '../format.js';
-import { resolveWithinRoot } from '../paths.js';
 import {
   buildFindings,
   fetchRemediations,
   fetchReport,
   matchPackages,
-  parseNpmLockfile,
   summarize,
   summarizeRemediation,
   mapLimit,
-  type InputPackage,
 } from '../vuln.js';
 
 const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
@@ -28,47 +22,50 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-const packageList = z
-  .array(
-    z.object({
-      name: z.string().min(1).describe('Package name, e.g. "hono" or "@scope/pkg".'),
-      version: z.string().min(1).describe('Exact installed version.'),
-      dev: z.boolean().optional().describe('True for a dev-only dependency; affects the runtime/dev split only.'),
-    }),
-  )
-  .min(1)
-  .max(5000);
-
-export function registerVulnTools(server: McpServer, client: DependablyClient, cfg: Config): void {
-  const projectRoot = cfg.projectRoot;
-
+/**
+ * Design note — why this tool takes a dependency list rather than a path.
+ *
+ * Reading the caller's lockfile would be more convenient, and an earlier draft did
+ * exactly that behind a DEPENDABLY_PROJECT_ROOT opt-in. It was removed: only the
+ * import tools read local files, and keeping that the whole rule is worth more than
+ * the convenience. Two concrete reasons, beyond the general principle:
+ *
+ *  - Every host that could configure such a root (Claude Code, a CLI launcher) is one
+ *    where the agent can already read the file itself, and the one host where it would
+ *    genuinely help — Claude Desktop, where the agent may have no filesystem access —
+ *    would have needed a further extension-manifest field to reach it.
+ *  - Reporting a parse failure usefully means surfacing the JSON error, and V8 embeds
+ *    the offending bytes in that message. That turns any path under the root into a
+ *    few-bytes-at-a-time read oracle, which is precisely the shape the file-read
+ *    restriction exists to prevent.
+ *
+ * `parseNpmLockfile` in ../vuln.ts stays exported and tested so a caller can do the
+ * extraction in one JSON.parse and a map.
+ */
+export function registerVulnTools(server: McpServer, client: DependablyClient): void {
   server.registerTool(
     'check_dependencies',
     {
-      title: 'Check a project\'s dependencies',
+      title: "Check a project's dependencies",
       description:
-        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile. Pass the dependency list via `packages`" +
-        (projectRoot
-          ? ', or a `lockfile` path (npm package-lock.json v2/v3) that resolves inside DEPENDABLY_PROJECT_ROOT'
-          : '') +
-        '. Also answers "is this clean now?" after a fix: `clean` is true when nothing matched. Requires read:packages capability.',
+        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability.",
       annotations: READ_ANNOTATIONS,
       inputSchema: {
         ecosystem: ecosystem.default('npm').describe('Ecosystem of the dependency list. Default npm.'),
-        packages: packageList
-          .optional()
-          .describe('The project\'s resolved dependencies as {name, version, dev}. Required unless `lockfile` is given.'),
-        ...(projectRoot
-          ? {
-              lockfile: z
-                .string()
-                .min(1)
+        packages: z
+          .array(
+            z.object({
+              name: z.string().min(1).describe('Package name, e.g. "hono" or "@scope/pkg".'),
+              version: z.string().min(1).describe('Exact installed version.'),
+              dev: z
+                .boolean()
                 .optional()
-                .describe(
-                  'Path to an npm package-lock.json on the machine running this MCP server; must resolve inside DEPENDABLY_PROJECT_ROOT. Mutually exclusive with `packages`.',
-                ),
-            }
-          : {}),
+                .describe('True for a dev-only dependency. Affects the runtime/dev split in the summary only.'),
+            }),
+          )
+          .min(1)
+          .max(5000)
+          .describe("The project's resolved dependencies."),
         includeAdvisoryDetail: z
           .boolean()
           .optional()
@@ -77,33 +74,8 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, c
     },
     async (args) =>
       run(async () => {
-        const lockfile = (args as { lockfile?: string }).lockfile;
-        if (lockfile && args.packages) {
-          throw new Error('Pass either `packages` or `lockfile`, not both.');
-        }
-
-        let packages: InputPackage[];
-        if (lockfile) {
-          if (!projectRoot) {
-            throw new Error(
-              'Reading a lockfile from disk requires DEPENDABLY_PROJECT_ROOT to be set on the MCP server. Pass the dependency list via `packages` instead.',
-            );
-          }
-          const real = await resolveWithinRoot(projectRoot, lockfile, 'DEPENDABLY_PROJECT_ROOT');
-          packages = parseNpmLockfile(await readFile(real, 'utf8'));
-          if (args.ecosystem !== 'npm') {
-            throw new Error(
-              `lockfile parsing is implemented for npm only; got ecosystem "${args.ecosystem}". Pass \`packages\` for other ecosystems.`,
-            );
-          }
-        } else if (args.packages) {
-          packages = args.packages;
-        } else {
-          throw new Error('Provide `packages` (an array of {name, version})' + (projectRoot ? ' or `lockfile`' : '') + '.');
-        }
-
         const { items, total, truncated } = await fetchReport(client, { ecosystem: args.ecosystem });
-        const { hits, devOf } = matchPackages(items, packages);
+        const { hits, devOf } = matchPackages(items, args.packages);
 
         const remediations = await fetchRemediations(
           client,
@@ -124,7 +96,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, c
         return json({
           ecosystem: args.ecosystem,
           clean: findings.length === 0,
-          summary: summarize(findings, packages.length),
+          summary: summarize(findings, args.packages.length),
           reportSize: total,
           ...(truncated ? { truncated: true, note: 'Report exceeded the fetch cap; results may be incomplete.' } : {}),
           findings,
