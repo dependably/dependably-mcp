@@ -26,6 +26,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `manifest.json` declares `compatibility.runtimes.node` as `>=22.0.0`, matching
+  `engines.node` in `package.json` and the `node:22` image CI builds and tests on. It
+  previously advertised `>=18.0.0`, which promised Claude Desktop a runtime floor the
+  package itself does not support.
+
 - **Cleared the SonarQube quality gate's 1 security hotspot and 12 code smells**, read from the
   API rather than guessed at.
   - `typescript:S5852` (hotspot, `src/config.ts`): the base-URL normalizer trimmed trailing
