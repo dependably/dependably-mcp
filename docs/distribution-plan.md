@@ -5,7 +5,7 @@ Status: approved 2026-09-02. Supersedes the plan drafted in the (now redundant)
 
 Progress 2026-09-12: M1 steps 1 to 3 done and the bundle verifies; M2 steps 1 and 3 done
 (actionable reachability errors, private-CA file setting); M3 step 1 done (bundle attached to
-GitLab and GitHub releases). Open decision 1 resolved with `DEPENDABLY_TOOLSET`. What remains is
+GitLab and GitHub releases). Open decision 1 resolved by dropping the two probes. What remains is
 tracked in `docs/listing.md`, which is the pre-submission checklist.
 
 ## 1. Goal
@@ -66,8 +66,8 @@ documentation.
 - Strong client layer: RFC 7807 parsing, capability-name extraction on 403, `Retry-After` on 429.
 - No prompts or resources. One smoke test, no HTTP-mocked unit tests.
 - `main` is one commit behind the unmerged `chore/npmrc-hygiene` branch.
-- `get_version` and `get_prometheus_metrics` call endpoints the server allowlists to loopback, so
-  they fail from any client that is not on the Dependably host itself.
+- The server's `/version` and `/metrics` endpoints are allowlisted to the Dependably host, so
+  they are not wrapped as tools.
 
 **Anthropic**
 
@@ -92,7 +92,7 @@ documentation.
 
 A `.mcpb` bundle built from this repository at the same commit as the npm release. The manifest
 points at `dist/index.js`; `user_config` collects the base URL, a keychain-stored token, a timeout,
-and an optional import folder, and maps them onto the four existing environment variables. No new
+and maps them onto the remaining environment variables. No new
 code path: the bundle is `npm ci --omit=dev` plus `dist/` plus `manifest.json` plus an icon.
 
 `manifest.json` lives at the repo root because that is where `mcpb pack` expects it. Its `tools[]`
@@ -111,10 +111,8 @@ folder is configured, flagged with `tools_generated: true`.
 | Security | `list_vulnerabilities`, `get_vulnerability`, `siem_vulnerabilities_summary` | read-only; SIEM needs `read:audit` |
 | Policy | `get_license_policy` | read-only |
 | Audit | `list_activity`, `siem_list_auth_events`, `whoami` | read-only |
-| Operate | `health_check`, `readiness_check`, `get_version`, `get_prometheus_metrics` | the last two are loopback-only on the server; decision pending (see §7) |
+| Operate | `health_check`, `readiness_check` | both anonymous, and they answer from any host |
 | Set up | `get_install_command`, `get_publish_command` | local, never execute |
-| Write | `yank_version` | destructive; Desktop always confirms |
-| Import | `admin_upload`, `import_manifest` | opt-in via the import folder |
 
 Additions that make every channel better, not just the extension:
 
@@ -144,7 +142,7 @@ Additions that make every channel better, not just the extension:
    `build/mcpb/`, `npm ci --omit=dev --ignore-scripts` there, `mcpb validate`, `mcpb pack`, write a
    SHA-256 beside the bundle.
 4. Install on this Mac by drag-and-drop against the local `demo.localhost:8080` instance; run
-   `whoami` and `list_vulnerabilities`; confirm `yank_version` prompts.
+   `whoami` and `list_vulnerabilities`.
 5. Confirm how Desktop substitutes an unset optional `directory` field. `loadConfig` treats an empty
    string as unset; if Desktop passes the literal placeholder instead, add a guard.
 
@@ -195,9 +193,10 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
 
 ## 7. Open decisions
 
-1. **`get_version` and `get_prometheus_metrics`.** Resolved 2026-09-12: `DEPENDABLY_TOOLSET=remote`
-   (any harness can set it) leaves them out; the manifest sets it, and `sync-manifest` boots the
-   server with the manifest's toolset so the listed tools match the install. Default stays `full`.
+1. **`get_version` and `get_prometheus_metrics`.** Resolved: both tools are removed, and the
+   `DEPENDABLY_TOOLSET` switch that used to hide them with them. The endpoints they wrapped are
+   allowlisted to the Dependably host, so the tools failed for every client not running on it.
+   Read `/version` and `/metrics` on the host, or scrape `/metrics` with Prometheus.
 2. **Reviewer access.** The verified tier requires Anthropic to exercise every tool. A public demo
    instance with a scoped read-only token is the cleanest answer and also serves marketing.
 3. **Community tier.** MCPB listings may stay in the Community tier. Accepted; org-scoped installs

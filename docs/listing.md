@@ -32,8 +32,8 @@ literals keep their exact spelling.
 > With it, Claude can list and search your packages, explain a vulnerability and its remediation,
 > check a package against your licence policy before you adopt it, review the org activity feed
 > and authentication events, and produce the exact install or publish commands for each
-> ecosystem. Read-only tools run without prompts; the one destructive tool (yanking a version)
-> always asks first.
+> ecosystem. Every tool is read-only, so nothing the server offers can change or delete anything
+> in your registry.
 >
 > All traffic goes directly from your machine to your Dependably instance. Nothing is sent
 > anywhere else, and the token is stored in your operating system's keychain. Instances behind
@@ -72,11 +72,9 @@ every tool. Plan:
    package with a known advisory, and a licence policy in `warn` mode. Reuse the marketing demo
    if one exists; otherwise a small instance under `demo.dependably.ca`.
 2. A dedicated user in that org with a personal access token carrying `read:packages`,
-   `read:audit` and `read:tenant`. No `yank:*`, no `import:*`. `yank_version` then returns a clean
-   `403` naming the missing capability, which itself demonstrates the error handling.
+   `read:audit` and `read:tenant`, which covers every tool the server registers.
 3. Rotate the token after the review; note the rotation date in §6.
-4. Give the reviewer: the instance URL, the token, the five prompts above, and the sentence "the
-   yank tool is expected to be refused for this token".
+4. Give the reviewer: the instance URL, the token, and the five prompts above.
 
 ## 4. Screenshots (three to five, at least 1000 px wide)
 
@@ -86,7 +84,7 @@ Take them from the installed extension on macOS in light mode, then crop to the 
 2. Prompt 1: the vulnerability list followed by the remediation for one advisory.
 3. Prompt 2: the pre-adoption licence verdict.
 4. Prompt 3: the authentication events table.
-5. The confirmation prompt Claude Desktop shows before `yank_version` runs.
+5. The tool list in Claude Desktop, showing all 17 tools marked read-only.
 
 ## 5. Pre-submission checklist
 
@@ -97,7 +95,7 @@ need something outside this repository.
 |---|---|---|---|
 | 1 | Manifest validates (`mcpb validate`), bundle packs and boots (`npm run bundle:verify`) | done | `scripts/bundle.mjs` |
 | 2 | Every tool has `title`, `readOnlyHint`, `destructiveHint`; read and write tools are separate; no catch-all tool | done | `src/tools/*.ts` |
-| 3 | Tools that can never succeed off-host are not offered to Desktop users | done | `DEPENDABLY_TOOLSET=remote` in the manifest |
+| 3 | Tools that can never succeed off-host are not offered to Desktop users | done | the `/version` and `/metrics` probes are not registered at all; `src/tools/observability.ts` |
 | 4 | Errors are actionable: 401/403/429/5xx wording, and transport failures name the URL, cause and setting | done | `src/client.ts`, asserted in `scripts/smoke.mjs` |
 | 5 | Private-CA instances supported without disabling verification | done | `ca_bundle` → `NODE_EXTRA_CA_CERTS` |
 | 6 | Privacy policy URL live | done | <https://dependably.ca/privacy> |
@@ -105,7 +103,7 @@ need something outside this repository.
 | 8 | Bundle and checksum attached to each tagged release | done (pipeline) | `.gitlab-ci.yml` `release`, `.github/workflows/ci.yml` `release-bundle` |
 | 9 | GitHub mirror `dependably/dependably-mcp` is public | **external, blocking** (repo created 2026-09-13, private for now; `publish:github` in `.gitlab-ci.yml` pushes to it) | `repository` and `documentation` in `manifest.json` (and `repository`, `bugs`, `homepage` in `package.json`) return 404 today; the GitHub workflow and npm provenance also depend on it |
 | 10 | Public npm publish of the current version has run | **external, blocking** | first `vX.Y.Z` tag on the mirror; the README's install section assumes it |
-| 11 | Install on macOS through the dialog only; `whoami`, `list_vulnerabilities`, yank prompt, blank import folder | pending, this Mac | `docs/desktop-e2e.md` steps 1 to 6 |
+| 11 | Install on macOS through the dialog only; `whoami`, `list_vulnerabilities` | pending, this Mac | `docs/desktop-e2e.md` steps 1 to 5 |
 | 12 | Same on Windows, including the CA-bundle file picker and keychain storage | **external, blocking** | `docs/desktop-e2e.md` |
 | 13 | Five prompts run through the installed extension against a live instance | pending | §2, §6 |
 | 14 | Test account and demo instance for the reviewer | **external, blocking** | §3 |

@@ -4,7 +4,7 @@
   "display_name": "Dependably",
   "version": "0.2.0",
   "description": "Ask Claude about the packages, vulnerabilities, licences and audit trail in your self-hosted Dependably registry.",
-  "long_description": "Dependably is a self-hosted private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Read-only tools run without prompts; the one destructive tool (yanking a version) always asks first.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
+  "long_description": "Dependably is a self-hosted private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Every tool is read-only, so nothing the extension offers can change or delete anything in your registry.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
   "author": {
     "name": "Michael Hiland",
     "url": "https://dependably.ca"
@@ -41,8 +41,6 @@
         "DEPENDABLY_BASE_URL": "${user_config.base_url}",
         "DEPENDABLY_TOKEN": "${user_config.token}",
         "DEPENDABLY_TIMEOUT_MS": "${user_config.timeout_ms}",
-        "DEPENDABLY_IMPORT_ROOT": "${user_config.import_root}",
-        "DEPENDABLY_TOOLSET": "remote",
         "NODE_EXTRA_CA_CERTS": "${user_config.ca_bundle}"
       }
     }
@@ -115,10 +113,6 @@
     {
       "name": "whoami",
       "description": "Identity behind the configured token: user/token id, org, role (GET /api/v1/auth/me). Requires read:tenant capability on the token."
-    },
-    {
-      "name": "yank_version",
-      "description": "Yank (delete) a specific package version from the org. Destructive — requires the yank:{ecosystem} capability. Pass the plain package name (e.g. \"@scope/pkg\", \"library/ubuntu\", \"github.com/x/y\") — URL encoding is handled."
     }
   ],
   "tools_generated": true,
@@ -158,7 +152,7 @@
     "token": {
       "type": "string",
       "title": "Personal access token",
-      "description": "Create one in Dependably under Tokens. Read capabilities are enough for everything except yanking a version.",
+      "description": "Create one in Dependably under Tokens. The Pull preset is enough for package, vulnerability and licence tools; the Audit and Admin presets add the activity feed, authentication events and identity.",
       "required": true,
       "sensitive": true
     },
@@ -170,12 +164,6 @@
       "default": 30000,
       "min": 1000,
       "max": 300000
-    },
-    "import_root": {
-      "type": "directory",
-      "title": "Import folder (optional)",
-      "description": "Enables the two air-gapped import tools. They can only read files inside this folder.",
-      "required": false
     },
     "ca_bundle": {
       "type": "file",

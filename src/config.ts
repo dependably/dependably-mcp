@@ -1,6 +1,3 @@
-import { statSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 /**
  * Runtime configuration for the PAT-only Dependably MCP server.
  *
@@ -9,10 +6,8 @@ import { resolve } from 'node:path';
  * login: a PAT reaches every endpoint that opts into the `ApiToken` auth scheme —
  * since Dependably v0.3.0 that includes the read-only management surface
  * (packages, search, vulnerabilities, activity, whoami, license policy, lookup)
- * alongside yank, import, and SIEM — plus anonymous / IP-allowlisted probes
- * (health, readiness, version, metrics). 18 tools by default, plus the 2 admin
- * import tools when `DEPENDABLY_IMPORT_ROOT` opts in, minus the 2 loopback-only
- * probes when `DEPENDABLY_TOOLSET=remote`.
+ * alongside SIEM — plus the anonymous health and readiness probes. 17 tools,
+ * all read-only: nothing in the surface writes, deletes, or reads a local file.
  *
  * Against a Dependably server older than v0.3.0 the read tools return 401,
  * service/M2M tokens 404 on capability-gated endpoints, and MFA-required orgs
@@ -28,24 +23,7 @@ export interface Config {
   token: string;
   /** Per-request HTTP timeout in milliseconds. */
   timeoutMs: number;
-  /**
-   * Absolute directory the import tools may read artefact files from.
-   * Unset ⇒ the import tools are not registered at all. This is the opt-in
-   * that keeps the default tool surface free of local-file reads (an LLM
-   * tricked into calling admin_upload cannot exfiltrate arbitrary files).
-   */
-  importRoot?: string;
-  /**
-   * Which tools to register. `full` (default) is everything. `remote` drops the
-   * two probes Dependably allowlists to loopback (`get_version`,
-   * `get_prometheus_metrics`), which always 403 from any machine other than the
-   * Dependably host itself — the right setting for Claude Desktop, Cursor, and
-   * any other client that is not running on the server.
-   */
-  toolset: Toolset;
 }
-
-export type Toolset = 'full' | 'remote';
 
 /**
  * Reads an environment variable, treating an unset value, whitespace, or an
@@ -71,8 +49,6 @@ export function loadConfig(): Config {
     baseUrl,
     token,
     timeoutMs: parseTimeout(envValue('DEPENDABLY_TIMEOUT_MS')),
-    importRoot: readRoot('DEPENDABLY_IMPORT_ROOT'),
-    toolset: parseToolset(envValue('DEPENDABLY_TOOLSET')),
   };
 }
 
@@ -116,32 +92,4 @@ function parseTimeout(raw: string | undefined): number {
     throw new Error(`DEPENDABLY_TIMEOUT_MS must be a positive number: ${raw}`);
   }
   return n;
-}
-
-function parseToolset(raw: string | undefined): Toolset {
-  const value = raw ?? 'full';
-  if (value !== 'full' && value !== 'remote') {
-    throw new Error(`DEPENDABLY_TOOLSET must be "full" or "remote": ${value}`);
-  }
-  return value;
-}
-
-/**
- * Read an environment variable naming a directory the server may read from,
- * and require it to exist. Unset means the tools it gates are not registered.
- */
-function readRoot(name: string): string | undefined {
-  const raw = envValue(name);
-  if (!raw) return undefined;
-  const root = resolve(raw);
-  let stat;
-  try {
-    stat = statSync(root);
-  } catch {
-    throw new Error(`${name} does not exist: ${root}`);
-  }
-  if (!stat.isDirectory()) {
-    throw new Error(`${name} must be a directory: ${root}`);
-  }
-  return root;
 }

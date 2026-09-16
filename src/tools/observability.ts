@@ -10,21 +10,13 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-// Health / metrics probes. Use these to triage incidents:
-//   - readiness_check       → which subsystem reports degraded?
-//   - get_prometheus_metrics → raw Prometheus text (IP-allowlisted server-side; bearer token is ignored)
-// These endpoints are anonymous / IP-allowlisted, so they work without a PAT
-// (subject to the /metrics IP allowlist).
-export interface ObservabilityOptions {
-  /** Register get_version and get_prometheus_metrics (loopback-only on the server). */
-  loopbackProbes: boolean;
-}
-
-export function registerObservabilityTools(
-  server: McpServer,
-  client: DependablyClient,
-  { loopbackProbes }: ObservabilityOptions = { loopbackProbes: true },
-): void {
+// Health probes. Use readiness_check first when triaging an incident: it names the
+// subsystem reporting degraded. Both endpoints are anonymous, so they work without a PAT
+// and from any host.
+//
+// /version and /metrics are deliberately not wrapped: the server allowlists both to its own
+// host, so a tool for either would fail for every client that is not running on it.
+export function registerObservabilityTools(server: McpServer, client: DependablyClient): void {
   server.registerTool(
     'health_check',
     {
@@ -45,29 +37,5 @@ export function registerObservabilityTools(
       inputSchema: {},
     },
     async () => run(async () => json(await client.get('/ready'))),
-  );
-
-  if (!loopbackProbes) return;
-
-  server.registerTool(
-    'get_version',
-    {
-      title: 'Server version',
-      description: 'Server build version (GET /version). The endpoint is gated by the same IP allowlist as /metrics — if your MCP host isn\'t in the allowlist this returns 403.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {},
-    },
-    async () => run(async () => json(await client.get('/version'))),
-  );
-
-  server.registerTool(
-    'get_prometheus_metrics',
-    {
-      title: 'Prometheus metrics',
-      description: 'Raw Prometheus exposition (GET /metrics). The endpoint is gated by an IP allowlist server-side — if your MCP host isn\'t in the allowlist this returns 403. Output is text, not JSON.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {},
-    },
-    async () => run(async () => json(await client.get('/metrics'))),
   );
 }
