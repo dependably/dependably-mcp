@@ -599,7 +599,7 @@ release:
 # publish jobs). npm has no equivalent of NuGet's --skip-duplicate and registry
 # versions are immutable, so publishing main's plain version would burn the
 # next release number; instead every run publishes a unique prerelease —
-# <version>-dev.<pipeline-iid>.<short-sha> — under the `dev` dist-tag, so
+# <version>-dev.<pipeline-iid>.g<short-sha> — under the `dev` dist-tag, so
 # `npm install dependably-mcp` (latest) never resolves to an internal build.
 # Consume with:
 #   npm install dependably-mcp@dev --registry https://dependably.northwardlabs.ca/npm/
@@ -619,8 +619,22 @@ publish-dev:
   script:
     - |
       BASE=$(node -p "require('./package.json').version")
-      DEV_VERSION="${BASE}-dev.${CI_PIPELINE_IID}.${CI_COMMIT_SHORT_SHA}"
+      # The `g` prefix (the git-describe convention) keeps the short SHA an
+      # ALPHANUMERIC semver prerelease identifier. Without it, a SHA that happens
+      # to be all digits is a NUMERIC identifier, and SemVer §9 forbids leading
+      # zeroes in those: `npm version` silently rewrote 0.2.0-dev.58.00937414 to
+      # 0.2.0-dev.58.937414, and the published build no longer named a commit
+      # you could look up. It only bites when the short SHA is all digits AND
+      # starts with 0 — roughly 1 pipeline in 400 — which is exactly why it must
+      # not be left to chance.
+      DEV_VERSION="${BASE}-dev.${CI_PIPELINE_IID}.g${CI_COMMIT_SHORT_SHA}"
       npm version "$DEV_VERSION" --no-git-tag-version
+      WROTE=$(node -p "require('./package.json').version")
+      if [ "$WROTE" != "$DEV_VERSION" ]; then
+        echo "ERROR: npm rewrote the version ($DEV_VERSION -> $WROTE)." >&2
+        echo "       The published build would not round-trip to its commit; refusing to publish." >&2
+        exit 1
+      fi
       echo "Internal test version: $DEV_VERSION"
     - npm run build
     - TARBALL=$(npm pack | tail -1)
