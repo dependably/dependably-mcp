@@ -10,8 +10,6 @@ const KEYS = [
   'DEPENDABLY_BASE_URL',
   'DEPENDABLY_TOKEN',
   'DEPENDABLY_TIMEOUT_MS',
-  'DEPENDABLY_IMPORT_ROOT',
-  'DEPENDABLY_TOOLSET',
 ];
 
 /** Run loadConfig with exactly the given environment. */
@@ -101,53 +99,6 @@ describe('loadConfig timeout', () => {
   });
 });
 
-describe('loadConfig toolset', () => {
-  it('defaults to full', () => {
-    withEnv(minimal, () => strictEqual(loadConfig().toolset, 'full'));
-  });
-
-  it('accepts remote', () => {
-    withEnv({ ...minimal, DEPENDABLY_TOOLSET: 'remote' }, () =>
-      strictEqual(loadConfig().toolset, 'remote'),
-    );
-  });
-
-  it('rejects anything else', () => {
-    withEnv({ ...minimal, DEPENDABLY_TOOLSET: 'partial' }, () =>
-      throws(loadConfig, /must be "full" or "remote"/),
-    );
-  });
-});
-
-describe('loadConfig import root', () => {
-  it('is undefined when unset, which is what leaves the import tools unregistered', () => {
-    withEnv(minimal, () => strictEqual(loadConfig().importRoot, undefined));
-  });
-
-  it('resolves an existing directory to an absolute path', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-cfg-'));
-    withEnv({ ...minimal, DEPENDABLY_IMPORT_ROOT: dir }, () => {
-      const root = loadConfig().importRoot;
-      ok(root.startsWith('/'));
-      ok(root.endsWith(dir.split('/').pop()));
-    });
-  });
-
-  it('rejects a path that does not exist', () => {
-    withEnv({ ...minimal, DEPENDABLY_IMPORT_ROOT: '/definitely/not/here/xyz' }, () =>
-      throws(loadConfig, /does not exist/),
-    );
-  });
-
-  it('rejects a file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-cfg-'));
-    const file = join(dir, 'f.txt');
-    writeFileSync(file, 'x');
-    withEnv({ ...minimal, DEPENDABLY_IMPORT_ROOT: file }, () =>
-      throws(loadConfig, /must be a directory/),
-    );
-  });
-});
 
 afterEach(() => {
   for (const k of KEYS) delete process.env[k];

@@ -17,5 +17,5 @@ Include what you can: affected version, a reproduction or proof of concept, and 
 
 ## Scope notes
 
-- This MCP server holds a **Dependably Personal Access Token** (`DEPENDABLY_TOKEN`) and talks to your Dependably instance on your behalf. Anything that could leak that token, escalate what it can do, or read local files outside `DEPENDABLY_IMPORT_ROOT` is squarely in scope.
+- This MCP server holds a **Dependably Personal Access Token** (`DEPENDABLY_TOKEN`) and talks to your Dependably instance on your behalf. Anything that could leak that token, escalate what it can do, or make the server read local files is squarely in scope: no tool reads the filesystem, and a change that introduces one is a finding.
 - Vulnerabilities in the Dependably server itself belong to [dependably-community](https://github.com/dependably/dependably-community) — report them there.

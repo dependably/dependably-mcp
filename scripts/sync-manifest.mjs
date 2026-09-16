@@ -25,13 +25,8 @@ const check = process.argv.includes('--check');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
-// Boot the server with the toolset the manifest itself hands the bundle, so the
-// listed tools are exactly what a Desktop install exposes.
-const toolset = manifest.server?.mcp_config?.env?.DEPENDABLY_TOOLSET ?? 'full';
-if (toolset !== 'full' && toolset !== 'remote') {
-  throw new Error(`manifest.json sets DEPENDABLY_TOOLSET to ${JSON.stringify(toolset)}; expected a literal "full" or "remote"`);
-}
-const cfg = { baseUrl: 'https://dependably.example.com', token: 'sync', timeoutMs: 1000, toolset };
+// Boot the server exactly as a Desktop install does, so the listed tools match.
+const cfg = { baseUrl: 'https://dependably.example.com', token: 'sync', timeoutMs: 1000 };
 const server = buildServer(new DependablyClient(cfg), cfg);
 const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 const client = new Client({ name: 'sync-manifest', version: '0.0.0' });
@@ -58,8 +53,8 @@ if (check) {
     );
     process.exit(1);
   }
-  console.log(`manifest OK: version ${next.version}, ${next.tools.length} tools (toolset ${toolset})`);
+  console.log(`manifest OK: version ${next.version}, ${next.tools.length} tools`);
 } else {
   writeFileSync(manifestPath, rendered);
-  console.log(`manifest.json updated: version ${next.version}, ${next.tools.length} tools (toolset ${toolset})`);
+  console.log(`manifest.json updated: version ${next.version}, ${next.tools.length} tools`);
 }

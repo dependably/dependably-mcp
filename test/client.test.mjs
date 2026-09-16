@@ -3,7 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import { DependablyApiError, DependablyClient, describeFetchError, formatHttpError } from '../dist/client.js';
 
-const cfg = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000, toolset: 'full' };
+const cfg = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
 
 /** Replace global fetch with a recorder returning a canned response. */

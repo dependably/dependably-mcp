@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **`get_version` and `get_prometheus_metrics`, and the `DEPENDABLY_TOOLSET` switch with them.**
+  Both tools wrapped endpoints Dependably allowlists to its own host, so they returned `403` for
+  every client not running on the server. `DEPENDABLY_TOOLSET=remote` existed only to hide them,
+  which made the default (`full`) wrong for almost every install. Read `/version` and `/metrics`
+  on the host, or scrape `/metrics` with Prometheus.
+- **`yank_version`.** The last write in the surface, and the only destructive tool. It needed
+  `yank:*` or a per-ecosystem leaf, which sits in the publisher set and so cannot be minted by an
+  ordinary member, and it had no token preset. Yank a version from the Dependably web UI instead.
+- **`import_manifest`, `admin_upload` and `DEPENDABLY_IMPORT_ROOT`.** The two import tools were
+  the only ones that read the local filesystem, and they needed an admin-grade token carrying
+  `import:*` and `tenant:configure`, which an ordinary member cannot mint. `DEPENDABLY_IMPORT_ROOT`
+  existed to contain those reads; with the tools gone the containment has nothing left to guard.
+  No tool in this server now touches the filesystem or runs a command.
+
+The surface is a flat **17 tools in 4 groups**, registered unconditionally and **entirely
+read-only**: no tool writes to the instance, deletes anything, reads a local file, or runs a
+command. The two environment variables that gated tool registration are no longer read, and
+`manifest.json` drops the matching `user_config` fields.
+
 ### Added
 
 - **Unit tests and coverage reporting.** 129 tests across `test/`, covering the pure logic

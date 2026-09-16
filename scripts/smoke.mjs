@@ -49,7 +49,6 @@ const base = {
   baseUrl: 'https://dependably.example.com',
   token: 'dpb_smoke',
   timeoutMs: 1000,
-  toolset: 'full',
 };
 
 const CORE_TOOLS = [
@@ -57,10 +56,8 @@ const CORE_TOOLS = [
   'get_install_command',
   'get_license_policy',
   'get_package',
-  'get_prometheus_metrics',
   'get_publish_command',
   'get_remediation',
-  'get_version',
   'get_vulnerability',
   'health_check',
   'list_activity',
@@ -72,38 +69,10 @@ const CORE_TOOLS = [
   'siem_list_auth_events',
   'siem_vulnerabilities_summary',
   'whoami',
-  'yank_version',
 ].sort();
 
-const IMPORT_TOOLS = ['admin_upload', 'import_manifest'];
-// Loopback-only on the server (IP allowlist); DEPENDABLY_TOOLSET=remote leaves them out.
-const LOOPBACK_TOOLS = ['get_prometheus_metrics', 'get_version'];
-const REMOTE_TOOLS = CORE_TOOLS.filter((t) => !LOOPBACK_TOOLS.includes(t));
+deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
 
-deepStrictEqual(await toolNames(base), CORE_TOOLS, 'default surface (no import root)');
-deepStrictEqual(await toolNames({ ...base, toolset: 'remote' }), REMOTE_TOOLS, 'remote toolset drops the loopback probes');
-deepStrictEqual(
-  await toolNames({ ...base, importRoot: process.cwd() }),
-  [...CORE_TOOLS, ...IMPORT_TOOLS].sort(),
-  'surface with DEPENDABLY_IMPORT_ROOT set',
-);
-
-// Containment: a path outside the import root must be refused before any network I/O.
-{
-  const cfg = { ...base, importRoot: process.cwd() };
-  const server = buildServer(new DependablyClient(cfg), cfg);
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'smoke', version: '0.0.0' });
-  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  const res = await client.callTool({ name: 'admin_upload', arguments: { files: ['/etc/hosts'] } });
-  ok(res.isError, 'admin_upload must refuse files outside DEPENDABLY_IMPORT_ROOT');
-  ok(
-    res.content[0].text.includes('DEPENDABLY_IMPORT_ROOT'),
-    `refusal should name DEPENDABLY_IMPORT_ROOT, got: ${res.content[0].text}`,
-  );
-  await client.close();
-  await server.close();
-}
 
 // Version ordering: bumpTo is only as good as this comparator.
 {
@@ -234,5 +203,5 @@ deepStrictEqual(
 }
 
 console.log(
-  `smoke OK: ${CORE_TOOLS.length} core tools, ${REMOTE_TOOLS.length} with DEPENDABLY_TOOLSET=remote, +${IMPORT_TOOLS.length} import tools when opted in, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, import containment enforced, unreachable-instance errors actionable`,
+  `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable`,
 );

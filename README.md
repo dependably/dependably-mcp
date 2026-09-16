@@ -1,107 +1,25 @@
 # dependably-mcp
 
-An MCP (Model Context Protocol) server that lets an LLM client — Claude Desktop, Claude Code, Cursor, anything that speaks MCP — run supply-chain automation and incident triage against a [Dependably](https://github.com/dependably/dependably-community) instance over stdio.
+An MCP server that lets Claude Desktop, Claude Code, Cursor, or anything else that speaks the
+Model Context Protocol query your [Dependably](https://github.com/dependably/dependably-community)
+instance: package inventory, vulnerability reports, licence policy, audit events and incident
+triage.
 
-Dependably is a self-hosted private artifact repository for npm, PyPI, NuGet, Maven, RPM, OCI, Go, and Cargo. This MCP server wraps the slice of its management API that a **static API token (PAT)** can reach today.
+Dependably is a self-hosted private artefact repository. This server is read-only and runs over
+stdio through a single personal access token: no tool writes to your instance or your filesystem,
+and none of them runs a command.
 
-## PAT-only, read + ops
+## Requirements
 
-The server authenticates **only** with a Dependably Personal Access Token (`DEPENDABLY_TOKEN`) sent as a bearer token — 22 tools across 6 groups (20 by default; the 2 import tools are opt-in, see below).
-
-Dependably's management API accepts PATs on endpoints that opt into the `ApiToken` auth scheme. Since Dependably **v0.3.0** that includes the whole read-only management surface, which is what the read group below talks to; yank, admin import, and SIEM opted in earlier, and the health/readiness/version/metrics probes are anonymous / IP-allowlisted. The install/publish command builders run entirely locally and never call the server.
-
-> **Minimum server version:** the read tools need Dependably **≥ v0.3.0**; `get_license_policy` and `lookup_package` need the release after v0.3.1. Against an older server the read tools return `401`.
-
-### The 22 tools
-
-| Tool | Group | Capability the PAT needs |
-|---|---|---|
-| `list_packages` — paginated package inventory with ecosystem/search filters | read | `read:packages` |
-| `get_package` — one package: versions, SPDX licenses, vulnerability links | read | `read:packages` |
-| `search_packages` — quick name search across the registry | read | `read:packages` |
-| `check_dependencies` — scope the org report to **one project's** dependency list; returns only what affects it, each package annotated with the version to bump to § | read | `read:packages` |
-| `list_vulnerabilities` — paginated **org-wide** report of affected packages (compact by default) | read | `read:packages` |
-| `get_vulnerability` — rich advisory detail incl. remediation guidance | read | `read:packages` |
-| `get_remediation` — fixed versions for up to 200 advisories at once, without the advisory prose | read | `read:packages` |
-| `lookup_package` — pre-adoption verdict on a package **not yet** in the registry (upstream metadata + OSV + org policy, ingests nothing) | read | `read:packages` |
-| `get_license_policy` — enforcement mode + SPDX allowlist/blocklist ("which licenses are approved") | read | `read:packages` |
-| `list_activity` — org activity feed (publishes, yanks, policy changes) | read | `read:audit` |
-| `whoami` — identity behind the configured token | read | `read:tenant` |
-| `yank_version` — destructive delete of a published version | yank | `yank:{ecosystem}` |
-| `siem_list_auth_events` — login/lockout/token/rbac auth events with ISO-8601 since/until + prefix filters | siem | `read:audit` |
-| `siem_vulnerabilities_summary` — severity-bucketed vuln counts by ecosystem | siem | `read:audit` |
-| `import_manifest` — manifest-driven, all-or-nothing bulk import (lockfile + referenced artefacts) | import† | `import:*` + `tenant:configure` (admin-grade token) |
-| `admin_upload` — air-gapped bulk upload of N local artefact files (ecosystem auto-detected) | import† | `import:*` + `tenant:configure` (admin-grade token) |
-| `health_check` — liveness (`GET /health`) | observability | none (anonymous) |
-| `readiness_check` — readiness + per-subsystem checks (`GET /ready`) | observability | none (anonymous) |
-| `get_version` — server build version (`GET /version`) ‡ | observability | none (anonymous / IP-allowlisted) |
-| `get_prometheus_metrics` — raw `/metrics` text ‡ | observability | none (IP-allowlisted server-side) |
-| `get_install_command` — build the install shell command (does **not** execute) | setup | none (local, no server call) |
-| `get_publish_command` — build the publish shell command (does **not** execute) | setup | none (local, no server call) |
-
-‡ **The two loopback probes are opt-out.** `/version` and `/metrics` are IP-allowlisted to the Dependably host itself, so from any other machine they return `403`. Set `DEPENDABLY_TOOLSET=remote` to leave them out (the Claude Desktop extension does); the default `full` keeps them for a client running on the server.
-
-† **The two import tools are opt-in.** They read local files and upload them, so they only appear when `DEPENDABLY_IMPORT_ROOT` is set — and they refuse to read anything that resolves outside that directory (symlinks included). Without it you get the 20-tool surface, which performs no local file reads at all.
-
-§ **`check_dependencies` is the one to reach for** when the question is about a project rather than the whole org. It takes the dependency list as an argument — `packages`, an array of `{name, version, dev}` — and reads no files itself, which keeps the file-read rule to a single sentence: only the two import tools ever touch local files. For an npm `package-lock.json` (v2/v3) the argument is every entry of its `packages` map; read the lockfile with whatever file access you already have and pass the result.
-
-`get_install_command` / `get_publish_command` cover all eight ecosystems (npm, pypi, nuget, maven, rpm, oci, golang, cargo). Go is proxy-only: it has an install command but no hosted publish endpoint, so `get_publish_command` returns guidance to push a VCS tag instead.
-
-### What scope should the token have?
-
-Mint the token with only the capabilities for the tools you intend to use. **The server never needs `publish:*`** — publishing and pulling packages are done by your package manager with its own token. Pick from:
-
-| You want to… | Capability to grant | Unlocks |
-|---|---|---|
-| Browse packages, search, vulnerabilities, licenses *(recommended minimal — read-only)* | `read:packages` | `list_packages`, `get_package`, `search_packages`, `list_vulnerabilities`, `get_vulnerability`, `lookup_package`, `get_license_policy` |
-| Activity feed + audit/vuln posture | `read:audit` | `list_activity`, `siem_list_auth_events`, `siem_vulnerabilities_summary` |
-| Identity check | `read:tenant` | `whoami` |
-| Everything read-only above in one grant | `read:*` *(owner/admin-mintable)* | all read + siem tools |
-| Yank a bad published version | `yank:*` (or per-ecosystem `yank:npm`, …) | `yank_version` |
-| Bulk / air-gapped import | `import:*` **and** `tenant:configure` *(admin-grade)* | `import_manifest`, `admin_upload` |
-| Health / readiness / version / metrics, and the local command builders | *nothing* — anonymous / IP-allowlisted / local | the 6 observability + setup tools |
-
-A **read-only token** (`read:packages`, or `read:*` for full coverage) is the safe default: it drives the developer read surface while carrying no write power — a `yank`/`import` attempt returns a clean `403`, and a tool whose capability the token lacks returns a `403` naming the missing capability. Add `yank:*` or `import:*`+`tenant:configure` only if you need those actions. Since Dependably v0.3.0 **service/CI tokens work too** on read endpoints, provided they carry explicit capabilities.
-
-### Known limits
-
-- **On Dependably servers older than v0.3.0**: the read tools return `401`, service / machine (M2M) tokens `404` on capability-gated endpoints, and in **MFA-required orgs** a token principal may get **`403 mfa_enrollment_required`**. All three are fixed server-side in v0.3.0 — upgrade the instance.
-- Admin **import** (`import_manifest`, `admin_upload`) requires an **admin-grade token** carrying `import:*` and `tenant:configure`; a plain read PAT will be rejected. The tools are also **absent unless `DEPENDABLY_IMPORT_ROOT` is set** (see [Configure](#configure)).
-
-## Roadmap
-
-The core read surface shipped in **0.2.0**. Endpoints that are PAT-reachable server-side but not yet exposed as tools here:
-
-- org stats (`get_org_stats`), full audit log (`list_audit_log`)
-- org posture (`get_org_settings`, `get_proxy_settings`, `get_retention`), quarantine list
-- the client-config `get_setup_snippet` fetch
-- license risk drill-down (`GET /api/v1/risk/license`)
+- **A current version of Node.** The floor is declared in `package.json` under `engines`, and
+  npm refuses to install below it.
+- **A Dependably instance,** and its base URL.
+- **A personal access token**, created in that instance's web UI under Tokens. Choose the
+  **Pull** preset: it is read-only, any member can create it, and it covers package browsing,
+  search, vulnerabilities and licence policy. See
+  [capabilities](docs/tools.md#choosing-capabilities-for-a-token) for what the others add.
 
 ## Install
-
-The package is published to npm as [`dependably-mcp`](https://www.npmjs.com/package/dependably-mcp):
-
-```bash
-npm install -g dependably-mcp
-```
-
-Or skip the install entirely — the MCP client configs below run it with `npx`, which fetches it on first use.
-
-## Configure
-
-The server is configured entirely through environment variables, supplied by your MCP client.
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `DEPENDABLY_BASE_URL` | yes | — | Base URL of your Dependably instance (e.g. `https://dependably.example.com`). Tenancy is resolved from the host — no org slug needed. |
-| `DEPENDABLY_TOKEN` | yes | — | A Dependably **Personal Access Token (PAT)**. Mint one from the web UI under *Tokens*. Sent as a bearer token. Use a **user-owned** PAT (service/M2M tokens currently `404` on gated endpoints). |
-| `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
-| `DEPENDABLY_IMPORT_ROOT` | no | *(unset)* | Opt-in for the two import tools. Set it to the directory holding your artefact files; `import_manifest` / `admin_upload` are only registered when it is set, and refuse to read files outside it. |
-| `DEPENDABLY_TOOLSET` | no | `full` | `remote` drops `get_version` and `get_prometheus_metrics`, which only succeed from the Dependably host itself. Use it for any client that is not running on the server. |
-
-If the instance presents a certificate from a **private CA**, point Node's standard `NODE_EXTRA_CA_CERTS` at the PEM bundle in the environment that launches the server. There is deliberately no switch to disable certificate verification. A connection failure names the setting to check (URL typo, nothing listening, TLS chain) rather than a bare `fetch failed`.
-
-The PAT's **capabilities** determine which tools succeed — see the capability column in [the 22 tools](#the-22-tools).
 
 ### Claude Code
 
@@ -112,7 +30,10 @@ claude mcp add dependably \
   -- npx -y dependably-mcp
 ```
 
-Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
+`npx` fetches the package from npm on first use. To install it once instead, run
+`npm install -g dependably-mcp` and use `dependably-mcp` in place of `npx -y dependably-mcp`.
+
+Or edit `~/.claude.json`, or your project's `.mcp.json`, directly:
 
 ```jsonc
 {
@@ -129,109 +50,64 @@ Or edit `~/.claude.json` (or your project `.mcp.json`) directly:
 }
 ```
 
-(With a global install, `"command": "dependably-mcp"` with no args works too. If you built from source, point `command`/`args` at `node /path/to/dependably-mcp/dist/index.js` instead.)
-
 ### Claude Desktop
 
-Install the extension bundle instead of editing JSON. Download `dependably-<version>.mcpb` from the
-release page (verify it against the `.sha256` beside it), then either double-click it or drag it onto
-**Settings → Extensions** in Claude Desktop. The install dialog asks for your Dependably URL and a
-personal access token; the token is stored in your operating system's keychain, the optional
-import folder enables the two air-gapped import tools scoped to that folder, and the optional
-private-CA bundle covers instances behind an internal certificate authority. The extension runs
-with `DEPENDABLY_TOOLSET=remote`, so it exposes 18 tools: everything except the two probes that
-only work on the Dependably host itself.
+Install the extension bundle rather than editing JSON. Download
+`dependably-<version>.mcpb` from the project's releases and verify it against the `.sha256`
+beside it. Then double-click it, or drag it onto the Extensions pane in Settings.
 
-The listing pack for Anthropic's directory and the pre-submission checklist live in
-[`docs/listing.md`](docs/listing.md); the manual install runbook is [`docs/desktop-e2e.md`](docs/desktop-e2e.md).
+The install dialog asks for your Dependably URL and a personal access token, and stores the
+token in your operating system's keychain. Two optional fields cover the request timeout and a
+private certificate authority bundle.
 
-To build the bundle from source:
+To keep a hand-written config instead, edit
+`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, or the equivalent on
+your OS, using the same shape as the Claude Code example above.
 
-```bash
-npm ci
-npm run bundle:verify    # → dist-mcpb/dependably-<version>.mcpb + .sha256, then boots the server from the unpacked bundle
-```
+## Verify
 
-`manifest.json` at the repo root is the extension manifest. Its tool list is generated from the
-server by `npm run manifest:sync`, and `npm test` fails when it is stale. The bundle is unsigned for
-now; see `docs/distribution-plan.md` for why, and for the plan to list it in Anthropic's directory.
+Restart your MCP client, then ask it to run these three, in order:
 
-If you would rather keep a hand-written config, edit
-`~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or the equivalent on your
-OS with the same shape as the Claude Code example above.
+1. `readiness_check` needs no capability, so it answers as soon as the URL is right and the
+   instance is reachable. It returns `{ status: "ready" | "degraded", checks, errors }`.
+2. `list_packages` is the first call that uses your token. A result here confirms the Pull
+   preset is granted and working.
+3. `whoami` returns the user, org and role behind the token. It comes from the Admin preset, so
+   a `403` here on a Pull token is expected rather than a fault.
 
-## Investigating logs / metrics / incidents
+Then ask a real question, such as *which of our packages have critical vulnerabilities?* Claude
+answers that one with `list_vulnerabilities`.
 
-| Signal | Where to look |
+## Configure
+
+The server reads its whole configuration from environment variables supplied by your MCP client.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `DEPENDABLY_BASE_URL` | yes | | Base URL of your instance, such as `https://dependably.example.com`. Tenancy comes from the host, so no org slug is needed. |
+| `DEPENDABLY_TOKEN` | yes | | A Dependably personal access token, sent as a bearer token. |
+| `DEPENDABLY_TIMEOUT_MS` | no | `30000` | Per-request HTTP timeout. |
+| `NODE_EXTRA_CA_CERTS` | no | unset | Path to a PEM bundle, for an instance behind a private or self-signed certificate. |
+
+Self-hosting on your own network works two ways. Plain `http://` is accepted, so a LAN instance
+needs no certificate at all. For HTTPS with a self-signed or internal CA certificate, point
+`NODE_EXTRA_CA_CERTS` at that PEM and Node trusts it for this process alone. There is deliberately
+no switch to turn verification off outright, because this server carries a token that can read
+your whole registry. A TLS failure names both options and the host it could not verify.
+
+## What it can do
+
+17 tools in 4 groups, every one of them read-only.
+
+| Group | What it covers |
 |---|---|
-| **Liveness / readiness** | `readiness_check` first — it reports per-subsystem degradation (DB, blob store, …). |
-| **Live metrics** | `get_prometheus_metrics` for raw counters (IP-allowlisted server-side). |
-| **Auth incidents** (brute force, lockouts, stolen tokens) | `siem_list_auth_events` filtered to `login.failure`, `login.locked`, `lockout.triggered`, `token.revoked`. |
-| **Vulnerability sprawl** | `siem_vulnerabilities_summary` for an instance-wide, severity-bucketed view. |
+| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, pre-adoption lookups, licence policy, activity feed and identity. |
+| SIEM | Auth events filtered by action and time range, and severity-bucketed vulnerability counts by ecosystem. |
+| Observability | Liveness and readiness, including per-subsystem health. |
+| Setup | Build an install or publish command for npm, PyPI, NuGet, Maven, RPM, OCI, Go or Cargo. |
 
-**What we cannot surface over HTTP** (inherent to Dependably, not omissions in this server):
+The two setup tools return the command as text for you to run, so this server never shells out
+to your package manager. Go modules are published by tagging a release in source, so
+`get_publish_command` returns that guidance for Go rather than a command.
 
-- **Application logs (Serilog)** are written to stdout only. Read them with `docker logs dependably`, your container platform's log aggregator, or by piping stdout to a log sink. There is no HTTP log-query endpoint.
-- **Distributed traces** are exported via OTLP push when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Query them from your tracing backend (Jaeger / Tempo / Datadog / …), not from this MCP server.
-
-## What this server doesn't do
-
-- **No JWT/session login.** PAT-only, on purpose (see [PAT-only, read + ops](#pat-only-read--ops)).
-- **No package install/publish from inside the MCP server.** The setup-helper tools return command strings; the LLM shows them to you and you run them. This keeps the MCP server from shelling out to `npm`/`pip`/`dotnet` with your network and FS access.
-- **No policy-mutation, membership, token, or claim tools** — writes beyond yank/import stay JWT-session-only server-side, and a few reads aren't exposed as tools yet (see [Roadmap](#roadmap)).
-
-## Development
-
-```bash
-git clone https://github.com/dependably/dependably-mcp.git
-cd dependably-mcp
-npm install
-npm run dev   # tsc --watch
-npm run build # tsc once
-npm test      # build + unit tests with coverage + smoke test + manifest freshness check
-npm run test:unit  # just the unit tests; writes coverage/lcov.info, fails below 90% lines / 85% branches
-npm run sbom  # local CycloneDX SBOM (cyclonedx-npm) -> cyclonedx-sbom.json; CI runs this ALONGSIDE sbom-reach's
-              # generate mode and uploads both to Dependency-Track as separate projects for comparison, see .gitlab-ci.yml
-```
-
-> **Note on the lockfile:** we dogfood a private Dependably instance as our npm registry, so the committed `package-lock.json` and `.npmrc` resolve against it. You don't need access to build: every dependency is also on the public registry, so point npm back at it for your clone (`echo 'registry=https://registry.npmjs.org/' > .npmrc` — it's what our public CI does) and install with `npm ci --replace-registry-host=always`. The lockfile's integrity hashes still pin the exact same bytes.
-
-Source layout:
-
-```
-src/
-├── index.ts           # entry: load config, start stdio
-├── config.ts          # env parsing (PAT-only)
-├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
-├── server.ts          # registers the 7 tool modules
-├── format.ts          # tool-result helpers (json/withSummary/err/run)
-└── tools/
-    ├── read.ts         # list/get/search packages, vulns, activity, whoami, license policy, lookup
-    ├── yank.ts         # yank_version
-    ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary
-    ├── import.ts       # import_manifest, admin_upload (opt-in via DEPENDABLY_IMPORT_ROOT)
-    ├── vuln.ts         # check_dependencies, get_remediation (no local file reads)
-    ├── observability.ts# health_check, readiness_check, get_version, get_prometheus_metrics
-    └── setup.ts        # get_install_command, get_publish_command
-
-test/                  # node:test unit tests, run against dist/ with source maps
-├── semver.test.mjs    # version ordering (what bumpTo depends on)
-├── vuln.test.mjs      # report paging, scoping, findings, lockfile parsing
-├── client.test.mjs    # url building and the full error-message surface
-├── config.test.mjs    # env validation
-└── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
-```
-
-### Coverage
-
-`npm run test:unit` uses Node's built-in test runner and V8 coverage — no c8, no nyc, no
-extra dependencies. `--enable-source-maps` is load-bearing: without it V8 reports coverage
-against `dist/*.js`, which `sonar.sources=src` excludes, and SonarQube reads the project as
-0% covered. CI publishes `coverage/lcov.info` from the `test` job and `sonarqube-check`
-consumes it via `needs:`.
-
-Adding a tool: import `server` and `client`, call `server.registerTool(name, config, handler)`. Wrap the handler body in the `run()` helper from `format.ts` so HTTP errors become readable text. Keep the surface PAT-reachable — do not add JWT-only or `scope=system` endpoints.
-
-## License
-
-Apache-2.0.
+[docs/tools.md](docs/tools.md) has every tool, what it does, and the capability it needs.

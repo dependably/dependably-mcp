@@ -11,7 +11,7 @@ import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
 import { json, err, withSummary, run } from '../dist/format.js';
 
-const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000, toolset: 'full' };
+const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -317,14 +317,7 @@ describe('get_remediation', () => {
   });
 });
 
-describe('yank, siem and observability tools', () => {
-  it('yank_version deletes the encoded version path and summarizes', async () => {
-    const calls = stubFetch();
-    const res = await call(base, 'yank_version', { ecosystem: 'npm', name: '@scope/p', version: '1.0.0' });
-    strictEqual(calls[0].method, 'DELETE');
-    ok(calls[0].url.includes('/api/v1/packages/npm/%40scope%2Fp/1.0.0'));
-    ok(res.content[0].text.startsWith('Yanked npm/@scope/p@1.0.0.'));
-  });
+describe('siem and observability tools', () => {
 
   it('siem tools hit their endpoints and repeat array filters', async () => {
     const calls = stubFetch();
@@ -347,15 +340,9 @@ describe('yank, siem and observability tools', () => {
     deepStrictEqual(calls.map((c) => new URL(c.url).pathname), ['/health', '/ready']);
   });
 
-  it('loopback probes are present in full and absent in remote', async () => {
-    const calls = stubFetch(() => '# HELP x');
-    await call(base, 'get_version');
-    const metrics = await call(base, 'get_prometheus_metrics');
-    deepStrictEqual(calls.map((c) => new URL(c.url).pathname), ['/version', '/metrics']);
-    strictEqual(metrics.content[0].text, '# HELP x');
-
-    const remote = await withServer({ ...base, toolset: 'remote' }, (c) => c.listTools());
-    const names = remote.tools.map((t) => t.name);
+  it('does not expose the host-allowlisted /version and /metrics probes', async () => {
+    const { tools } = await withServer(base, (c) => c.listTools());
+    const names = tools.map((t) => t.name);
     ok(!names.includes('get_version'));
     ok(!names.includes('get_prometheus_metrics'));
   });
@@ -392,42 +379,10 @@ describe('setup tools', () => {
   });
 });
 
-describe('import tools', () => {
-  it('are absent unless an import root is configured', async () => {
+describe('local file surface', () => {
+  it('registers no tool that reads local files', async () => {
     const names = (await withServer(base, (c) => c.listTools())).tools.map((t) => t.name);
     ok(!names.includes('admin_upload'));
     ok(!names.includes('import_manifest'));
-  });
-
-  it('appear once an import root is set', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-imp-'));
-    const names = (await withServer({ ...base, importRoot: dir }, (c) => c.listTools())).tools.map((t) => t.name);
-    ok(names.includes('admin_upload'));
-    ok(names.includes('import_manifest'));
-  });
-
-  it('refuse a path outside the root, naming the setting', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-imp-'));
-    const res = await call({ ...base, importRoot: dir }, 'admin_upload', { files: ['/etc/hosts'] });
-    strictEqual(res.isError, true);
-    ok(res.content[0].text.includes('DEPENDABLY_IMPORT_ROOT'));
-  });
-
-  it('report a missing file as not found', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-imp-'));
-    const res = await call({ ...base, importRoot: dir }, 'admin_upload', { files: [join(dir, 'nope.tgz')] });
-    strictEqual(res.isError, true);
-    ok(res.content[0].text.includes('File not found'));
-  });
-
-  it('upload a file that lives inside the root', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'dep-imp-'));
-    const file = join(dir, 'pkg.tgz');
-    writeFileSync(file, 'artefact-bytes');
-    const calls = stubFetch(() => ({ accepted: 1 }));
-    const res = await call({ ...base, importRoot: dir }, 'admin_upload', { files: [file], dryRun: true });
-    ok(!res.isError, res.content[0].text);
-    strictEqual(calls[0].method, 'POST');
-    ok(calls[0].url.includes('/api/v1/admin/upload'));
   });
 });
