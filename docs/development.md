@@ -61,7 +61,7 @@ test/                  # node:test unit tests, run against dist/ with source map
 ```
 
 Five modules register tools, grouped into the four groups shown in [tools.md](tools.md):
-`vuln.ts` holds two tools that belong to the read group.
+`vuln.ts` holds four tools that belong to the read group.
 
 ## Adding a tool
 
