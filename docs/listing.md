@@ -13,21 +13,21 @@ literals keep their exact spelling.
 |---|---|
 | Name | Dependably |
 | Publisher | Moonlit Labs (author of record: Michael Hiland) — confirm before the first submission; the slug `dependably` is permanent |
-| Tagline (55 characters max) | `Ask Claude about your self-hosted package registry` (50) |
+| Tagline (55 characters max) | `Ask Claude about your Dependably package registry` (49) |
 | Categories (one to five) | Developer Tools; Security; IT Operations — map to the nearest names the form offers |
 | Icon | `assets/icon.png` (512 × 512, light) and `assets/icon-dark.png` (dark) |
 | Bundle | `dist-mcpb/dependably-<version>.mcpb` from the tagged release, with `.sha256` |
 | Privacy policy | <https://dependably.ca/privacy> (live) |
 | Support | <https://dependably.ca/contact> (live) and `support@dependably.ca` (monitored) |
 | Documentation | <https://github.com/dependably/dependably-mcp#readme> (see checklist: mirror not yet public) |
-| Source | <https://github.com/dependably/dependably-mcp> (Apache-2.0) |
+| Source | <https://github.com/dependably/dependably-mcp> (MIT) |
 | Platforms tested | macOS (this Mac, Claude Desktop 1.49585.0); Windows pending (see checklist) |
 
 ### Description (2000 characters max)
 
-> Dependably is a self-hosted private artefact repository and pull-through proxy for npm, PyPI,
-> NuGet, Maven, RPM, OCI, Go and Cargo. This extension connects Claude to your own Dependably
-> instance using a personal access token you create in Dependably.
+> Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven,
+> RPM, OCI, Go and Cargo, self-hosted or as a hosted SaaS instance. This extension connects Claude
+> to your own Dependably instance using a personal access token you create in Dependably.
 >
 > With it, Claude can list and search your packages, explain a vulnerability and its remediation,
 > check a package against your licence policy before you adopt it, review the org activity feed
@@ -43,7 +43,7 @@ literals keep their exact spelling.
 > Requires Dependably v0.3.0 or later and a token with `read:packages` (add `read:audit` for the
 > activity and authentication tools, `read:tenant` for `whoami`).
 
-That is 1,123 characters, matching `long_description` in `manifest.json` plus the last two
+That is 1,146 characters, matching `long_description` in `manifest.json` plus the last two
 paragraphs. Keep the two in step.
 
 ## 2. Example prompts

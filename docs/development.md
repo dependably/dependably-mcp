@@ -25,16 +25,19 @@ Dependency-Track as separate projects, so the two generators can be compared. Se
 ## A note on the lockfile
 
 We dogfood a private Dependably instance as our npm registry, so the committed
-`package-lock.json` and `.npmrc` resolve against it. You do not need access to build. Every
+`package-lock.json` and `.npmrc` resolve against it, at Dependably's own pull-through tarball
+path rather than the npm registry protocol's shape. You do not need access to build. Every
 dependency is also on the public registry, so point npm back at it for your clone and install
 from there:
 
 ```bash
 echo 'registry=https://registry.npmjs.org/' > .npmrc
-npm ci --replace-registry-host=always
+node scripts/public-lockfile.mjs
+npm ci
 ```
 
-That is what our public CI does. The lockfile's integrity hashes still pin the same bytes.
+That is what our public CI does. `public-lockfile.mjs` rewrites `resolved` to the public
+registry's URL shape; the lockfile's integrity hashes still pin the same bytes.
 
 ## Source layout
 

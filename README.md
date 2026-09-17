@@ -5,9 +5,9 @@ Model Context Protocol query your [Dependably](https://github.com/dependably/dep
 instance: package inventory, vulnerability reports, licence policy, audit events and incident
 triage.
 
-Dependably is a self-hosted private artefact repository. This server is read-only and runs over
-stdio through a single personal access token: no tool writes to your instance or your filesystem,
-and none of them runs a command.
+Dependably is a private artefact repository, self-hosted or as a hosted SaaS instance. This server
+is read-only and runs over stdio through a single personal access token: no tool writes to your
+instance or your filesystem, and none of them runs a command.
 
 ## Requirements
 
@@ -111,3 +111,16 @@ to your package manager. Go modules are published by tagging a release in source
 `get_publish_command` returns that guidance for Go rather than a command.
 
 [docs/tools.md](docs/tools.md) has every tool, what it does, and the capability it needs.
+
+## Privacy Policy
+
+This server makes no network calls of its own beyond the Dependably instance you configure, using
+the personal access token you provide; it has no other outbound destination, so tool results reach
+Anthropic only as Claude's own response to your prompt, under Anthropic's policies. No telemetry,
+analytics, or usage data is collected or transmitted. Your token is held in memory for the life of
+the process and is never written to disk, logged, or cached by this server; when run as a Claude
+Desktop extension, the token is instead stored in your operating system's keychain, managed by
+Claude Desktop.
+
+The full policy is published at <https://dependably.ca/privacy>. Contact
+[support@dependably.ca](mailto:support@dependably.ca) with questions.

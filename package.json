@@ -1,7 +1,7 @@
 {
   "name": "dependably-mcp",
   "version": "0.2.0",
-  "description": "MCP server for the Dependably self-hosted artifact repository (npm/PyPI/NuGet/Maven/RPM/OCI/Go/Cargo).",
+  "description": "MCP server for the Dependably artifact repository, self-hosted or SaaS (npm/PyPI/NuGet/Maven/RPM/OCI/Go/Cargo).",
   "keywords": [
     "mcp",
     "model-context-protocol",
@@ -64,5 +64,5 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "license": "Apache-2.0"
+  "license": "MIT"
 }
