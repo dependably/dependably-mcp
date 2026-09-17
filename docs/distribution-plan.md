@@ -44,8 +44,9 @@ documentation.
 
 **Dependably**
 
-- Self-hosted only; no SaaS URL. Tenancy is resolved from the Host header, so a client needs exactly
-  one thing per user: a base URL.
+- Self-hosted or hosted SaaS (e.g. `dependably.ca`) — corrected 2026-09-16, this doc previously said
+  "self-hosted only". Both deployment modes resolve tenancy from the Host header and use the same
+  auth, so a client needs exactly one thing per user regardless of mode: a base URL.
 - Not an OAuth provider. Auth is a 44-character opaque personal access token as
   `Authorization: Bearer`, plus SAML for browser SSO. This rules out Anthropic's remote-connector
   path without server-side work; see Appendix A.
@@ -217,5 +218,8 @@ support, refresh-token rotation, `aud` bound to the instance URL); a 401 with
 `WWW-Authenticate: Bearer resource_metadata=…` on unauthenticated calls; discovery, registration and
 token endpoints answering within 10 s. On Anthropic's side it would need the `custom_connection`
 auth type (enabled per partner on request) and a Team or Enterprise org to submit through the
-portal. A hosted middleman that holds users' tokens behind OAuth was considered and rejected: it
-moves customer registry credentials off-premises and contradicts the self-hosted positioning.
+portal. A hosted middleman — anything other than Dependably itself sitting between the user and
+their instance, holding tokens behind OAuth — was considered and rejected: it moves customer
+registry credentials into a third party's hands. That reasoning holds regardless of self-hosted vs.
+SaaS: the SaaS instance is not an OAuth provider either, so a remote listing needs the OAuth 2.1
+work above built into `dependably-community` itself, not routed around it.

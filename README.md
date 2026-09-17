@@ -5,9 +5,9 @@ Model Context Protocol query your [Dependably](https://github.com/dependably/dep
 instance: package inventory, vulnerability reports, licence policy, audit events and incident
 triage.
 
-Dependably is a self-hosted private artefact repository. This server is read-only and runs over
-stdio through a single personal access token: no tool writes to your instance or your filesystem,
-and none of them runs a command.
+Dependably is a private artefact repository, self-hosted or as a hosted SaaS instance. This server
+is read-only and runs over stdio through a single personal access token: no tool writes to your
+instance or your filesystem, and none of them runs a command.
 
 ## Requirements
 

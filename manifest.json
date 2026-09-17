@@ -3,8 +3,8 @@
   "name": "dependably",
   "display_name": "Dependably",
   "version": "0.2.0",
-  "description": "Ask Claude about the packages, vulnerabilities, licences and audit trail in your self-hosted Dependably registry.",
-  "long_description": "Dependably is a self-hosted private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Every tool is read-only, so nothing the extension offers can change or delete anything in your registry.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
+  "description": "Ask Claude about the packages, vulnerabilities, licences and audit trail in your Dependably registry.",
+  "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo, self-hosted or as a hosted SaaS instance. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Every tool is read-only, so nothing the extension offers can change or delete anything in your registry.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
   "author": {
     "name": "Michael Hiland",
     "url": "https://dependably.ca"
