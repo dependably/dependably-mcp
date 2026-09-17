@@ -97,11 +97,11 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-17 tools in 4 groups, every one of them read-only.
+19 tools in 4 groups, every one of them read-only.
 
 | Group | What it covers |
 |---|---|
-| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, pre-adoption lookups, licence policy, activity feed and identity. |
+| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, curated remediation skills, pre-adoption lookups, licence policy, activity feed and identity. |
 | SIEM | Auth events filtered by action and time range, and severity-bucketed vulnerability counts by ecosystem. |
 | Observability | Liveness and readiness, including per-subsystem health. |
 | Setup | Build an install or publish command for npm, PyPI, NuGet, Maven, RPM, OCI, Go or Cargo. |

@@ -317,6 +317,42 @@ describe('get_remediation', () => {
   });
 });
 
+describe('list_remediation_skills', () => {
+  it('returns the catalog as-is', async () => {
+    const calls = stubFetch(() => [{ id: 'fix-xss', name: 'Fix XSS', description: 'Neutralize XSS.' }]);
+    const body = payload(await call(base, 'list_remediation_skills', {}));
+    deepStrictEqual(body, [{ id: 'fix-xss', name: 'Fix XSS', description: 'Neutralize XSS.' }]);
+    strictEqual(new URL(calls[0].url).pathname, '/api/v1/remediation/skills');
+  });
+});
+
+describe('get_remediation_skill', () => {
+  it('fetches markdown content for several skill ids', async () => {
+    const calls = stubFetch((url) => `# ${new URL(url).pathname.split('/').pop()}\n\nHow to fix it.`);
+    const body = payload(
+      await call(base, 'get_remediation_skill', { skillIds: ['fix-xss', 'fix-ssrf'] }),
+    );
+    strictEqual(body.skills.length, 2);
+    ok(body.skills.find((s) => s.skillId === 'fix-xss').content.startsWith('# fix-xss'));
+    ok(body.skills.find((s) => s.skillId === 'fix-ssrf').content.startsWith('# fix-ssrf'));
+    ok(calls.every((c) => c.url.startsWith('https://dep.example.com/api/v1/remediation/skills/')));
+  });
+
+  it('reports a per-id failure without sinking the batch', async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('unknown-skill')) {
+        return new Response('{"detail":"not found"}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('# fix-xss', { status: 200, headers: { 'content-type': 'text/markdown' } });
+    };
+    const body = payload(
+      await call(base, 'get_remediation_skill', { skillIds: ['unknown-skill', 'fix-xss'] }),
+    );
+    ok(body.skills.find((s) => s.skillId === 'unknown-skill').error.includes('404'));
+    strictEqual(body.skills.find((s) => s.skillId === 'fix-xss').content, '# fix-xss');
+  });
+});
+
 describe('siem and observability tools', () => {
 
   it('siem tools hit their endpoints and repeat array filters', async () => {

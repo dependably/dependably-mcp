@@ -3,7 +3,7 @@
 Every tool this server registers, the group it belongs to, and the capability your token needs
 to call it. The [README](../README.md) covers install, configuration and troubleshooting.
 
-17 tools in four groups. Every one is read-only, and none of them reads a local file.
+19 tools in four groups. Every one is read-only, and none of them reads a local file.
 
 ## Read
 
@@ -22,6 +22,8 @@ Package inventory, vulnerabilities, licence policy and identity.
 | `get_license_policy` | Enforcement mode plus the SPDX allowlist and blocklist, so you can see which licences are approved. | `read:packages` |
 | `list_activity` | Org activity feed: publishes, yanks, policy changes. | `read:audit` |
 | `whoami` | The identity behind the configured token. | `read:tenant` |
+| `list_remediation_skills` | Index of every curated remediation skill the instance ships — one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). | none, anonymous |
+| `get_remediation_skill` | Full how-to-fix guide for one or more skill ids, as markdown. Ids come from `list_remediation_skills` or from the `skills` field `get_remediation`/`check_dependencies` return. | none, anonymous |
 
 ### Passing a dependency list to `check_dependencies`
 
@@ -88,7 +90,8 @@ A token never carries more than the role of the person who minted it. A member's
 the read leaves above, so Audit and Admin tokens come from an admin or owner. Ask whoever
 administers your instance if you need one, rather than looking for a checkbox that is not there.
 
-The 4 observability and setup tools need no token at all.
+The 4 observability and setup tools need no token at all, and neither do the 2 remediation-skill
+tools — they serve static, curated content that is identical for every tenant.
 
 This server never needs `publish:*` or `yank:*`. It reads; publishing and pulling packages are
 done by your package manager with its own token.

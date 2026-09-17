@@ -71,6 +71,10 @@
       "description": "Fixed version (plus CWE / OWASP / remediation-skill ids) for one or more advisories, without the full advisory prose. Pass the installed version alongside each id to get the fix for that release line — for @hono/node-server 1.19.14 that is 1.19.15, not the 2.x fix. Use get_vulnerability instead when you need the write-up, PoC, or workarounds. Requires read:packages capability."
     },
     {
+      "name": "get_remediation_skill",
+      "description": "Full how-to-fix guide for one or more curated remediation skills, as markdown (GET /api/v1/remediation/skills/{skillId}). Skill ids come from list_remediation_skills, or from the `skills` field get_remediation and check_dependencies return with includeAdvisoryDetail. Anonymous — no capability required."
+    },
+    {
       "name": "get_vulnerability",
       "description": "Rich detail for one advisory affecting the registry (GET /api/v1/vulnerabilities/{osvId}). 404 if the advisory does not touch any package in your org. Requires read:packages capability."
     },
@@ -85,6 +89,10 @@
     {
       "name": "list_packages",
       "description": "List packages in the registry, paginated (GET /api/v1/packages). Returns { items, total, limit, offset }. Requires read:packages capability."
+    },
+    {
+      "name": "list_remediation_skills",
+      "description": "Index of every curated remediation skill this instance ships (GET /api/v1/remediation/skills): id, name and description, one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). Pass an id to get_remediation_skill for the full how-to-fix guide. Anonymous — no capability required."
     },
     {
       "name": "list_vulnerabilities",

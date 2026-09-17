@@ -121,6 +121,39 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
         json({ advisories: await mapLimit(args.advisories, 8, (a) => resolveRemediation(client, a)) }),
       ),
   );
+
+  server.registerTool(
+    'list_remediation_skills',
+    {
+      title: 'List remediation skills',
+      description:
+        'Index of every curated remediation skill this instance ships (GET /api/v1/remediation/skills): id, name and description, one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). Pass an id to get_remediation_skill for the full how-to-fix guide. Anonymous — no capability required.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {},
+    },
+    async () => run(async () => json(await client.get('/api/v1/remediation/skills'))),
+  );
+
+  server.registerTool(
+    'get_remediation_skill',
+    {
+      title: 'Get remediation skill',
+      description:
+        'Full how-to-fix guide for one or more curated remediation skills, as markdown (GET /api/v1/remediation/skills/{skillId}). Skill ids come from list_remediation_skills, or from the `skills` field get_remediation and check_dependencies return with includeAdvisoryDetail. Anonymous — no capability required.',
+      annotations: READ_ANNOTATIONS,
+      inputSchema: {
+        skillIds: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(25)
+          .describe('Remediation skill ids to fetch, e.g. "fix-vulnerable-dependency" or "fix-xss".'),
+      },
+    },
+    async (args) =>
+      run(async () =>
+        json({ skills: await mapLimit(args.skillIds, 8, (id) => resolveSkill(client, id)) }),
+      ),
+  );
 }
 
 /** Drop the CWE/OWASP/skill detail callers did not ask for. */
@@ -159,5 +192,18 @@ async function resolveRemediation(
     };
   } catch (e) {
     return { osvId: advisory.osvId, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * One skill's markdown, or a per-id error. A failed lookup is reported in
+ * place rather than thrown, so one bad id cannot sink the batch.
+ */
+async function resolveSkill(client: DependablyClient, skillId: string): Promise<Record<string, unknown>> {
+  try {
+    const content = await client.get(`/api/v1/remediation/skills/${encodeURIComponent(skillId)}`);
+    return { skillId, content };
+  } catch (e) {
+    return { skillId, error: e instanceof Error ? e.message : String(e) };
   }
 }
