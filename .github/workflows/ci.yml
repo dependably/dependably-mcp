@@ -9,10 +9,13 @@
 #   * .npmrc maps the @dependably scope through ${DEPENDABLY_TOKEN}; npm hard-
 #     fails on an unset env reference, so the job overwrites the file with a
 #     plain public-registry config before any npm command runs.
-#   * package-lock.json's `resolved` URLs point at the private host. `npm ci
-#     --replace-registry-host=always` swaps that host for the configured public
-#     registry, and the lockfile's sha512 integrity hashes still pin the exact
-#     bytes — a discrepancy between the two registries fails loudly.
+#   * package-lock.json's `resolved` URLs point at Dependably's own pull-through
+#     tarball path (`/npm/tarballs/<pkg>/<file>.tgz`), not the npm registry
+#     protocol's `<registry>/<pkg>/-/<file>.tgz` shape — so `npm ci
+#     --replace-registry-host`, which only swaps the host, 404s. scripts/
+#     public-lockfile.mjs rewrites resolved to the public shape instead; the
+#     lockfile's sha512 integrity hashes still pin the exact bytes, so a
+#     discrepancy between the two registries fails loudly.
 #
 # Publishing needs an `NPM_TOKEN` repository secret (npm automation token).
 # `--provenance` links the package to this workflow run via OIDC (id-token:
@@ -45,7 +48,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --replace-registry-host=always
+      - run: node scripts/public-lockfile.mjs
+      - run: npm ci
       - run: npm test
 
   # Dogfood our own supply-chain checker against the lockfile, same as the
@@ -81,7 +85,8 @@ jobs:
           cache: npm
           # Writes an auth-enabled user-level npmrc wired to NODE_AUTH_TOKEN.
           registry-url: https://registry.npmjs.org
-      - run: npm ci --replace-registry-host=always
+      - run: node scripts/public-lockfile.mjs
+      - run: npm ci
       - name: Tag must match package.json version
         run: |
           PKG=$(node -p "require('./package.json').version")
@@ -125,7 +130,8 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci --replace-registry-host=always
+      - run: node scripts/public-lockfile.mjs
+      - run: npm ci
       - run: npm run build
       # Validates the manifest, packs, writes the .sha256, then boots the server
       # from the unpacked bundle.

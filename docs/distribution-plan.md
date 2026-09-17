@@ -202,9 +202,9 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
    instance with a scoped read-only token is the cleanest answer and also serves marketing.
 3. **Community tier.** MCPB listings may stay in the Community tier. Accepted; org-scoped installs
    by Team and Enterprise admins do not depend on the tier.
-4. **Open-source clause.** One Anthropic page says MCPB listings must be open source; the terms
-   article does not. Apache-2.0 makes this moot, but confirm with `mcp-review@anthropic.com` before
-   any licence change.
+4. **Open-source clause.** Resolved: relicensed from Apache-2.0 to MIT, which is on Anthropic's
+   required-license list for the submission form; the open-source-clause question is moot either
+   way.
 5. **Publisher identity and slug.** Permanent; decide before the first submission.
 6. **Capability guidance.** The config dialog cannot validate token capabilities, so `whoami`
    should report which tools this token reaches.

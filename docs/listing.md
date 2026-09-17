@@ -20,7 +20,7 @@ literals keep their exact spelling.
 | Privacy policy | <https://dependably.ca/privacy> (live) |
 | Support | <https://dependably.ca/contact> (live) and `support@dependably.ca` (monitored) |
 | Documentation | <https://github.com/dependably/dependably-mcp#readme> (see checklist: mirror not yet public) |
-| Source | <https://github.com/dependably/dependably-mcp> (Apache-2.0) |
+| Source | <https://github.com/dependably/dependably-mcp> (MIT) |
 | Platforms tested | macOS (this Mac, Claude Desktop 1.49585.0); Windows pending (see checklist) |
 
 ### Description (2000 characters max)
