@@ -12,8 +12,8 @@ Record the outcome in `docs/listing.md` §6.
 - Claude Desktop 0.10 or later. Note the version (Claude → About).
 - A reachable Dependably instance at v0.3.0 or later. Locally that is the `dependably-community`
   compose stack at `http://demo.localhost:8080`; check `curl -s http://demo.localhost:8080/health`.
-- A personal access token minted in that instance's UI under Tokens with `read:packages` and
-  `read:audit`, which covers every tool the server registers.
+- A personal access token minted in that instance's UI under Tokens with `read:packages` — the
+  Pull preset — which covers every tool the server registers.
 - The bundle for the version under test:
 
   ```bash
@@ -28,11 +28,11 @@ Record the outcome in `docs/listing.md` §6.
    description and the config dialog. No terminal, no JSON editing.
 
 2. **Configure with the dialog only.** Fill in the URL and token. Leave the timeout at its
-   default, and leave the CA bundle empty. Expected: the extension turns on and 18 tools appear
+   default, and leave the CA bundle empty. Expected: the extension turns on and 15 tools appear
    under the Dependably entry in the tools list.
 
 3. **Blank optional fields are really unset.** Ask: "Which Dependably tools do you have?"
-   Expected: 18 tools and no error. If the server fails to start, the host may have substituted
+   Expected: 15 tools and no error. If the server fails to start, the host may have substituted
    something other than an empty string for the blank CA bundle; capture the value from the
    server's stderr (Settings → Extensions → Dependably → logs) and open an issue.
 

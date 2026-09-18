@@ -3,7 +3,8 @@
 Every tool this server registers, the group it belongs to, and the capability your token needs
 to call it. The [README](../README.md) covers install, configuration and troubleshooting.
 
-18 tools in four groups. Every one is read-only, and none of them reads a local file.
+15 tools in three groups. Every one is read-only, none reads a local file, and every one is
+reachable with a **Pull** token — the preset any member can mint.
 
 ## Read
 
@@ -20,15 +21,14 @@ Package inventory, vulnerabilities and licence policy.
 | `get_remediation` | Fixed versions for up to 200 advisories at once, without the advisory prose. | `read:packages` |
 | `lookup_package` | Pre-adoption verdict on a package that is not in the registry: upstream metadata, OSV and org policy. Ingests nothing. Takes a narrower ecosystem set than the tools above — see below. | `read:packages` |
 | `get_license_policy` | Enforcement mode plus the SPDX allowlist and blocklist, so you can see which licences are approved. | `read:packages` |
-| `list_activity` | Org activity feed: publishes, yanks, policy changes. | `read:audit` |
 | `list_remediation_skills` | Index of every curated remediation skill the instance ships — one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). | none, anonymous |
 | `get_remediation_skill` | Full how-to-fix guide for one or more skill ids, as markdown. Ids come from `list_remediation_skills` or from the `skills` field `get_remediation`/`check_dependencies` return. | none, anonymous |
 
 ### Ecosystems, and why the sets differ
 
-The registry tools — `list_packages`, `get_package`, `list_vulnerabilities`,
-`check_dependencies` and `siem_vulnerabilities_summary` — take **npm, pypi, nuget, maven, rpm,
-oci, golang, cargo, apk, terraform, hex**: everything the registry plane serves.
+The registry tools — `list_packages`, `get_package`, `list_vulnerabilities` and
+`check_dependencies` — take **npm, pypi, nuget, maven, rpm, oci, golang, cargo, apk, terraform,
+hex**: everything the registry plane serves.
 
 `lookup_package` takes a narrower set — **npm, pypi, nuget, maven, golang, cargo, hex**. A
 pre-adoption verdict has to resolve the candidate against an upstream, and rpm, oci, apk and
@@ -47,13 +47,6 @@ files itself. For an npm `package-lock.json` (v2 or v3) the argument is every en
 
 A `lockfileVersion` 1 lockfile has no `packages` map and is refused with a message naming the
 fix. Run `npm install` with npm 7 or later to upgrade it, or build the list yourself.
-
-## SIEM
-
-| Tool | What it does | Capability |
-|---|---|---|
-| `siem_list_auth_events` | Login, lockout, token and RBAC auth events, with ISO-8601 since/until bounds and action-prefix filters. | `read:audit` |
-| `siem_vulnerabilities_summary` | Severity-bucketed vulnerability counts by ecosystem. | `read:audit` |
 
 ## Observability
 
@@ -98,24 +91,20 @@ guidance for Go rather than a command.
 
 ## Choosing capabilities for a token
 
-The Tokens screen offers presets rather than raw capability strings. Two of them matter here:
+One preset covers the whole server: **Pull** (`read:metadata`, `read:artifact`,
+`read:packages`). Any member can mint it, including one with no admin rights.
 
-| Preset | Capabilities it mints | Tools it covers | Who can mint it |
-|---|---|---|---|
-| Pull | `read:metadata`, `read:artifact`, `read:packages` | The 9 `read:packages` tools above | Anyone, including a member |
-| Audit | `read:audit` | `list_activity`, `siem_list_auth_events`, `siem_vulnerabilities_summary` | An admin or owner |
-
-**Pull is the one to start with.** It is read-only, any member can create it, and it drives the
-whole developer read surface: inventory, search, package detail, vulnerability reports,
-remediation versions, pre-adoption lookups and licence policy.
-
-No tool here needs the Admin preset. A token never carries more than the role of the person who
-minted it, and a member's role tops out at the read leaves above, so an Audit token has to come
-from an admin or owner. Ask whoever administers your instance if you need one, rather than
-looking for a checkbox that is not there.
+That is the point of the surface being this size. A token never carries more than the role of the
+person who minted it, so anything needing `read:audit` or `read:tenant` has to be issued by an
+admin or owner — which turns "install the extension" into a request to somebody else. Every tool
+here stays inside what a developer can grant themselves.
 
 The 4 observability and setup tools need no token at all, and neither do the 2 remediation-skill
 tools — they serve static, curated content that is identical for every tenant.
+
+The audit surface (the org activity feed, auth events, SIEM vulnerability counts) is deliberately
+**not** here. Those endpoints exist on the instance and are reachable with an Audit token; read
+them in the web UI, or with your own client.
 
 This server never needs `publish:*` or `yank:*`. It reads; publishing and pulling packages are
 done by your package manager with its own token.

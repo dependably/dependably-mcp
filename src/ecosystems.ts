@@ -16,8 +16,8 @@
  */
 
 /**
- * Ecosystems the registry plane serves — inventory, vulnerability reports and the
- * SIEM summary (`/api/v1/packages`, `/vuln-report`, `/siem/vulnerabilities/summary`).
+ * Ecosystems the registry plane serves — inventory and vulnerability reports
+ * (`/api/v1/packages`, `/vuln-report`).
  */
 export const REGISTRY_ECOSYSTEMS = [
   'npm',

@@ -62,15 +62,12 @@ const CORE_TOOLS = [
   'get_remediation_skill',
   'get_vulnerability',
   'health_check',
-  'list_activity',
   'list_packages',
   'list_remediation_skills',
   'list_vulnerabilities',
   'lookup_package',
   'readiness_check',
   'search_packages',
-  'siem_list_auth_events',
-  'siem_vulnerabilities_summary',
 ].sort();
 
 deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');

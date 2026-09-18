@@ -49,8 +49,7 @@ src/
 ├── server.ts          # registers the 5 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
 └── tools/
-    ├── read.ts         # list/get/search packages, vulns, activity, licence policy, lookup
-    ├── siem.ts         # siem_list_auth_events, siem_vulnerabilities_summary
+    ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
     ├── vuln.ts         # check_dependencies, get_remediation
     ├── observability.ts# health_check, readiness_check
     └── setup.ts        # get_install_command, get_publish_command
