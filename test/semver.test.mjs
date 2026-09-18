@@ -91,3 +91,71 @@ describe('maxVersion', () => {
     deepStrictEqual(maxVersion(versions), maxVersion([...versions].reverse()));
   });
 });
+
+describe('PEP 440 pre/post tails', () => {
+  // Python spells a prerelease without semver's hyphen. Splitting only on "-"
+  // left the marker glued to the last release segment, where "0rc1" compared
+  // lexically ABOVE "0" — so 2.0.0rc1 sorted after 2.0.0, and a project pinned
+  // to an RC was told the advisory needed no bump.
+  for (const [lower, higher] of [
+    ['2.0.0rc1', '2.0.0'],
+    ['1.0a1', '1.0'],
+    ['1.0b2', '1.0'],
+    ['1.0rc1', '1.0'],
+    ['1.0alpha1', '1.0'],
+    ['1.0beta1', '1.0'],
+    ['1.0.dev1', '1.0'],
+    ['1.0_pre1', '1.0'],
+  ]) {
+    it(`${lower} sorts below ${higher}`, () => {
+      ok(compare(lower, higher) < 0, `${lower} < ${higher}`);
+      ok(compare(higher, lower) > 0, 'and the reverse');
+    });
+  }
+
+  it('sorts a post-release above its release', () => {
+    ok(compare('1.0.post1', '1.0') > 0);
+    ok(compare('1.0post1', '1.0') > 0);
+    ok(compare('1.0', '1.0.post1') < 0);
+    ok(compare('1.0.post1', '1.0.post2') < 0);
+  });
+
+  it('orders the phases dev < pre < release < post', () => {
+    const ordered = ['1.0.dev1', '1.0a1', '1.0b1', '1.0rc1', '1.0', '1.0.post1'];
+    for (let i = 0; i < ordered.length - 1; i++) {
+      ok(compare(ordered[i], ordered[i + 1]) < 0, `${ordered[i]} < ${ordered[i + 1]}`);
+    }
+    deepStrictEqual(maxVersion(ordered), '1.0.post1');
+  });
+
+  it('does not treat a dev release as later than a real patch', () => {
+    ok(compare('1.0.dev1', '1.0.1') < 0);
+  });
+
+  it('accepts a marker with no number', () => {
+    ok(compare('1.0rc', '1.0') < 0);
+    ok(compare('1.0rc', '1.0rc1') < 0);
+  });
+
+  it('leaves a plain release alone when it merely ends in a marker letter', () => {
+    // The tail only splits when a digit precedes the marker, so these stay releases.
+    strictEqual(compare('1.0.0', '1.0.0'), 0);
+    ok(compare('1.0.0', '1.0.1') < 0);
+  });
+
+  it('keeps gte false for a prerelease below its ceiling', () => {
+    // This is the bug's real consequence: bumpTarget returns null once
+    // gte(installed, ceiling) is true, so a wrong gte silently drops the finding.
+    ok(!gte('2.0.0rc1', '2.0.0'), 'an RC has not reached its release');
+    ok(gte('2.0.0', '2.0.0'));
+    ok(gte('2.0.0.post1', '2.0.0'));
+  });
+
+  it('does not disturb the semver spellings', () => {
+    ok(compare('1.2.3-rc.1', '1.2.3') < 0);
+    ok(compare('1.0.0-beta1', '1.0.0') < 0);
+    strictEqual(compare('1.2.3+build', '1.2.3'), 0);
+    strictEqual(compare('1.2', '1.2.0'), 0);
+    ok(compare('0.0.33', '0.2.6') < 0);
+  });
+});
