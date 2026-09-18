@@ -108,21 +108,46 @@ export async function fetchReport(
   return { items, total, truncated: false };
 }
 
-/** Join report rows onto the caller's dependency list by exact name@version. */
+/**
+ * Fold a package name to the form both sides of the join must agree on.
+ *
+ * The report stores canonical, lower-case names; a lockfile carries whatever the
+ * author wrote — `Newtonsoft.Json` in a NuGet `packages.lock.json`, `Typing-Extensions`
+ * from a `pip freeze`. Joining those raw makes a vulnerable package report as
+ * `clean: true`, which is the one answer this tool must never get wrong, so both
+ * sides pass through here before a key is built.
+ *
+ * pypi additionally collapses runs of `.`, `-` and `_` to a single `-`: PEP 503
+ * makes `typing_extensions` and `typing-extensions` the same distribution, so
+ * folding them together is the correct comparison, not a lenient one.
+ */
+export function foldName(ecosystem: string | undefined, name: string): string {
+  const lower = name.toLowerCase();
+  return ecosystem === 'pypi' ? lower.replace(/[-_.]+/g, '-') : lower;
+}
+
+/**
+ * Join report rows onto the caller's dependency list by folded name @ version.
+ *
+ * Versions stay exact. A lockfile pin and an advisory's affected version are both
+ * concrete releases, and folding them would risk matching a version the project
+ * does not actually have installed.
+ */
 export function matchPackages(
   report: readonly ReportItem[],
   packages: readonly InputPackage[],
+  ecosystem?: string,
 ): { hits: ReportItem[]; devOf: Map<string, boolean> } {
   const devOf = new Map<string, boolean>();
   for (const p of packages) {
-    const key = `${p.name}@${p.version}`;
+    const key = `${foldName(ecosystem, p.name)}@${p.version}`;
     // A package present both as a dev and a prod dependency is prod: the
     // stricter classification wins, since it ships.
     const prior = devOf.get(key);
     const isDev = p.dev === true;
     devOf.set(key, prior === undefined ? isDev : prior && isDev);
   }
-  const hits = report.filter((r) => devOf.has(`${r.packageName}@${r.version}`));
+  const hits = report.filter((r) => devOf.has(`${foldName(ecosystem, r.packageName)}@${r.version}`));
   return { hits, devOf };
 }
 
@@ -201,7 +226,11 @@ export function summarizeRemediation(detail: Record<string, unknown> | null): Re
     cwes: Array.isArray(remediation.cweIds) ? (remediation.cweIds as string[]) : [],
     owasp: [...new Set(entries.map((e) => e.owaspId).filter((v): v is string => typeof v === 'string'))],
     skills: [...new Set(entries.map((e) => e.skillId).filter((v): v is string => typeof v === 'string'))],
-    severity: typeof dbSpecific.severity === 'string' ? dbSpecific.severity : undefined,
+    // Normalized here, not passed through: the detail endpoint serves GHSA's raw
+    // `database_specific` vocabulary ("MODERATE") while the report endpoint serves
+    // the normalized one ("MEDIUM"). Two spellings of one severity across sibling
+    // tools is a filter that silently misses findings.
+    severity: typeof dbSpecific.severity === 'string' ? normalizeSeverity(dbSpecific.severity) : undefined,
     summary: typeof detail?.summary === 'string' ? detail.summary : undefined,
   };
 }

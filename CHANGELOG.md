@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`check_dependencies` reported a vulnerable package as `clean`.** Report rows were joined onto
+  the caller's dependency list by exact `name@version`, but the report stores canonical lower-case
+  names while a lockfile carries whatever the author wrote. Against a live instance,
+  `starlette@0.47.2` returned 12 advisories and `Starlette@0.47.2` returned `clean: true` — and a
+  NuGet `packages.lock.json` spells it `Newtonsoft.Json`, which is exactly the input the tool
+  description tells the caller to paste. Both sides of the join now fold through `foldName`:
+  lower-case everywhere, plus PEP 503 separator folding on pypi, where `typing_extensions` and
+  `typing-extensions` are the same distribution. Versions stay exact.
+- **`get_remediation` reported a severity its sibling tools did not use.** The advisory detail
+  endpoint serves GHSA's raw `database_specific` vocabulary (`MODERATE`) while the report endpoint
+  serves the normalized one (`MEDIUM`), so one advisory had two spellings depending on which tool
+  you asked. `summarizeRemediation` now normalizes, and an advisory carrying no severity stays
+  `undefined` rather than becoming `UNKNOWN`.
+
 ### Removed
 
 - **`get_version` and `get_prometheus_metrics`, and the `DEPENDABLY_TOOLSET` switch with them.**
