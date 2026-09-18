@@ -77,12 +77,36 @@ workflow:
 # common image. Route an uncached-risk image explicitly through the mirror
 # (same convention as dependably-community / dependably-documentation) rather
 # than relying on that cache being warm.
+# OCI pull-through mirror for every CI container image. This is not an
+# optimisation: the runner cannot resolve Docker Hub's CDN
+# ("lookup production.cloudfront.docker.com: no such host"), so any image named
+# without this prefix fails at pull time, before a single line of the job runs.
+#
+# Do not assume a Docker Hub official (`library/`) image is exempt because it is
+# likely to be warm in the cache — that assumption is what left three `alpine:3`
+# jobs bare and broke every `main` pipeline once the DNS path went away. Prefix
+# every image, including official ones.
+#
+# Digests are pinned so a tag moving upstream cannot change what CI runs. To
+# refresh one, resolve it through the proxy:
+#   curl -u token:$TOKEN -H 'Accept: application/vnd.oci.image.index.v1+json' \
+#        -D - -o /dev/null https://$DEP_IMAGE_REGISTRY/v2/library/alpine/manifests/3
+# and read the docker-content-digest header.
 variables:
   DEP_IMAGE_REGISTRY: "dependably.northwardlabs.ca"
 
 default:
-  image: node:22
+  image: ${DEP_IMAGE_REGISTRY}/library/node:22@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d
   interruptible: true
+  # Image pulls resolve on the runner host's docker daemon before any job script
+  # runs, so a name-resolution blip there fails the job with runner_system_failure
+  # and skips every downstream job. Retry that class only — a script_failure is a
+  # real result and must never be retried into a false green.
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
 
 stages:
   - test
@@ -163,7 +187,7 @@ npm-check:
 sonarqube-check:
   stage: test
   image:
-    name: sonarsource/sonar-scanner-cli:latest
+    name: ${DEP_IMAGE_REGISTRY}/sonarsource/sonar-scanner-cli:latest@sha256:23ca0f137965d9dff2198074043fd48d386280bc5d0ccac8c8349cea4cf096a9
     entrypoint: [""]
   variables:
     SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
@@ -196,14 +220,11 @@ sonarqube-check:
 # GITHUB_TOKEN CI/CD variable (masked) with contents:write on the mirror.
 publish:github:
   stage: publish
-  # Bare `alpine/git:latest` is not a Docker Hub official (`library/`) image,
-  # so it is not reliably warm in the org's OCI pull-through cache; a cold pull
-  # falls through to real Docker Hub, whose CDN this network cannot reach
-  # (job 135114: "lookup production.cloudfront.docker.com: no such host").
-  # The explicit ${DEP_IMAGE_REGISTRY} prefix forces the pull through
-  # Dependably's own proxy instead, matching dependably-documentation's
-  # publish:github job. Its ENTRYPOINT is `git`, not a shell, so it must be
-  # cleared for GitLab Runner to execute the job script at all.
+  # alpine/git's ENTRYPOINT is `git`, not a shell, so it must be cleared for
+  # GitLab Runner to execute the job script at all. The ${DEP_IMAGE_REGISTRY}
+  # prefix is the repo-wide rule rather than anything specific to this job —
+  # this network cannot reach Docker Hub's CDN, so every image is pulled through
+  # Dependably's own proxy.
   image:
     name: ${DEP_IMAGE_REGISTRY}/alpine/git:latest
     entrypoint: [""]
@@ -327,7 +348,7 @@ sbom:
 # variables aren't configured, mirroring `publish`'s REGISTRY_* guard.
 sbom-publish:
   stage: sbom-publish
-  image: alpine:3
+  image: ${DEP_IMAGE_REGISTRY}/library/alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
   # External write (uploads the BOM to Dependency-Track) — never auto-cancel mid-upload.
   interruptible: false
   needs:
@@ -380,7 +401,7 @@ sbom-publish:
 # hiccup here never blocks a release the way sbom-publish above does.
 sbom-publish-cyclonedx-npm:
   stage: sbom-publish
-  image: alpine:3
+  image: ${DEP_IMAGE_REGISTRY}/library/alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
   interruptible: false
   allow_failure: true
   needs:
@@ -436,7 +457,7 @@ sbom-publish-cyclonedx-npm:
 # when unconfigured, like sbom-publish.
 sbom-publish-dependably:
   stage: sbom-publish
-  image: alpine:3
+  image: ${DEP_IMAGE_REGISTRY}/library/alpine:3@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
   # External write — never auto-cancel mid-upload.
   interruptible: false
   needs:
