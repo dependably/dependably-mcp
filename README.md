@@ -72,8 +72,7 @@ Restart your MCP client, then ask it to run these three, in order:
    instance is reachable. It returns `{ status: "ready" | "degraded", checks, errors }`.
 2. `list_packages` is the first call that uses your token. A result here confirms the Pull
    preset is granted and working.
-3. `whoami` returns the user, org and role behind the token. It comes from the Admin preset, so
-   a `403` here on a Pull token is expected rather than a fault.
+3. `get_license_policy` confirms the same token reaches org policy, not just inventory.
 
 Then ask a real question, such as *which of our packages have critical vulnerabilities?* Claude
 answers that one with `list_vulnerabilities`.
@@ -97,7 +96,7 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-19 tools in 4 groups, every one of them read-only.
+18 tools in 4 groups, every one of them read-only.
 
 | Group | What it covers |
 |---|---|

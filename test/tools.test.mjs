@@ -120,20 +120,19 @@ describe('read tools', () => {
     strictEqual(new URL(calls[0].url).searchParams.get('version'), '1.2.3');
   });
 
-  it('list_activity, whoami, get_license_policy and lookup_package hit their endpoints', async () => {
+  it('list_activity, get_license_policy and lookup_package hit their endpoints', async () => {
     const calls = stubFetch();
     await call(base, 'list_activity', { since: '7d', event_type: 'publish' });
-    await call(base, 'whoami');
     await call(base, 'get_license_policy');
     await call(base, 'lookup_package', { ecosystem: 'npm', name: 'x', version: '1.0.0' });
     const paths = calls.map((c) => new URL(c.url).pathname);
-    deepStrictEqual(paths, ['/api/v1/activity', '/api/v1/auth/me', '/api/v1/license-policy', '/api/v1/lookup']);
+    deepStrictEqual(paths, ['/api/v1/activity', '/api/v1/license-policy', '/api/v1/lookup']);
   });
 
   it('surfaces an API error as an error result rather than throwing', async () => {
     globalThis.fetch = async () =>
       new Response('{"detail":"nope"}', { status: 403, headers: { 'content-type': 'application/json' } });
-    const res = await call(base, 'whoami');
+    const res = await call(base, 'get_license_policy');
     strictEqual(res.isError, true);
     ok(res.content[0].text.includes('403'));
   });

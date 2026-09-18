@@ -62,8 +62,8 @@ documentation.
 
 **This repository**
 
-- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.30, 22 tools in seven modules, each with `title`
-  and read-only or destructive annotations. Stdio only. Four environment variables.
+- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.30, 18 tools in five modules, each with `title`
+  and read-only annotations. Stdio only. Four environment variables.
 - Strong client layer: RFC 7807 parsing, capability-name extraction on 403, `Retry-After` on 429.
 - No prompts or resources. One smoke test, no HTTP-mocked unit tests.
 - `main` is one commit behind the unmerged `chore/npmrc-hygiene` branch.
@@ -111,7 +111,7 @@ folder is configured, flagged with `tools_generated: true`.
 | Discover | `list_packages`, `get_package`, `search_packages`, `lookup_package` | read-only |
 | Security | `list_vulnerabilities`, `get_vulnerability`, `siem_vulnerabilities_summary` | read-only; SIEM needs `read:audit` |
 | Policy | `get_license_policy` | read-only |
-| Audit | `list_activity`, `siem_list_auth_events`, `whoami` | read-only |
+| Audit | `list_activity`, `siem_list_auth_events` | read-only |
 | Operate | `health_check`, `readiness_check` | both anonymous, and they answer from any host |
 | Set up | `get_install_command`, `get_publish_command` | local, never execute |
 
@@ -143,7 +143,7 @@ Additions that make every channel better, not just the extension:
    `build/mcpb/`, `npm ci --omit=dev --ignore-scripts` there, `mcpb validate`, `mcpb pack`, write a
    SHA-256 beside the bundle.
 4. Install on this Mac by drag-and-drop against the local `demo.localhost:8080` instance; run
-   `whoami` and `list_vulnerabilities`.
+   `list_packages` and `list_vulnerabilities`.
 5. Confirm how Desktop substitutes an unset optional `directory` field. `loadConfig` treats an empty
    string as unset; if Desktop passes the literal placeholder instead, add a guard.
 
@@ -206,8 +206,9 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
    required-license list for the submission form; the open-source-clause question is moot either
    way.
 5. **Publisher identity and slug.** Permanent; decide before the first submission.
-6. **Capability guidance.** The config dialog cannot validate token capabilities, so `whoami`
-   should report which tools this token reaches.
+6. **Capability guidance.** The config dialog cannot validate token capabilities, and no tool
+   reports which tools a token reaches — `read:packages` is the floor, and a missing capability
+   surfaces only as a 403 on the tool that needed it.
 
 ## Appendix A — Notes for a future remote connector (not planned)
 

@@ -41,7 +41,7 @@ literals keep their exact spelling.
 > no option to disable certificate verification.
 >
 > Requires Dependably v0.3.0 or later and a token with `read:packages` (add `read:audit` for the
-> activity and authentication tools, `read:tenant` for `whoami`).
+> activity and authentication tools).
 
 That is 1,146 characters, matching `long_description` in `manifest.json` plus the last two
 paragraphs. Keep the two in step.
@@ -71,8 +71,8 @@ every tool. Plan:
 1. A public demo instance of Dependably seeded with a few packages per ecosystem, at least one
    package with a known advisory, and a licence policy in `warn` mode. Reuse the marketing demo
    if one exists; otherwise a small instance under `demo.dependably.ca`.
-2. A dedicated user in that org with a personal access token carrying `read:packages`,
-   `read:audit` and `read:tenant`, which covers every tool the server registers.
+2. A dedicated user in that org with a personal access token carrying `read:packages` and
+   `read:audit`, which covers every tool the server registers.
 3. Rotate the token after the review; note the rotation date in §6.
 4. Give the reviewer: the instance URL, the token, and the five prompts above.
 
@@ -84,7 +84,7 @@ Take them from the installed extension on macOS in light mode, then crop to the 
 2. Prompt 1: the vulnerability list followed by the remediation for one advisory.
 3. Prompt 2: the pre-adoption licence verdict.
 4. Prompt 3: the authentication events table.
-5. The tool list in Claude Desktop, showing all 17 tools marked read-only.
+5. The tool list in Claude Desktop, showing all 18 tools marked read-only.
 
 ## 5. Pre-submission checklist
 
@@ -103,7 +103,7 @@ need something outside this repository.
 | 8 | Bundle and checksum attached to each tagged release | done (pipeline) | `.gitlab-ci.yml` `release`, `.github/workflows/ci.yml` `release-bundle` |
 | 9 | GitHub mirror `dependably/dependably-mcp` is public | **external, blocking** (repo created 2026-09-13, private for now; `publish:github` in `.gitlab-ci.yml` pushes to it) | `repository` and `documentation` in `manifest.json` (and `repository`, `bugs`, `homepage` in `package.json`) return 404 today; the GitHub workflow and npm provenance also depend on it |
 | 10 | Public npm publish of the current version has run | **external, blocking** | first `vX.Y.Z` tag on the mirror; the README's install section assumes it |
-| 11 | Install on macOS through the dialog only; `whoami`, `list_vulnerabilities` | pending, this Mac | `docs/desktop-e2e.md` steps 1 to 5 |
+| 11 | Install on macOS through the dialog only; `list_packages`, `list_vulnerabilities` | pending, this Mac | `docs/desktop-e2e.md` steps 1 to 5 |
 | 12 | Same on Windows, including the CA-bundle file picker and keychain storage | **external, blocking** | `docs/desktop-e2e.md` |
 | 13 | Five prompts run through the installed extension against a live instance | pending | §2, §6 |
 | 14 | Test account and demo instance for the reviewer | **external, blocking** | §3 |

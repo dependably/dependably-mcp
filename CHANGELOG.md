@@ -16,13 +16,19 @@ All notable changes to this project are documented here. The format follows
 - **`yank_version`.** The last write in the surface, and the only destructive tool. It needed
   `yank:*` or a per-ecosystem leaf, which sits in the publisher set and so cannot be minted by an
   ordinary member, and it had no token preset. Yank a version from the Dependably web UI instead.
+- **`whoami`.** It was the only tool needing `read:tenant`, which drags the Admin preset into
+  an install that otherwise runs on Pull. It answered with opaque ids rather than names — `orgId`
+  is a hex string, not the org slug — and the two identity facts worth having are already on the
+  Pull surface: `list_packages` returns `orgId` per item, and `list_vulnerabilities` at
+  `verbosity: "full"` returns `orgSlug`. What was left unique to it (`role`, MFA flags, locale)
+  gates nothing in a read-only surface.
 - **`import_manifest`, `admin_upload` and `DEPENDABLY_IMPORT_ROOT`.** The two import tools were
   the only ones that read the local filesystem, and they needed an admin-grade token carrying
   `import:*` and `tenant:configure`, which an ordinary member cannot mint. `DEPENDABLY_IMPORT_ROOT`
   existed to contain those reads; with the tools gone the containment has nothing left to guard.
   No tool in this server now touches the filesystem or runs a command.
 
-The surface is a flat **17 tools in 4 groups**, registered unconditionally and **entirely
+The surface is a flat **18 tools in 4 groups**, registered unconditionally and **entirely
 read-only**: no tool writes to the instance, deletes anything, reads a local file, or runs a
 command. The two environment variables that gated tool registration are no longer read, and
 `manifest.json` drops the matching `user_config` fields.

@@ -117,10 +117,6 @@
     {
       "name": "siem_vulnerabilities_summary",
       "description": "Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }."
-    },
-    {
-      "name": "whoami",
-      "description": "Identity behind the configured token: user/token id, org, role (GET /api/v1/auth/me). Requires read:tenant capability on the token."
     }
   ],
   "tools_generated": true,

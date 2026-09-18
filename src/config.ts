@@ -5,8 +5,8 @@
  * sent as a bearer token on every request. There is intentionally no JWT/session
  * login: a PAT reaches every endpoint that opts into the `ApiToken` auth scheme —
  * since Dependably v0.3.0 that includes the read-only management surface
- * (packages, search, vulnerabilities, activity, whoami, license policy, lookup)
- * alongside SIEM — plus the anonymous health and readiness probes. 17 tools,
+ * (packages, search, vulnerabilities, activity, license policy, lookup)
+ * alongside SIEM — plus the anonymous health and readiness probes. 18 tools,
  * all read-only: nothing in the surface writes, deletes, or reads a local file.
  *
  * Against a Dependably server older than v0.3.0 the read tools return 401,
