@@ -63,10 +63,11 @@ All notable changes to this project are documented here. The format follows
 ### Removed
 
 - **`get_version` and `get_prometheus_metrics`, and the `DEPENDABLY_TOOLSET` switch with them.**
-  Both tools wrapped endpoints Dependably allowlists to its own host, so they returned `403` for
-  every client not running on the server. `DEPENDABLY_TOOLSET=remote` existed only to hide them,
-  which made the default (`full`) wrong for almost every install. Read `/version` and `/metrics`
-  on the host, or scrape `/metrics` with Prometheus.
+  Both wrapped operator endpoints rather than agent ones, and `get_prometheus_metrics` returned
+  well over a megabyte of Prometheus text in a single tool result — larger than most model context
+  windows. `DEPENDABLY_TOOLSET=remote` existed only to hide them, which made the default (`full`)
+  wrong for almost every install. Read `/version` and `/metrics` on the host, or scrape `/metrics`
+  with Prometheus.
 - **`yank_version`.** The last write in the surface, and the only destructive tool. It needed
   `yank:*` or a per-ecosystem leaf, which sits in the publisher set and so cannot be minted by an
   ordinary member, and it had no token preset. Yank a version from the Dependably web UI instead.
