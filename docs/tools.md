@@ -65,9 +65,19 @@ fix. Run `npm install` with npm 7 or later to upgrade it, or build the list your
 Both are anonymous, so they answer without a token and from any machine. `readiness_check` is the
 one to reach for first when triaging an incident: it names the subsystem reporting degraded.
 
-The server's `/version` and `/metrics` endpoints are not wrapped as tools. Dependably allowlists
-both to its own host, so a tool for either would fail for every client not running on it. Read
-them directly on the host, or scrape `/metrics` with Prometheus.
+The server's `/version` and `/metrics` endpoints are not wrapped as tools.
+
+`/metrics` is the stronger reason: a live instance answers it with well over a megabyte of
+Prometheus text, which is larger than most model context windows. No agent can usefully read it,
+and returning it truncated would be worse than not offering it at all. Scrape it with Prometheus,
+which is what it is for.
+
+Both are also operator surfaces rather than agent surfaces, and `METRICS_ALLOWED_IPS` defaults to
+loopback — so on a correctly configured instance a remote caller gets `403`. Treat that as the
+intended posture rather than a guarantee: an instance behind a reverse proxy that forwards no
+`X-Forwarded-For` presents every caller as the proxy's own address, and if that address is in the
+allowlist the endpoint is open to anyone who can reach it. If you need to know, ask the endpoint
+from off-network rather than assuming.
 
 ## Setup
 
