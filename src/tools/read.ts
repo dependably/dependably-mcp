@@ -171,18 +171,6 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
   );
 
   server.registerTool(
-    'whoami',
-    {
-      title: 'Who am I',
-      description:
-        'Identity behind the configured token: user/token id, org, role (GET /api/v1/auth/me). Requires read:tenant capability on the token.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: {},
-    },
-    async () => run(async () => json(await client.get('/api/v1/auth/me'))),
-  );
-
-  server.registerTool(
     'get_license_policy',
     {
       title: 'Get license policy',

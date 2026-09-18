@@ -70,7 +70,6 @@ const CORE_TOOLS = [
   'search_packages',
   'siem_list_auth_events',
   'siem_vulnerabilities_summary',
-  'whoami',
 ].sort();
 
 deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
