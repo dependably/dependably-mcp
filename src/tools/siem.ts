@@ -33,14 +33,14 @@ export function registerSiemTools(server: McpServer, client: DependablyClient): 
       title: 'SIEM: auth events',
       description: 'Stream auth events from the audit log (GET /api/v1/siem/events/auth) — login successes/failures, lockouts, token mints/revocations, role changes. Default lookback 24h, capped at SIEM_MAX_LOOKBACK_DAYS (default 90). Requires read:audit capability or a system-admin token.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         since: z.string().optional().describe('Lower bound as ISO-8601 timestamp. Default: 24h ago.'),
         until: z.string().optional().describe('Upper bound as ISO-8601 timestamp. Default: now.'),
         org: z.string().optional().describe('Org slug filter (system-admin tokens only — others are scoped to their own org).'),
         action: z.array(authActionPrefix).optional().describe('Filter to these action prefixes. Omit for the server-default set (login./lockout./token./rbac.).'),
         limit: z.number().int().positive().max(500).optional().describe('Page size, 1–500, default 100.'),
         cursor: z.string().optional().describe('Opaque cursor from a previous page\'s response.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -63,10 +63,10 @@ export function registerSiemTools(server: McpServer, client: DependablyClient): 
       title: 'SIEM: vulnerabilities summary',
       description: 'Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         org: z.string().optional().describe('Org slug filter (system-admin tokens only).'),
         ecosystem: ecosystem.optional(),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>

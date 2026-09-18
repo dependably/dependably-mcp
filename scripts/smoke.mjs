@@ -240,6 +240,31 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   ok(!REGISTRY_ECOSYSTEMS.includes('go'), 'the Go ecosystem is spelled "golang"; "go" filters to nothing');
 }
 
+// Every tool advertises `additionalProperties: false`. That was a claim the runtime
+// did not keep: the SDK builds a non-strict object from a raw shape, so an unknown
+// property was silently dropped. A dropped `version` on lookup_package changes which
+// package is being judged, so the advertised contract has to be the real one.
+{
+  await withClient(base, async (client) => {
+    const { tools } = await client.listTools();
+    for (const tool of tools) {
+      deepStrictEqual(
+        tool.inputSchema?.additionalProperties,
+        false,
+        `${tool.name} should advertise additionalProperties:false`,
+      );
+      const res = await client
+        .callTool({ name: tool.name, arguments: { __unknown_probe__: 1 } })
+        .catch((err) => ({ isError: true, content: [{ text: String(err) }] }));
+      ok(res.isError, `${tool.name} must reject an unknown property, not ignore it`);
+      ok(
+        /unrecognized|unknown|not allowed/i.test(res.content[0].text),
+        `${tool.name} should say the property was unrecognized, got: ${res.content[0].text.slice(0, 120)}`,
+      );
+    }
+  });
+}
+
 console.log(
   `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable`,
 );

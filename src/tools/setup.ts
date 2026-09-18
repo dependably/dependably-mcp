@@ -25,11 +25,11 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
       title: 'Install command',
       description: 'Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it.',
       annotations: LOCAL_READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem,
         package: z.string().describe('Package name (canonical for the ecosystem).'),
         version: z.string().optional().describe('Optional pinned version.'),
-      },
+      }).strict(),
     },
     async (args) => installCommand(cfg.baseUrl, args.ecosystem, args.package, args.version),
   );
@@ -40,10 +40,10 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
       title: 'Publish command',
       description: 'Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token.',
       annotations: LOCAL_READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem,
         artifact_path: z.string().describe('Path to the built artifact (e.g. ./dist/*, ./bin/Release/*.nupkg, package.tgz).'),
-      },
+      }).strict(),
     },
     async (args) => publishCommand(cfg.baseUrl, args.ecosystem, args.artifact_path),
   );

@@ -52,7 +52,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
       description:
         "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability.",
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem: ecosystem.default('npm').describe('Ecosystem of the dependency list. Default npm.'),
         packages: z
           .array(
@@ -72,7 +72,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
           .boolean()
           .optional()
           .describe('Include CWE / OWASP / remediation-skill ids per advisory. Default false.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () => {
@@ -104,7 +104,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
       description:
         'Fixed version (plus CWE / OWASP / remediation-skill ids) for one or more advisories, without the full advisory prose. Pass the installed version alongside each id to get the fix for that release line — for @hono/node-server 1.19.14 that is 1.19.15, not the 2.x fix. Use get_vulnerability instead when you need the write-up, PoC, or workarounds. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         advisories: z
           .array(
             z.object({
@@ -115,7 +115,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
           .min(1)
           .max(200)
           .describe('Advisories to resolve, up to 200.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -130,7 +130,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
       description:
         'Index of every curated remediation skill this instance ships (GET /api/v1/remediation/skills): id, name and description, one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). Pass an id to get_remediation_skill for the full how-to-fix guide. Anonymous — no capability required.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {},
+      inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/api/v1/remediation/skills'))),
   );
@@ -142,13 +142,13 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
       description:
         'Full how-to-fix guide for one or more curated remediation skills, as markdown (GET /api/v1/remediation/skills/{skillId}). Skill ids come from list_remediation_skills, or from the `skills` field get_remediation and check_dependencies return with includeAdvisoryDetail. Anonymous — no capability required.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         skillIds: z
           .array(z.string().min(1))
           .min(1)
           .max(25)
           .describe('Remediation skill ids to fetch, e.g. "fix-vulnerable-dependency" or "fix-xss".'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>

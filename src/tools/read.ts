@@ -25,14 +25,14 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'List packages in the registry, paginated (GET /api/v1/packages). Returns { items, total, limit, offset }. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem: ecosystem.optional().describe('Filter to one ecosystem.'),
         search: z.string().optional().describe('Substring filter on package name.'),
         limit: z.number().int().positive().max(200).optional().describe('Page size, 1–200, default 50.'),
         page: z.number().int().positive().optional().describe('1-based page number, default 1.'),
         sortBy: z.string().optional().describe('Sort column, default "created".'),
         sortDir: z.enum(['asc', 'desc']).optional().describe('Sort direction, default asc.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -56,10 +56,10 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Full detail for one package: versions, per-version SPDX licenses, vulnerability links (GET /api/v1/packages/{ecosystem}/{name}). Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem: ecosystem.describe('Package ecosystem.'),
         name: z.string().describe('Package name, e.g. "left-pad" or "@scope/pkg" (encoding is handled).'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -74,10 +74,10 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Quick search across the registry by name (GET /api/v1/search). Queries shorter than 2 characters return empty groups. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         q: z.string().min(2).describe('Search query, minimum 2 characters.'),
         limit: z.number().int().positive().max(25).optional().describe('Max results, 1–25, default 8.'),
-      },
+      }).strict(),
     },
     async (args) => run(async () => json(await client.get('/api/v1/search', { q: args.q, limit: args.limit }))),
   );
@@ -89,7 +89,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Org-wide vulnerability report: every package in the registry affected by a known advisory, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. This is the whole org, NOT one project — to scope it to a project\'s dependencies and get bump targets, use check_dependencies. Items are compact by default; pass verbosity "full" for the raw server fields. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem: ecosystem.optional().describe('Filter to one ecosystem.'),
         name: z.string().optional().describe('Filter to one package name.'),
         limit: z.number().int().positive().optional().describe('Page size, default 50.'),
@@ -102,7 +102,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
           .describe(
             'compact (default) keeps name, version, osvId, severity, cvss, epss, kev and summary — roughly half the bytes. full returns every server field (purl, orgSlug, revokedAt, timestamps).',
           ),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () => {
@@ -126,13 +126,13 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Rich detail for one advisory affecting the registry (GET /api/v1/vulnerabilities/{osvId}). 404 if the advisory does not touch any package in your org. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         osvId: z.string().describe('Advisory id, e.g. "GHSA-xxxx-..." or "CVE-2024-...".'),
         version: z
           .string()
           .optional()
           .describe('Your installed version — when set, remediation guidance names the fixed version for it.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -151,13 +151,13 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Org activity feed: publishes, yanks, imports, policy changes, etc., paginated (GET /api/v1/activity). Requires read:audit capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         limit: z.number().int().positive().optional().describe('Page size, default 50.'),
         page: z.number().int().positive().optional().describe('1-based page number, default 1.'),
         event_type: z.string().optional().describe('Filter to one event type.'),
         search: z.string().optional().describe('Substring filter on event detail.'),
         since: z.enum(['24h', '7d', '30d', '90d']).optional().describe('Time window to look back over.'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>
@@ -180,7 +180,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'The org\'s license policy: enforcement mode (off/warn/block) plus the SPDX allowlist and blocklist (GET /api/v1/license-policy) — answers "which licenses are approved here". Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {},
+      inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/api/v1/license-policy'))),
   );
@@ -192,7 +192,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
       description:
         'Pre-adoption check of a package NOT necessarily in the registry: upstream metadata, OSV advisories, and the org-policy verdict, without ingesting anything (GET /api/v1/lookup). Use before adding a new dependency. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {
+      inputSchema: z.object({
         ecosystem: lookupEcosystem.describe(
           'Package ecosystem. Narrower than the registry tools: a pre-adoption verdict needs an upstream to resolve against, so rpm, oci, apk and terraform are not offered here.',
         ),
@@ -201,7 +201,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
           .string()
           .optional()
           .describe('Specific version to evaluate; some ecosystems require it (the server says so).'),
-      },
+      }).strict(),
     },
     async (args) =>
       run(async () =>

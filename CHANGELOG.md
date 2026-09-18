@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Tool schemas advertised `additionalProperties: false` and did not enforce it.** The SDK builds
+  a non-strict object from a raw shape, so an unknown property was silently dropped and the call
+  proceeded. A typo'd `version` on `lookup_package` meant the package was evaluated *unpinned* —
+  a different question — and the verdict came back attributed to a version that was never sent.
+  Every tool now registers `z.object({…}).strict()`, and the smoke test asserts, for every
+  registered tool, that an unknown property is rejected rather than ignored.
+
 - **The ecosystem enum was wrong in both directions.** One shared list of eight values backed every
   tool, but the planes differ. It offered `rpm` and `oci` to `lookup_package`, which the server
   rejects with `422 Must be one of: npm, pypi, nuget, maven, golang, cargo, hex`; and it withheld
