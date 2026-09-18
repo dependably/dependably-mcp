@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
@@ -23,7 +24,7 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
       title: 'Health check',
       description: 'Liveness probe (GET /health). Returns 200 with { status: "ok" } as long as the process is running.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {},
+      inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/health'))),
   );
@@ -34,7 +35,7 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
       title: 'Readiness check',
       description: 'Readiness probe (GET /ready). Returns { status: "ready"|"degraded", checks, errors }. 503 with details when a subsystem (DB, blob store, etc.) is failing — use this first when investigating an incident.',
       annotations: READ_ANNOTATIONS,
-      inputSchema: {},
+      inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/ready'))),
   );
