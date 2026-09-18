@@ -1,7 +1,13 @@
 import { deepStrictEqual, ok, rejects, strictEqual } from 'node:assert';
 import { afterEach, describe, it } from 'node:test';
 
-import { DependablyApiError, DependablyClient, describeFetchError, formatHttpError } from '../dist/client.js';
+import {
+  DependablyApiError,
+  DependablyClient,
+  describeFetchError,
+  extractCapability,
+  formatHttpError,
+} from '../dist/client.js';
 
 const cfg = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -191,9 +197,51 @@ describe('formatHttpError', () => {
     ok(msg.includes('read:packages'));
   });
 
+  // These are the phrasings Dependably actually emits — the capability leads, the
+  // noun follows. Reading only after the noun captured the next English word and
+  // reported a capability named "required", which does not exist.
+  for (const [detail, cap] of [
+    ['read:tenant capability required.', 'read:tenant'],
+    ['read:audit capability required.', 'read:audit'],
+    ['publish:cargo capability required.', 'publish:cargo'],
+    ['yank:cargo capability required.', 'yank:cargo'],
+    ['Authentication required. Provide a JWT or a Bearer token with read:audit capability.', 'read:audit'],
+  ]) {
+    it(`names ${cap} from the server's own wording: ${JSON.stringify(detail)}`, () => {
+      strictEqual(extractCapability(detail), cap);
+    });
+  }
+
+  it('never reports an ordinary word as a capability name', () => {
+    // A capability is verb:leaf. Anything else adjacent to the noun is prose.
+    for (const detail of [
+      'Your token lacks the capability required for this operation.',
+      'Insufficient token scope.',
+      'capability missing',
+      'nope',
+    ]) {
+      strictEqual(extractCapability(detail), null, detail);
+    }
+  });
+
   it('falls back to a generic 403 when no capability is named', () => {
     const msg = formatHttpError('GET', '/x', 403, 'application/json', problem({ detail: 'nope' }), h());
     ok(msg.includes('lacks the capability required'));
+  });
+
+  it('names the capability on a 401 without asserting which cause it is', () => {
+    // Dependably sends one body for "no token" and for "valid token, missing
+    // capability", so the message must not pick one.
+    const msg = formatHttpError('GET', '/x', 401, 'application/json',
+      problem({ detail: 'Authentication required. Provide a JWT or a Bearer token with read:audit capability.' }), h());
+    ok(msg.includes('read:audit'), 'names the capability');
+    ok(msg.includes('unset or expired'), 'still offers the expiry cause');
+    ok(msg.includes('not minted with that capability'), 'and the capability cause');
+  });
+
+  it('keeps the plain 401 wording when no capability is named', () => {
+    const msg = formatHttpError('GET', '/x', 401, 'application/json', problem({ detail: 'bad token' }), h());
+    ok(msg.includes('has not expired'));
   });
 
   it('surfaces retry-after on 429', () => {
@@ -201,10 +249,19 @@ describe('formatHttpError', () => {
     ok(formatHttpError('GET', '/x', 429, 'application/json', '{}', h()).includes('Retry after a short delay'));
   });
 
-  it('reports server errors with the base url hint', () => {
+  it('tells the reader a 5xx is not a client configuration problem', () => {
+    // The instance answered, so the URL demonstrably resolves; sending someone to
+    // re-check DEPENDABLY_BASE_URL is a wrong lead. /lookup returns 503 when an
+    // upstream registry is down, which is beyond the instance entirely.
     const msg = formatHttpError('GET', '/x', 503, 'application/json', problem({ detail: 'down' }), h());
     ok(msg.includes('503 Dependably server error.'));
-    ok(msg.includes('DEPENDABLY_BASE_URL'));
+    ok(msg.includes('The instance answered'));
+    ok(msg.includes('upstream'));
+  });
+
+  it('does not double the period when a detail already ends in one', () => {
+    const msg = formatHttpError('GET', '/x', 503, 'application/json', problem({ detail: 'Upstream registry unavailable.' }), h());
+    ok(!msg.includes('unavailable..'), msg);
   });
 
   it('renders a problem+json title, detail and errors for other statuses', () => {

@@ -163,7 +163,7 @@ export function formatHttpError(
   const detail = problem?.detail ?? '';
   const where = `(${method} ${url})`;
 
-  if (status === 401) return authFailed(detail, where);
+  if (status === 401) return authFailed(detail, body, where);
   if (status === 403) return permissionDenied(detail, body, where);
   if (status === 429) return rateLimited(detail, headers, where);
   if (status >= 500) return serverError(status, detail, where);
@@ -176,10 +176,20 @@ function sentence(...parts: Array<string | false | undefined>): string {
   return parts.filter(Boolean).join(' ');
 }
 
-function authFailed(detail: string, where: string): string {
+/**
+ * A 401 whose detail names a capability is ambiguous by construction: Dependably
+ * sends the same body for "no token" and for "a valid token without this
+ * capability", so the cause cannot be told apart from here. Name the capability
+ * without claiming which it is — leading with "check that the token has not
+ * expired" alone sends someone to rotate a credential that is working.
+ */
+function authFailed(detail: string, body: string, where: string): string {
+  const cap = extractCapability(detail) ?? extractCapability(body);
   return sentence(
     '401 Authentication failed.',
-    'Check that DEPENDABLY_TOKEN is set, has not expired, and is for the right Dependably instance.',
+    cap
+      ? `This endpoint needs the "${cap}" capability: either DEPENDABLY_TOKEN is unset or expired, or it is valid but was not minted with that capability.`
+      : 'Check that DEPENDABLY_TOKEN is set, has not expired, and is for the right Dependably instance.',
     detail && `Server detail: ${detail}`,
     where,
   );
@@ -205,11 +215,18 @@ function rateLimited(detail: string, headers: Headers, where: string): string {
   );
 }
 
+/**
+ * A 5xx means something answered at that URL, so the base URL resolved and the
+ * network path works — telling the reader to check `DEPENDABLY_BASE_URL` sends
+ * them to verify config that the response itself has already proven correct.
+ * `/lookup` in particular returns 503 when an *upstream* registry is unreachable,
+ * which is a fault beyond the instance rather than a client misconfiguration.
+ */
 function serverError(status: number, detail: string, where: string): string {
   return sentence(
     `${status} Dependably server error.`,
-    detail && `Server detail: ${detail}.`,
-    'Check that DEPENDABLY_BASE_URL is correct and the instance is reachable.',
+    detail && `Server detail: ${detail}`,
+    'The instance answered, so DEPENDABLY_BASE_URL is reachable — this is a fault on the server or on an upstream it depends on. Retry, then check the instance logs.',
     where,
   );
 }
@@ -245,7 +262,29 @@ function parseProblem(ctype: string, body: string): Problem | null {
   }
 }
 
-function extractCapability(text: string): string | null {
-  const match = /capability[^\w]*['"`]?([a-z][a-z0-9:_*-]+)/i.exec(text);
-  return match ? match[1] : null;
+/**
+ * A capability is `verb:leaf` — `read:tenant`, `publish:cargo`, `tenant:configure`,
+ * `yank:*`. Requiring that shape is what keeps an ordinary English word out of the
+ * message.
+ */
+const CAPABILITY = String.raw`[a-z][a-z0-9_-]*:[a-z0-9:_*-]+`;
+
+/**
+ * Pull the capability name out of a server error detail.
+ *
+ * Dependably writes the name on either side of the noun: `"read:tenant capability
+ * required."` is the dominant form across the controllers, `"…with read:audit
+ * capability."` the other. Both positions are searched, the leading form first.
+ *
+ * The capture has to look like a capability rather than merely sit next to the
+ * word. Matching any adjacent token turned `"…capability required."` into a claim
+ * that the token lacked a capability named "required", sending the reader after a
+ * grant that does not exist. A wrong name is worse than none, so anything that
+ * does not match the shape falls through to the generic message.
+ */
+export function extractCapability(text: string): string | null {
+  const leading = new RegExp(`(${CAPABILITY})\\s+capability`, 'i').exec(text);
+  if (leading) return leading[1];
+  const trailing = new RegExp(`capability[^\\w]*['"\`]?(${CAPABILITY})`, 'i').exec(text);
+  return trailing ? trailing[1] : null;
 }
