@@ -76,7 +76,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
     async (args) =>
       run(async () => {
         const { items, total, truncated } = await fetchReport(client, { ecosystem: args.ecosystem });
-        const { hits, devOf } = matchPackages(items, args.packages);
+        const { hits, devOf } = matchPackages(items, args.packages, args.ecosystem);
 
         const remediations = await fetchRemediations(
           client,

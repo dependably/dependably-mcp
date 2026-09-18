@@ -6,6 +6,7 @@ import {
   compactReportItem,
   fetchRemediations,
   fetchReport,
+  foldName,
   mapLimit,
   matchPackages,
   parseNpmLockfile,
@@ -123,6 +124,60 @@ describe('matchPackages', () => {
     ]);
     strictEqual(devOf.get('hono@4.12.27'), false);
   });
+
+  // The report stores canonical lower-case names; lockfiles do not. Matching raw
+  // answers "clean" for a package that is in the report, which is the one wrong
+  // answer this tool must not give.
+  it('matches a lockfile name that differs from the report only by case', () => {
+    const { hits } = matchPackages(report, [{ name: 'Hono', version: '4.12.27' }], 'npm');
+    strictEqual(hits.length, 1, 'a capitalized lockfile name still finds its advisory');
+    strictEqual(hits[0].packageName, 'hono');
+  });
+
+  it('matches a NuGet lockfile name verbatim from packages.lock.json', () => {
+    const nuget = [reportItem({ packageName: 'newtonsoft.json', version: '12.0.3' })];
+    const { hits } = matchPackages(nuget, [{ name: 'Newtonsoft.Json', version: '12.0.3' }], 'nuget');
+    strictEqual(hits.length, 1);
+  });
+
+  it('folds pypi separators per PEP 503, but only for pypi', () => {
+    const pypi = [reportItem({ packageName: 'typing-extensions', version: '4.12.2' })];
+    strictEqual(
+      matchPackages(pypi, [{ name: 'Typing_Extensions', version: '4.12.2' }], 'pypi').hits.length,
+      1,
+      'underscore and case both fold on pypi',
+    );
+    strictEqual(
+      matchPackages(pypi, [{ name: 'typing_extensions', version: '4.12.2' }], 'npm').hits.length,
+      0,
+      'npm keeps the separator significant — they are different packages there',
+    );
+  });
+
+  it('keeps the version exact while folding the name', () => {
+    const { hits } = matchPackages(report, [{ name: 'HONO', version: '4.12.28' }], 'npm');
+    deepStrictEqual(hits, [], 'a near-miss version is still a miss');
+  });
+
+  it('keys devOf on the folded name so the dev flag survives a case difference', () => {
+    const { devOf } = matchPackages(report, [{ name: 'Hono', version: '4.12.27', dev: true }], 'npm');
+    strictEqual(devOf.get('hono@4.12.27'), true);
+  });
+});
+
+describe('foldName', () => {
+  it('lower-cases every ecosystem', () => {
+    strictEqual(foldName('npm', 'Hono'), 'hono');
+    strictEqual(foldName('nuget', 'Newtonsoft.Json'), 'newtonsoft.json');
+    strictEqual(foldName(undefined, 'Hono'), 'hono');
+  });
+
+  it('collapses . - and _ runs to a single hyphen on pypi only', () => {
+    strictEqual(foldName('pypi', 'Typing_Extensions'), 'typing-extensions');
+    strictEqual(foldName('pypi', 'zope.interface'), 'zope-interface');
+    strictEqual(foldName('pypi', 'a__b'), 'a-b');
+    strictEqual(foldName('nuget', 'Newtonsoft.Json'), 'newtonsoft.json', 'nuget keeps the dot');
+  });
 });
 
 describe('mapLimit', () => {
@@ -171,6 +226,20 @@ describe('summarizeRemediation', () => {
     deepStrictEqual(r.skills, ['fix-injection', 'fix-ssrf']);
     strictEqual(r.severity, 'HIGH');
     strictEqual(r.summary, 'a summary');
+  });
+
+  it('normalizes the raw GHSA severity vocabulary to the report vocabulary', () => {
+    // The detail endpoint serves database_specific verbatim ("MODERATE"); the
+    // report endpoint serves "MEDIUM". One advisory must not have two spellings
+    // across sibling tools, or a severity filter misses it.
+    const r = summarizeRemediation({ databaseSpecific: { severity: 'MODERATE' } });
+    strictEqual(r.severity, 'MEDIUM');
+  });
+
+  it('leaves severity undefined when the advisory carries none', () => {
+    // Not "UNKNOWN": absent and unknown are different, and the caller renders them differently.
+    strictEqual(summarizeRemediation({ databaseSpecific: {} }).severity, undefined);
+    strictEqual(summarizeRemediation({}).severity, undefined);
   });
 
   it('de-duplicates owasp and skill ids', () => {
