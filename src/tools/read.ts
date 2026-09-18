@@ -145,35 +145,6 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
   );
 
   server.registerTool(
-    'list_activity',
-    {
-      title: 'List activity',
-      description:
-        'Org activity feed: publishes, yanks, imports, policy changes, etc., paginated (GET /api/v1/activity). Requires read:audit capability.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: z.object({
-        limit: z.number().int().positive().optional().describe('Page size, default 50.'),
-        page: z.number().int().positive().optional().describe('1-based page number, default 1.'),
-        event_type: z.string().optional().describe('Filter to one event type.'),
-        search: z.string().optional().describe('Substring filter on event detail.'),
-        since: z.enum(['24h', '7d', '30d', '90d']).optional().describe('Time window to look back over.'),
-      }).strict(),
-    },
-    async (args) =>
-      run(async () =>
-        json(
-          await client.get('/api/v1/activity', {
-            limit: args.limit,
-            page: args.page,
-            event_type: args.event_type,
-            search: args.search,
-            since: args.since,
-          }),
-        ),
-      ),
-  );
-
-  server.registerTool(
     'get_license_policy',
     {
       title: 'Get license policy',

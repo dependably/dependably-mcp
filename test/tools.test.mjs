@@ -120,13 +120,12 @@ describe('read tools', () => {
     strictEqual(new URL(calls[0].url).searchParams.get('version'), '1.2.3');
   });
 
-  it('list_activity, get_license_policy and lookup_package hit their endpoints', async () => {
+  it('get_license_policy and lookup_package hit their endpoints', async () => {
     const calls = stubFetch();
-    await call(base, 'list_activity', { since: '7d', event_type: 'publish' });
     await call(base, 'get_license_policy');
     await call(base, 'lookup_package', { ecosystem: 'npm', name: 'x', version: '1.0.0' });
     const paths = calls.map((c) => new URL(c.url).pathname);
-    deepStrictEqual(paths, ['/api/v1/activity', '/api/v1/license-policy', '/api/v1/lookup']);
+    deepStrictEqual(paths, ['/api/v1/license-policy', '/api/v1/lookup']);
   });
 
   it('surfaces an API error as an error result rather than throwing', async () => {
@@ -352,22 +351,7 @@ describe('get_remediation_skill', () => {
   });
 });
 
-describe('siem and observability tools', () => {
-
-  it('siem tools hit their endpoints and repeat array filters', async () => {
-    const calls = stubFetch();
-    await call(base, 'siem_list_auth_events', {
-      since: '2026-01-01T00:00:00Z',
-      action: ['login.failure', 'token.revoked'],
-      limit: 10,
-    });
-    await call(base, 'siem_vulnerabilities_summary', {});
-    const u = new URL(calls[0].url);
-    ok(u.pathname.includes('/siem/events/auth'));
-    deepStrictEqual(u.searchParams.getAll('action'), ['login.failure', 'token.revoked']);
-    ok(new URL(calls[1].url).pathname.includes('/siem/'));
-  });
-
+describe('observability tools', () => {
   it('health and readiness probes hit the unauthenticated paths', async () => {
     const calls = stubFetch();
     await call(base, 'health_check');

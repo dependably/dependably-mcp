@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **`list_activity`, `siem_list_auth_events` and `siem_vulnerabilities_summary`.** They were the
+  only three tools needing `read:audit`, a capability a member cannot mint — so the install
+  instruction was "get an admin to issue you a token" for three tools out of eighteen, and the
+  other fifteen worked on a Pull token any developer can create for themselves. They were also
+  the only three tools never verified against a live instance, precisely because the credential
+  the server is built around cannot reach them.
+
+  The surface is now **15 tools**, every one reachable with a Pull token, verified end-to-end:
+  15/15 answered, 0 failed. The audit endpoints still exist on the instance and an Audit token
+  still reaches them — read them in the web UI or with your own client.
+
 ### Fixed
 
 - **A Python prerelease sorted above its own release, so `bumpTo` went silent.** Python spells a

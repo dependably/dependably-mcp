@@ -62,8 +62,8 @@ documentation.
 
 **This repository**
 
-- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.30, 18 tools in five modules, each with `title`
-  and read-only annotations. Stdio only. Four environment variables.
+- TypeScript, ESM, `@modelcontextprotocol/sdk` 1.30, 15 tools in four modules, each with `title`
+  and read-only annotations. Every tool is reachable with a Pull token. Stdio only. Four environment variables.
 - Strong client layer: RFC 7807 parsing, capability-name extraction on 403, `Retry-After` on 429.
 - No prompts or resources. One smoke test, no HTTP-mocked unit tests.
 - `main` is one commit behind the unmerged `chore/npmrc-hygiene` branch.
@@ -109,9 +109,8 @@ folder is configured, flagged with `tools_generated: true`.
 | Group | Tools | Notes |
 |---|---|---|
 | Discover | `list_packages`, `get_package`, `search_packages`, `lookup_package` | read-only |
-| Security | `list_vulnerabilities`, `get_vulnerability`, `siem_vulnerabilities_summary` | read-only; SIEM needs `read:audit` |
+| Security | `list_vulnerabilities`, `get_vulnerability` | read-only |
 | Policy | `get_license_policy` | read-only |
-| Audit | `list_activity`, `siem_list_auth_events` | read-only |
 | Operate | `health_check`, `readiness_check` | both anonymous, and they answer from any host |
 | Set up | `get_install_command`, `get_publish_command` | local, never execute |
 

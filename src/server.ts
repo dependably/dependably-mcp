@@ -5,7 +5,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { DependablyClient } from './client.js';
 import type { Config } from './config.js';
 import { registerReadTools } from './tools/read.js';
-import { registerSiemTools } from './tools/siem.js';
 import { registerObservabilityTools } from './tools/observability.js';
 import { registerSetupTools } from './tools/setup.js';
 import { registerVulnTools } from './tools/vuln.js';
@@ -14,6 +13,11 @@ import { registerVulnTools } from './tools/vuln.js';
 // and package.json is always present in the published tarball.
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
+/**
+ * Every tool here is reachable with a **Pull** token — the preset any member can
+ * mint. Nothing in the surface requires a capability that only an admin or owner
+ * can grant, which is what keeps the install instruction to one sentence.
+ */
 export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   const server = new McpServer({
     name: 'dependably-mcp',
@@ -24,7 +28,6 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   // Project-scoped vulnerability tools take the dependency list as an argument;
   // no tool in this server reads a local file.
   registerVulnTools(server, client);
-  registerSiemTools(server, client);
   registerObservabilityTools(server, client);
   registerSetupTools(server, cfg);
 

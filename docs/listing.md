@@ -30,20 +30,20 @@ literals keep their exact spelling.
 > to your own Dependably instance using a personal access token you create in Dependably.
 >
 > With it, Claude can list and search your packages, explain a vulnerability and its remediation,
-> check a package against your licence policy before you adopt it, review the org activity feed
-> and authentication events, and produce the exact install or publish commands for each
-> ecosystem. Every tool is read-only, so nothing the server offers can change or delete anything
-> in your registry.
+> check a package against your licence policy before you adopt it, scope the vulnerability report
+> to one project's lockfile and get the version to bump to, and produce the exact install or
+> publish commands for each ecosystem. Every tool is read-only, so nothing the server offers can
+> change or delete anything in your registry.
 >
 > All traffic goes directly from your machine to your Dependably instance. Nothing is sent
 > anywhere else, and the token is stored in your operating system's keychain. Instances behind
 > a private certificate authority are supported through an optional CA bundle setting; there is
 > no option to disable certificate verification.
 >
-> Requires Dependably v0.3.0 or later and a token with `read:packages` (add `read:audit` for the
-> activity and authentication tools).
+> Requires Dependably v0.3.0 or later and a token with `read:packages` — the Pull preset, which
+> any member can mint.
 
-That is 1,146 characters, matching `long_description` in `manifest.json` plus the last two
+That is 1,143 characters, matching `long_description` in `manifest.json` plus the last two
 paragraphs. Keep the two in step.
 
 ## 2. Example prompts
@@ -55,7 +55,7 @@ and the token capability it needs, so a reviewer with the test account can repro
 |---|---|---|---|
 | 1 | "Which of our npm packages have a critical vulnerability, and what is the fix for the worst one?" | `list_vulnerabilities` → `get_vulnerability` | `read:packages` |
 | 2 | "Is `lodash@4.17.21` acceptable under our licence policy? Do not add it, just check." | `lookup_package`, `get_license_policy` | `read:packages` |
-| 3 | "Show me failed logins and lockouts in the last 24 hours." | `siem_list_auth_events` | `read:audit` |
+| 3 | "Here is our package-lock.json — which dependencies have known vulnerabilities, and what should I bump each to?" | `check_dependencies` | `read:packages` |
 | 4 | "Give me the pip install command for `requests` through our registry." | `get_install_command` | none (local) |
 | 5 | "Is the registry healthy right now? Which subsystem is degraded, if any?" | `readiness_check`, `health_check` | none |
 
@@ -71,8 +71,8 @@ every tool. Plan:
 1. A public demo instance of Dependably seeded with a few packages per ecosystem, at least one
    package with a known advisory, and a licence policy in `warn` mode. Reuse the marketing demo
    if one exists; otherwise a small instance under `demo.dependably.ca`.
-2. A dedicated user in that org with a personal access token carrying `read:packages` and
-   `read:audit`, which covers every tool the server registers.
+2. A dedicated user in that org with a personal access token carrying `read:packages` — the Pull
+   preset — which covers every tool the server registers.
 3. Rotate the token after the review; note the rotation date in §6.
 4. Give the reviewer: the instance URL, the token, and the five prompts above.
 
@@ -84,7 +84,7 @@ Take them from the installed extension on macOS in light mode, then crop to the 
 2. Prompt 1: the vulnerability list followed by the remediation for one advisory.
 3. Prompt 2: the pre-adoption licence verdict.
 4. Prompt 3: the authentication events table.
-5. The tool list in Claude Desktop, showing all 18 tools marked read-only.
+5. The tool list in Claude Desktop, showing all 15 tools marked read-only.
 
 ## 5. Pre-submission checklist
 

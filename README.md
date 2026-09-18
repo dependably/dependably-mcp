@@ -96,12 +96,12 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-18 tools in 4 groups, every one of them read-only.
+15 tools in 3 groups, every one of them read-only, and every one reachable with a **Pull**
+token that any member can mint.
 
 | Group | What it covers |
 |---|---|
-| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, curated remediation skills, pre-adoption lookups, licence policy, activity feed and identity. |
-| SIEM | Auth events filtered by action and time range, and severity-bucketed vulnerability counts by ecosystem. |
+| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, curated remediation skills, pre-adoption lookups and licence policy. |
 | Observability | Liveness and readiness, including per-subsystem health. |
 | Setup | Build an install or publish command for npm, PyPI, NuGet, Maven, RPM, OCI, Go or Cargo. |
 

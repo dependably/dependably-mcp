@@ -4,7 +4,7 @@
   "display_name": "Dependably",
   "version": "0.2.0",
   "description": "Ask Claude about the packages, vulnerabilities, licences and audit trail in your Dependably registry.",
-  "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo, self-hosted or as a hosted SaaS instance. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, review the org activity feed and authentication events, and produce the exact install or publish commands for each ecosystem. Every tool is read-only, so nothing the extension offers can change or delete anything in your registry.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
+  "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo, self-hosted or as a hosted SaaS instance. This extension connects Claude to your own Dependably instance using a personal access token you create in Dependably.\n\nWith it, Claude can list and search your packages, explain a vulnerability and its remediation, check a package against your licence policy before you adopt it, scope the vulnerability report to one project's lockfile and get the version to bump to, and produce the exact install or publish commands for each ecosystem. Every tool is read-only, so nothing the extension offers can change or delete anything in your registry.\n\nAll traffic goes directly from your machine to your Dependably instance. Nothing is sent anywhere else, and the token is stored in your operating system's keychain.",
   "author": {
     "name": "Michael Hiland",
     "url": "https://dependably.ca"
@@ -48,15 +48,15 @@
   "tools": [
     {
       "name": "check_dependencies",
-      "description": "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability."
+      "description": "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile \u2014 read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability."
     },
     {
       "name": "get_install_command",
-      "description": "Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it."
+      "description": "Return the shell command to install a package through this Dependably instance. This tool DOES NOT execute \u2014 show the command to the user and let them run it."
     },
     {
       "name": "get_license_policy",
-      "description": "The org's license policy: enforcement mode (off/warn/block) plus the SPDX allowlist and blocklist (GET /api/v1/license-policy) — answers \"which licenses are approved here\". Requires read:packages capability."
+      "description": "The org's license policy: enforcement mode (off/warn/block) plus the SPDX allowlist and blocklist (GET /api/v1/license-policy) \u2014 answers \"which licenses are approved here\". Requires read:packages capability."
     },
     {
       "name": "get_package",
@@ -64,15 +64,15 @@
     },
     {
       "name": "get_publish_command",
-      "description": "Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute — show the command to the user and let them run it. Replace <token> with a valid Dependably token."
+      "description": "Return the shell command to publish an artifact through this Dependably instance. This tool DOES NOT execute \u2014 show the command to the user and let them run it. Replace <token> with a valid Dependably token."
     },
     {
       "name": "get_remediation",
-      "description": "Fixed version (plus CWE / OWASP / remediation-skill ids) for one or more advisories, without the full advisory prose. Pass the installed version alongside each id to get the fix for that release line — for @hono/node-server 1.19.14 that is 1.19.15, not the 2.x fix. Use get_vulnerability instead when you need the write-up, PoC, or workarounds. Requires read:packages capability."
+      "description": "Fixed version (plus CWE / OWASP / remediation-skill ids) for one or more advisories, without the full advisory prose. Pass the installed version alongside each id to get the fix for that release line \u2014 for @hono/node-server 1.19.14 that is 1.19.15, not the 2.x fix. Use get_vulnerability instead when you need the write-up, PoC, or workarounds. Requires read:packages capability."
     },
     {
       "name": "get_remediation_skill",
-      "description": "Full how-to-fix guide for one or more curated remediation skills, as markdown (GET /api/v1/remediation/skills/{skillId}). Skill ids come from list_remediation_skills, or from the `skills` field get_remediation and check_dependencies return with includeAdvisoryDetail. Anonymous — no capability required."
+      "description": "Full how-to-fix guide for one or more curated remediation skills, as markdown (GET /api/v1/remediation/skills/{skillId}). Skill ids come from list_remediation_skills, or from the `skills` field get_remediation and check_dependencies return with includeAdvisoryDetail. Anonymous \u2014 no capability required."
     },
     {
       "name": "get_vulnerability",
@@ -83,20 +83,16 @@
       "description": "Liveness probe (GET /health). Returns 200 with { status: \"ok\" } as long as the process is running."
     },
     {
-      "name": "list_activity",
-      "description": "Org activity feed: publishes, yanks, imports, policy changes, etc., paginated (GET /api/v1/activity). Requires read:audit capability."
-    },
-    {
       "name": "list_packages",
       "description": "List packages in the registry, paginated (GET /api/v1/packages). Returns { items, total, limit, offset }. Requires read:packages capability."
     },
     {
       "name": "list_remediation_skills",
-      "description": "Index of every curated remediation skill this instance ships (GET /api/v1/remediation/skills): id, name and description, one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). Pass an id to get_remediation_skill for the full how-to-fix guide. Anonymous — no capability required."
+      "description": "Index of every curated remediation skill this instance ships (GET /api/v1/remediation/skills): id, name and description, one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). Pass an id to get_remediation_skill for the full how-to-fix guide. Anonymous \u2014 no capability required."
     },
     {
       "name": "list_vulnerabilities",
-      "description": "Org-wide vulnerability report: every package in the registry affected by a known advisory, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. This is the whole org, NOT one project — to scope it to a project's dependencies and get bump targets, use check_dependencies. Items are compact by default; pass verbosity \"full\" for the raw server fields. Requires read:packages capability."
+      "description": "Org-wide vulnerability report: every package in the registry affected by a known advisory, paginated (GET /api/v1/vuln-report). Returns { items, total, limit, offset }. This is the whole org, NOT one project \u2014 to scope it to a project's dependencies and get bump targets, use check_dependencies. Items are compact by default; pass verbosity \"full\" for the raw server fields. Requires read:packages capability."
     },
     {
       "name": "lookup_package",
@@ -104,19 +100,11 @@
     },
     {
       "name": "readiness_check",
-      "description": "Readiness probe (GET /ready). Returns { status: \"ready\"|\"degraded\", checks, errors }. 503 with details when a subsystem (DB, blob store, etc.) is failing — use this first when investigating an incident."
+      "description": "Readiness probe (GET /ready). Returns { status: \"ready\"|\"degraded\", checks, errors }. 503 with details when a subsystem (DB, blob store, etc.) is failing \u2014 use this first when investigating an incident."
     },
     {
       "name": "search_packages",
       "description": "Quick search across the registry by name (GET /api/v1/search). Queries shorter than 2 characters return empty groups. Requires read:packages capability."
-    },
-    {
-      "name": "siem_list_auth_events",
-      "description": "Stream auth events from the audit log (GET /api/v1/siem/events/auth) — login successes/failures, lockouts, token mints/revocations, role changes. Default lookback 24h, capped at SIEM_MAX_LOOKBACK_DAYS (default 90). Requires read:audit capability or a system-admin token."
-    },
-    {
-      "name": "siem_vulnerabilities_summary",
-      "description": "Severity-bucketed vulnerability summary across packages (GET /api/v1/siem/vulnerabilities/summary). Returns { by_ecosystem: { ecosystem: { severity: count } }, packages_total, packages_affected }."
     }
   ],
   "tools_generated": true,
