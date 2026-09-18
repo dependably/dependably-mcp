@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Error messages named a capability that does not exist.** `extractCapability` read only the
+  token *after* the word "capability", but Dependably's dominant phrasing puts the name before it
+  (`"read:tenant capability required."` — `AuthController`, `SiemController`, `CargoController`,
+  `HexController` and friends). Every one of those rendered as `Your token lacks the "required"
+  capability`, sending the reader after a grant that does not exist. Both positions are now read,
+  and the capture must match the `verb:leaf` shape of a real capability, so prose can never be
+  reported as one. The test that covered this used `requires capability "read:packages"`, a
+  phrasing the server never emits; the real wordings are pinned now.
+- **A 401 blamed the token's expiry when the cause could equally be a missing capability.**
+  Dependably sends one body for "no token" and for "valid token, missing capability", so the
+  message now names the capability and states both causes instead of picking one.
+- **A 5xx told the reader to check `DEPENDABLY_BASE_URL`.** The instance answered, so the URL
+  demonstrably resolves — `/lookup` in particular returns 503 when an *upstream* registry is
+  unreachable, a fault beyond the instance. The hint now says so. A detail ending in a full stop
+  no longer renders a doubled period.
+
 - **`check_dependencies` reported a vulnerable package as `clean`.** Report rows were joined onto
   the caller's dependency list by exact `name@version`, but the report stores canonical lower-case
   names while a lockfile carries whatever the author wrote. Against a live instance,
