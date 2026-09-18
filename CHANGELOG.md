@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **A Python prerelease sorted above its own release, so `bumpTo` went silent.** Python spells a
+  prerelease without semver's hyphen (`2.0.0rc1`, `1.0a1`, `1.0.dev1`), and the parser split only
+  on `-` — leaving the marker glued to the last release segment, where `"0rc1"` compared lexically
+  *above* `"0"`. `bumpTarget` returns null once `gte(installed, ceiling)` holds, so a project
+  pinned to `2.0.0rc1` with a fix at `2.0.0` was told nothing needed bumping. Pre, post and dev
+  tails are now parsed and ordered `dev < pre < release < post`. Epochs (`1!1.0`) and local
+  version labels remain unmodelled, and the module says so.
+
 - **Tool schemas advertised `additionalProperties: false` and did not enforce it.** The SDK builds
   a non-strict object from a raw shape, so an unknown property was silently dropped and the call
   proceeded. A typo'd `version` on `lookup_package` meant the package was evaluated *unpinned* —
