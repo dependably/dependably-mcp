@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **The ecosystem enum was wrong in both directions.** One shared list of eight values backed every
+  tool, but the planes differ. It offered `rpm` and `oci` to `lookup_package`, which the server
+  rejects with `422 Must be one of: npm, pypi, nuget, maven, golang, cargo, hex`; and it withheld
+  `apk`, `terraform` and `hex` from the registry tools, which serve them — 104 packages on the
+  dogfood instance that no tool could reach (`hex` 45, `apk` 54, `terraform` 5). The sets are now
+  per-plane in `src/ecosystems.ts`, and the smoke test pins each one as it reaches the client.
+
 - **Error messages named a capability that does not exist.** `extractCapability` read only the
   token *after* the word "capability", but Dependably's dominant phrasing puts the name before it
   (`"read:tenant capability required."` — `AuthController`, `SiemController`, `CargoController`,

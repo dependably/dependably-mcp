@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
+import { REGISTRY_ECOSYSTEMS } from '../ecosystems.js';
 import {
   buildFindings,
   fetchRemediations,
@@ -14,7 +15,7 @@ import {
   type Finding,
 } from '../vuln.js';
 
-const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
+const ecosystem = z.enum(REGISTRY_ECOSYSTEMS);
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,

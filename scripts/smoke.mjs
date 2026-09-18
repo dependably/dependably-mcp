@@ -10,6 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { DependablyClient } from '../dist/client.js';
 import { compare, gte, maxVersion } from '../dist/semver.js';
 import { buildFindings, parseNpmLockfile } from '../dist/vuln.js';
+import { LOOKUP_ECOSYSTEMS, REGISTRY_ECOSYSTEMS, SETUP_ECOSYSTEMS } from '../dist/ecosystems.js';
 import { buildServer } from '../dist/server.js';
 
 async function toolNames(cfg) {
@@ -201,6 +202,42 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   ok(text.includes('Nothing is listening'), `error should explain a refused connection, got: ${text}`);
   await client.close();
   await server.close();
+}
+
+// The ecosystem vocabularies are a wire contract, and they are NOT the same across
+// planes. A single shared enum was wrong in both directions at once: it offered rpm
+// and oci to lookup_package (422 from the server) and withheld apk, terraform and hex
+// from the registry tools, which serve them. Pin each plane's set as it reaches the
+// client, not just the constant it came from.
+{
+  const enumOf = async (tool, field) => (await toolSchema(base, tool)).properties?.[field]?.enum;
+
+  for (const tool of ['list_packages', 'get_package', 'list_vulnerabilities']) {
+    deepStrictEqual(await enumOf(tool, 'ecosystem'), [...REGISTRY_ECOSYSTEMS], `${tool} offers the registry set`);
+  }
+  deepStrictEqual(
+    await enumOf('check_dependencies', 'ecosystem'),
+    [...REGISTRY_ECOSYSTEMS],
+    'check_dependencies offers the registry set',
+  );
+  deepStrictEqual(
+    await enumOf('lookup_package', 'ecosystem'),
+    [...LOOKUP_ECOSYSTEMS],
+    'lookup_package offers only what /api/v1/lookup accepts',
+  );
+  for (const tool of ['get_install_command', 'get_publish_command']) {
+    deepStrictEqual(await enumOf(tool, 'ecosystem'), [...SETUP_ECOSYSTEMS], `${tool} offers only what it can spell`);
+  }
+
+  // The specific regressions, stated as behaviour rather than as list membership.
+  for (const eco of ['apk', 'terraform', 'hex']) {
+    ok(REGISTRY_ECOSYSTEMS.includes(eco), `registry tools must reach ${eco} — the instance serves packages there`);
+  }
+  for (const eco of ['rpm', 'oci', 'apk', 'terraform']) {
+    ok(!LOOKUP_ECOSYSTEMS.includes(eco), `lookup_package must not offer ${eco} — the server answers 422`);
+  }
+  ok(LOOKUP_ECOSYSTEMS.includes('hex'), 'lookup_package must offer hex — the server accepts it');
+  ok(!REGISTRY_ECOSYSTEMS.includes('go'), 'the Go ecosystem is spelled "golang"; "go" filters to nothing');
 }
 
 console.log(

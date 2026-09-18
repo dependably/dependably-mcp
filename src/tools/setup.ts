@@ -3,8 +3,9 @@ import { z } from 'zod';
 
 import type { Config } from '../config.js';
 import type { ToolResult } from '../format.js';
+import { SETUP_ECOSYSTEMS } from '../ecosystems.js';
 
-const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
+const ecosystem = z.enum(SETUP_ECOSYSTEMS);
 
 const LOCAL_READ_ANNOTATIONS = {
   readOnlyHint: true,

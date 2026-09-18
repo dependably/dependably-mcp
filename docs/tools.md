@@ -18,11 +18,25 @@ Package inventory, vulnerabilities and licence policy.
 | `list_vulnerabilities` | Paginated org-wide report of affected packages, compact by default. | `read:packages` |
 | `get_vulnerability` | Full advisory detail, including remediation guidance. | `read:packages` |
 | `get_remediation` | Fixed versions for up to 200 advisories at once, without the advisory prose. | `read:packages` |
-| `lookup_package` | Pre-adoption verdict on a package that is not in the registry: upstream metadata, OSV and org policy. Ingests nothing. | `read:packages` |
+| `lookup_package` | Pre-adoption verdict on a package that is not in the registry: upstream metadata, OSV and org policy. Ingests nothing. Takes a narrower ecosystem set than the tools above — see below. | `read:packages` |
 | `get_license_policy` | Enforcement mode plus the SPDX allowlist and blocklist, so you can see which licences are approved. | `read:packages` |
 | `list_activity` | Org activity feed: publishes, yanks, policy changes. | `read:audit` |
 | `list_remediation_skills` | Index of every curated remediation skill the instance ships — one per vulnerability class (vulnerable dependency, injection, XSS, path traversal, unsafe deserialization, SSRF, broken access control, weak cryptography, authentication failures). | none, anonymous |
 | `get_remediation_skill` | Full how-to-fix guide for one or more skill ids, as markdown. Ids come from `list_remediation_skills` or from the `skills` field `get_remediation`/`check_dependencies` return. | none, anonymous |
+
+### Ecosystems, and why the sets differ
+
+The registry tools — `list_packages`, `get_package`, `list_vulnerabilities`,
+`check_dependencies` and `siem_vulnerabilities_summary` — take **npm, pypi, nuget, maven, rpm,
+oci, golang, cargo, apk, terraform, hex**: everything the registry plane serves.
+
+`lookup_package` takes a narrower set — **npm, pypi, nuget, maven, golang, cargo, hex**. A
+pre-adoption verdict has to resolve the candidate against an upstream, and rpm, oci, apk and
+terraform have no single canonical upstream to ask. The server enforces this and answers anything
+outside the set with `422 Must be one of: …`.
+
+Go is spelled **`golang`**, not `go`. The registry endpoints do not validate this parameter — they
+treat it as a filter — so `go` would come back `200` with no results rather than as an error.
 
 ### Passing a dependency list to `check_dependencies`
 
@@ -66,7 +80,8 @@ network and filesystem access.
 | `get_install_command` | Builds the install command for an ecosystem. | none, runs locally |
 | `get_publish_command` | Builds the publish command for an ecosystem. | none, runs locally |
 
-Both cover eight ecosystems: npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo. Go is served
+Both cover eight ecosystems: npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo — bounded by the
+commands they know how to write, not by what the registry serves. Go is served
 through the standard module proxy protocol, so `get_install_command` works and modules are
 published the Go way, by tagging a release in source. `get_publish_command` returns that
 guidance for Go rather than a command.
