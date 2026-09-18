@@ -4,8 +4,11 @@ import { z } from 'zod';
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
 import { compactReportItem, type ReportItem } from '../vuln.js';
+import { LOOKUP_ECOSYSTEMS, REGISTRY_ECOSYSTEMS } from '../ecosystems.js';
 
-const ecosystem = z.enum(['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']);
+const ecosystem = z.enum(REGISTRY_ECOSYSTEMS);
+// /api/v1/lookup enforces its own, narrower set and 422s anything outside it.
+const lookupEcosystem = z.enum(LOOKUP_ECOSYSTEMS);
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -190,8 +193,10 @@ export function registerReadTools(server: McpServer, client: DependablyClient): 
         'Pre-adoption check of a package NOT necessarily in the registry: upstream metadata, OSV advisories, and the org-policy verdict, without ingesting anything (GET /api/v1/lookup). Use before adding a new dependency. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,
       inputSchema: {
-        ecosystem: ecosystem.describe('Package ecosystem.'),
-        name: z.string().describe('Package name to evaluate.'),
+        ecosystem: lookupEcosystem.describe(
+          'Package ecosystem. Narrower than the registry tools: a pre-adoption verdict needs an upstream to resolve against, so rpm, oci, apk and terraform are not offered here.',
+        ),
+        name: z.string().describe('Package name to evaluate. Maven takes a "groupId:artifactId" coordinate.'),
         version: z
           .string()
           .optional()
