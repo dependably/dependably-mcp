@@ -352,11 +352,10 @@ describe('get_remediation_skill', () => {
 });
 
 describe('observability tools', () => {
-  it('health and readiness probes hit the unauthenticated paths', async () => {
+  it('the readiness probe hits the unauthenticated path', async () => {
     const calls = stubFetch();
-    await call(base, 'health_check');
     await call(base, 'readiness_check');
-    deepStrictEqual(calls.map((c) => new URL(c.url).pathname), ['/health', '/ready']);
+    deepStrictEqual(calls.map((c) => new URL(c.url).pathname), ['/ready']);
   });
 
   it('does not expose the host-allowlisted /version and /metrics probes', async () => {
