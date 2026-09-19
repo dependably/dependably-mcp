@@ -101,9 +101,15 @@ token that any member can mint.
 
 | Group | What it covers |
 |---|---|
-| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, remediation versions, curated remediation skills, pre-adoption lookups and licence policy. |
+| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, individual advisory detail, remediation versions, curated remediation skills, pre-adoption lookups and licence policy. |
 | Observability | Liveness and readiness, including per-subsystem health. |
 | Setup | Build an install or publish command for npm, PyPI, NuGet, Maven, RPM, OCI, Go or Cargo. |
+
+The read tools cover **npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, Alpine (apk), Terraform and
+Hex** — everything the registry serves. The setup tools cover the eight above: they are bounded by
+the commands they know how to write, not by what the registry holds. `lookup_package` is narrower
+again, because a pre-adoption verdict needs an upstream to resolve the candidate against;
+[docs/tools.md](docs/tools.md) gives the exact set for each.
 
 The two setup tools return the command as text for you to run, so this server never shells out
 to your package manager. Go modules are published by tagging a release in source, so
