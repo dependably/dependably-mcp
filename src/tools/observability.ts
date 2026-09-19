@@ -12,23 +12,18 @@ const READ_ANNOTATIONS = {
 } as const;
 
 // Health probes. Use readiness_check first when triaging an incident: it names the
-// subsystem reporting degraded. Both endpoints are anonymous, so they work without a PAT
-// and from any host.
+// subsystem reporting degraded. The endpoint is anonymous, so it works without a PAT and from
+// any host — which is what makes it the first call in the install-verification sequence: it
+// separates "the base URL is wrong" from "the token is wrong", the only tool on the surface
+// that can.
 //
-// /version and /metrics are deliberately not wrapped: the server allowlists both to its own
-// host, so a tool for either would fail for every client that is not running on it.
+// /health is deliberately not wrapped alongside it. Liveness is a strict subset of readiness:
+// if /ready answers, /health adds nothing, and if it does not, /health will not either. A
+// developer never needs both, and this surface carries only what a developer needs.
+//
+// /version and /metrics are not wrapped either — a live instance answers /metrics with more
+// Prometheus text than most model context windows hold, so no agent can usefully read it.
 export function registerObservabilityTools(server: McpServer, client: DependablyClient): void {
-  server.registerTool(
-    'health_check',
-    {
-      title: 'Health check',
-      description: 'Liveness probe (GET /health). Returns 200 with { status: "ok" } as long as the process is running.',
-      annotations: READ_ANNOTATIONS,
-      inputSchema: z.object({}).strict(),
-    },
-    async () => run(async () => json(await client.get('/health'))),
-  );
-
   server.registerTool(
     'readiness_check',
     {

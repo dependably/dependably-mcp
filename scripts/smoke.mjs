@@ -61,7 +61,6 @@ const CORE_TOOLS = [
   'get_remediation',
   'get_remediation_skill',
   'get_vulnerability',
-  'health_check',
   'list_packages',
   'list_remediation_skills',
   'list_vulnerabilities',
@@ -191,8 +190,8 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'smoke', version: '0.0.0' });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  const res = await client.callTool({ name: 'health_check', arguments: {} });
-  ok(res.isError, 'health_check against a closed port must report an error');
+  const res = await client.callTool({ name: 'readiness_check', arguments: {} });
+  ok(res.isError, 'readiness_check against a closed port must report an error');
   const text = res.content[0].text;
   ok(text.includes('DEPENDABLY_BASE_URL'), `unreachable-instance error should name DEPENDABLY_BASE_URL, got: ${text}`);
   ok(text.includes('ECONNREFUSED'), `error should carry the underlying cause code, got: ${text}`);

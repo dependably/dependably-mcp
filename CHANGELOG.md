@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Removed
 
+- **`health_check`.** Liveness is a strict subset of readiness: if `/ready` answers, `/health` adds
+  nothing, and if it does not, `/health` will not either. A developer never needed both. What
+  `readiness_check` is actually for on this surface is separating "the base URL is wrong" from "the
+  token is wrong" — it is the only tool needing no capability, which is why it leads the
+  install-verification sequence. That role is unaffected. 14 tools.
+
+
 - **The `docs/` tree.** It shipped to nobody: `package.json` `files` is
   `dist, README.md, CHANGELOG.md, LICENSE`, and `.mcpbignore` excluded `docs/` from the extension
   bundle — so the README linked twice to a `docs/tools.md` that is absent from both the npm tarball

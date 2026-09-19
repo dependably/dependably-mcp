@@ -51,7 +51,7 @@ src/
 └── tools/
     ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
     ├── vuln.ts         # check_dependencies, get_remediation
-    ├── observability.ts# health_check, readiness_check
+    ├── observability.ts# readiness_check
     └── setup.ts        # get_install_command, get_publish_command
 
 test/                  # node:test unit tests, run against dist/ with source maps
