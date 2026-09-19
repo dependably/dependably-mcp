@@ -1,8 +1,7 @@
-# Source, tests, tooling and docs stay out of the bundle. The bundle is
+# Source, tests and tooling stay out of the bundle. The bundle is
 # dist/ + production node_modules/ + manifest.json + assets/ + licence.
 src/
 scripts/
-docs/
 tests/
 test/
 .github/

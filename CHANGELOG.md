@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Removed
 
+- **The `docs/` tree.** It shipped to nobody: `package.json` `files` is
+  `dist, README.md, CHANGELOG.md, LICENSE`, and `.mcpbignore` excluded `docs/` from the extension
+  bundle — so the README linked twice to a `docs/tools.md` that is absent from both the npm tarball
+  and the `.mcpb`, dead for every consumer who did not browse the repo. It also diverged from the
+  convention `dependably-community` adopted in 2026-08: prose lives in the documentation, enterprise
+  and spec repos, split by audience.
+
+  `docs/tools.md` is folded into the README, which is the only file that reaches a user.
+  `docs/development.md` becomes `CONTRIBUTING.md` at the repo root. The four planning documents move
+  to the tracker with their content preserved: distribution plan (#24), listing pack (#25), desktop
+  E2E runbook (#26), API asks (#27). Those four carried live status — `pending, this Mac`,
+  `external, blocking` — and a tool count that went stale three times in one day without anything
+  catching it, which is what status in git looks like.
+
+
 - **`list_activity`, `siem_list_auth_events` and `siem_vulnerabilities_summary`.** They were the
   only three tools needing `read:audit`, a capability a member cannot mint — so the install
   instruction was "get an admin to issue you a token" for three tools out of eighteen, and the

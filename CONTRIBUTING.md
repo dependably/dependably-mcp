@@ -1,7 +1,7 @@
-# Development
+# Contributing
 
-Building, testing and extending the server. For install and configuration see the
-[README](../README.md); for the tool surface see [tools.md](tools.md).
+Building, testing and extending the server. For install, configuration and the tool surface, see
+the [README](README.md).
 
 ## Getting set up
 
@@ -62,7 +62,7 @@ test/                  # node:test unit tests, run against dist/ with source map
 └── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
 ```
 
-Five modules register tools, grouped into the four groups shown in [tools.md](tools.md):
+Five modules register tools, grouped into the four groups shown in [tools.md](README.md#what-it-can-do):
 `vuln.ts` holds four tools that belong to the read group.
 
 ## Adding a tool
@@ -93,6 +93,7 @@ npm run bundle:verify    # builds dist-mcpb/dependably-<version>.mcpb and .sha25
                          # then boots the server from the unpacked bundle
 ```
 
-The bundle is unsigned. `docs/distribution-plan.md` covers why, and the plan to list it
-in Anthropic's directory. The listing pack and pre-submission checklist are in
-[listing.md](listing.md); the manual install runbook is [desktop-e2e.md](desktop-e2e.md).
+The bundle is unsigned. The distribution plan (#24) covers why, and the plan to list it in
+Anthropic's directory. The listing pack and pre-submission checklist are #25; the manual install
+runbook is #26. These live in the tracker rather than in the repo because they carry status that
+goes stale silently once nothing is reading it.
