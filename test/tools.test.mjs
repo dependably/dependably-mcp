@@ -10,6 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
 import { json, err, withSummary, run, RESULT_CHAR_BUDGET } from '../dist/format.js';
+import { compactAnalysis } from '../dist/tools/projects.js';
 
 const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -512,6 +513,398 @@ describe('get_remediation_skill', () => {
     const tool = tools.tools.find((t) => t.name === 'get_remediation_skill');
     ok(tool.inputSchema.properties.skillIds.description.includes('5'), tool.inputSchema.properties.skillIds.description);
     ok(tool.description.includes('not by Anthropic'), tool.description);
+  });
+});
+
+describe('project tools', () => {
+  it('list_projects forwards exactly the given filters, offset absent when unset', async () => {
+    const stub = { total: 1, limit: 10, offset: 0, sort: 'policy', dir: 'desc', items: [{ id: 'p1' }] };
+    const calls = stubFetch(() => stub);
+    const body = payload(await call(base, 'list_projects', { q: 'api', limit: 10, sort: 'policy', dir: 'desc' }));
+    const u = new URL(calls[0].url);
+    strictEqual(u.pathname, '/api/v1/projects');
+    deepStrictEqual([...u.searchParams.keys()].sort(), ['dir', 'limit', 'q', 'sort']);
+    strictEqual(u.searchParams.get('q'), 'api');
+    strictEqual(u.searchParams.get('limit'), '10');
+    strictEqual(u.searchParams.get('sort'), 'policy');
+    strictEqual(u.searchParams.get('dir'), 'desc');
+    ok(!u.searchParams.has('offset'), 'offset must be absent when not given');
+    deepStrictEqual(body, stub);
+  });
+
+  it('list_projects rejects an out-of-range limit and an unrecognised sort value', async () => {
+    stubFetch();
+    const badLimit = await call(base, 'list_projects', { limit: 201 });
+    ok(badLimit.isError, 'limit above 200 must be rejected');
+    const badSort = await call(base, 'list_projects', { sort: 'bogus' });
+    ok(badSort.isError, 'an unrecognised sort value must be rejected');
+  });
+
+  it('get_project url-encodes the id and returns the body unchanged', async () => {
+    const stub = { id: 'a/b', name: 'x', versions: [], ancestors: [], children: [], rollup: null };
+    const calls = stubFetch(() => stub);
+    const body = payload(await call(base, 'get_project', { projectId: 'a/b' }));
+    ok(calls[0].url.includes('/api/v1/projects/a%2Fb'), calls[0].url);
+    deepStrictEqual(body, stub);
+  });
+
+  it('get_project surfaces a 404 problem+json as an error result carrying the server detail', async () => {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({ type: 'about:blank', title: 'Not Found', status: 404, detail: 'project not found' }),
+        { status: 404, headers: { 'content-type': 'application/problem+json' } },
+      );
+    const res = await call(base, 'get_project', { projectId: 'missing' });
+    strictEqual(res.isError, true);
+    ok(res.content[0].text.includes('project not found'), res.content[0].text);
+  });
+
+  it('get_project_version with only projectId hits /versions/latest/analysis and sends no query params', async () => {
+    const calls = stubFetch(() => ({ rollup: {}, page: 1, limit: 50, total: 0, items: [], orphanAnalysis: [] }));
+    await call(base, 'get_project_version', { projectId: 'p1' });
+    const u = new URL(calls[0].url);
+    strictEqual(u.pathname, '/api/v1/projects/p1/versions/latest/analysis');
+    strictEqual([...u.searchParams.keys()].length, 0, `expected no query params, got: ${u.search}`);
+  });
+
+  it('get_project_version forwards every filter exactly once', async () => {
+    const calls = stubFetch(() => ({ rollup: {}, page: 1, limit: 50, total: 0, items: [], orphanAnalysis: [] }));
+    await call(base, 'get_project_version', {
+      projectId: 'p1',
+      versionId: 'v1',
+      page: 2,
+      limit: 25,
+      sort: 'severity',
+      dir: 'asc',
+      q: 'left',
+      scope: 'prod',
+      sev: 'high',
+      reach: 'reachable',
+      registry: 'present',
+      violations: true,
+      suppressed: true,
+    });
+    const u = new URL(calls[0].url);
+    strictEqual(u.pathname, '/api/v1/projects/p1/versions/v1/analysis');
+    strictEqual(u.searchParams.get('page'), '2');
+    strictEqual(u.searchParams.get('limit'), '25');
+    strictEqual(u.searchParams.get('sort'), 'severity');
+    strictEqual(u.searchParams.get('dir'), 'asc');
+    strictEqual(u.searchParams.get('q'), 'left');
+    strictEqual(u.searchParams.get('scope'), 'prod');
+    strictEqual(u.searchParams.get('sev'), 'high');
+    strictEqual(u.searchParams.get('reach'), 'reachable');
+    strictEqual(u.searchParams.get('registry'), 'present');
+    strictEqual(u.searchParams.get('violations'), 'true');
+    strictEqual(u.searchParams.get('suppressed'), 'true');
+    strictEqual([...u.searchParams.keys()].length, 11, 'each filter must appear exactly once');
+  });
+
+  it('get_project_version rejects an invalid scope, a zero limit, a zero page, and an unknown property', async () => {
+    stubFetch();
+    ok((await call(base, 'get_project_version', { projectId: 'p1', scope: 'both' })).isError);
+    ok((await call(base, 'get_project_version', { projectId: 'p1', limit: 0 })).isError);
+    ok((await call(base, 'get_project_version', { projectId: 'p1', page: 0 })).isError);
+    ok((await call(base, 'get_project_version', { projectId: 'p1', bogus: true })).isError);
+  });
+
+  it('compactAnalysis produces exactly the documented compact shape', () => {
+    const fixture = {
+      rollup: { componentTotal: 2 },
+      page: 1,
+      limit: 50,
+      total: 2,
+      items: [
+        {
+          componentId: 'c1',
+          purl: 'pkg:npm/a@1.0.0',
+          purlKey: 'k1',
+          name: 'a',
+          version: '1.0.0',
+          ecosystem: 'npm',
+          componentType: 'library',
+          sbomScope: 'required',
+          dependencyScope: 'runtime',
+          isProd: true,
+          dependencyKind: 'direct',
+          dependencyPath: null,
+          licenseSpdx: 'MIT',
+          description: 'desc',
+          author: null,
+          copyright: null,
+          group: null,
+          websiteUrl: null,
+          vcsUrl: null,
+          issueTrackerUrl: null,
+          distributionUrl: null,
+          hashes: null,
+          versionRange: null,
+          isExternal: false,
+          metadataSource: 'registry',
+          inRegistry: true,
+          registryLink: 'https://x',
+          registry: {
+            presence: 'present',
+            hosted: true,
+            cached: false,
+            blocked: null,
+            deprecated: null,
+            latestVersion: '1.0.1',
+            outdated: true,
+          },
+          policyViolations: [{ arm: 'license', detail: 'blocked license', vulnKey: null, licenseSpdx: 'GPL-3.0' }],
+          advisories: [
+            {
+              vulnKey: 'v1',
+              osvId: 'GHSA-1',
+              aliases: [],
+              severity: 'HIGH',
+              cvss: 7.5,
+              isKev: false,
+              epss: 0.01,
+              effectivePriority: 'act',
+              unscored: false,
+              severityBucket: 'high',
+              vexState: null,
+              vexJustification: null,
+              vexResponse: null,
+              vexDetail: null,
+              vexSource: null,
+              vexUpdatedBy: null,
+              vexUpdatedAt: null,
+              reachability: 'reachable',
+              confidence: null,
+              sarifSuppressed: false,
+              securitySeverity: null,
+              severityOrigin: null,
+              inherited: false,
+              policyViolations: [],
+            },
+            {
+              vulnKey: 'v2',
+              osvId: 'GHSA-2',
+              aliases: [],
+              severity: 'LOW',
+              cvss: 2.1,
+              isKev: true,
+              epss: 0.001,
+              effectivePriority: 'track',
+              unscored: false,
+              severityBucket: 'low',
+              vexState: 'exploitable',
+              vexJustification: null,
+              vexResponse: null,
+              vexDetail: null,
+              vexSource: 'manual',
+              vexUpdatedBy: 'jane',
+              vexUpdatedAt: '2026-01-01T00:00:00Z',
+              reachability: 'unknown',
+              confidence: null,
+              sarifSuppressed: false,
+              securitySeverity: null,
+              severityOrigin: null,
+              inherited: false,
+              policyViolations: [],
+            },
+          ],
+        },
+        {
+          componentId: 'c2',
+          purl: null,
+          purlKey: null,
+          name: 'b',
+          version: null,
+          ecosystem: null,
+          componentType: null,
+          sbomScope: null,
+          dependencyScope: 'unknown',
+          isProd: false,
+          dependencyKind: null,
+          dependencyPath: null,
+          licenseSpdx: null,
+          description: null,
+          author: null,
+          copyright: null,
+          group: null,
+          websiteUrl: null,
+          vcsUrl: null,
+          issueTrackerUrl: null,
+          distributionUrl: null,
+          hashes: null,
+          versionRange: null,
+          isExternal: null,
+          metadataSource: null,
+          inRegistry: false,
+          registryLink: null,
+          registry: null,
+          policyViolations: [],
+          advisories: [],
+        },
+      ],
+      orphanAnalysis: [
+        {
+          purlKey: 'orphan1',
+          vulnKey: 'vOrphan',
+          vexState: 'resolved',
+          vexJustification: null,
+          vexResponse: null,
+          vexDetail: null,
+          vexSource: 'manual',
+          vexUpdatedBy: null,
+          vexUpdatedAt: null,
+          reachability: null,
+          confidence: null,
+          sarifSuppressed: false,
+          securitySeverity: null,
+          severityOrigin: null,
+          inherited: false,
+        },
+      ],
+    };
+
+    deepStrictEqual(compactAnalysis(fixture), {
+      rollup: { componentTotal: 2 },
+      page: 1,
+      limit: 50,
+      total: 2,
+      items: [
+        {
+          componentId: 'c1',
+          purl: 'pkg:npm/a@1.0.0',
+          name: 'a',
+          version: '1.0.0',
+          ecosystem: 'npm',
+          dependencyScope: 'runtime',
+          isProd: true,
+          dependencyKind: 'direct',
+          licenseSpdx: 'MIT',
+          registry: { presence: 'present', blocked: null, deprecated: null, latestVersion: '1.0.1', outdated: true },
+          policyViolations: [{ arm: 'license', detail: 'blocked license' }],
+          advisories: [
+            {
+              vulnKey: 'v1',
+              osvId: 'GHSA-1',
+              severityBucket: 'high',
+              cvss: 7.5,
+              isKev: false,
+              effectivePriority: 'act',
+              vexState: null,
+              reachability: 'reachable',
+            },
+            {
+              vulnKey: 'v2',
+              osvId: 'GHSA-2',
+              severityBucket: 'low',
+              cvss: 2.1,
+              isKev: true,
+              effectivePriority: 'track',
+              vexState: 'exploitable',
+              reachability: 'unknown',
+            },
+          ],
+        },
+        {
+          componentId: 'c2',
+          purl: null,
+          name: 'b',
+          version: null,
+          ecosystem: null,
+          dependencyScope: 'unknown',
+          isProd: false,
+          dependencyKind: null,
+          licenseSpdx: null,
+          registry: null,
+          policyViolations: [],
+          advisories: [],
+        },
+      ],
+      orphanAnalysisCount: 1,
+    });
+  });
+
+  it('get_project_version returns the fixture unchanged when verbosity is full', async () => {
+    const stub = {
+      rollup: {},
+      page: 1,
+      limit: 50,
+      total: 1,
+      items: [{ componentId: 'c1', extra: 'field' }],
+      orphanAnalysis: [],
+    };
+    stubFetch(() => stub);
+    const body = payload(await call(base, 'get_project_version', { projectId: 'p1', verbosity: 'full' }));
+    deepStrictEqual(body, stub);
+  });
+
+  it('get_project_version is compact by default (no verbosity argument): matches compactAnalysis(stub) exactly', async () => {
+    const stub = {
+      rollup: { componentTotal: 1 },
+      page: 1,
+      limit: 50,
+      total: 1,
+      items: [
+        {
+          componentId: 'c1',
+          purl: 'pkg:npm/a@1.0.0',
+          name: 'a',
+          version: '1.0.0',
+          ecosystem: 'npm',
+          dependencyScope: 'runtime',
+          isProd: true,
+          dependencyKind: 'direct',
+          licenseSpdx: 'MIT',
+          description: 'a description that should be dropped',
+          author: 'someone that should be dropped',
+          hashes: [{ alg: 'SHA-256', content: 'deadbeef' }],
+          registry: null,
+          policyViolations: [],
+          advisories: [],
+        },
+      ],
+      orphanAnalysis: [{ purlKey: 'orphan1', vulnKey: 'vOrphan' }],
+    };
+    stubFetch(() => stub);
+    // Called with NO verbosity argument at all — proves "compact by default" rather than
+    // merely "compact when asked", which a default flip to 'full' would not fail without this.
+    const body = payload(await call(base, 'get_project_version', { projectId: 'p1' }));
+    deepStrictEqual(body, compactAnalysis(stub));
+    strictEqual(body.items[0].description, undefined, 'droppable fields like description must not survive compaction');
+    ok(!('author' in body.items[0]), 'droppable fields like author must not survive compaction');
+    ok(!('hashes' in body.items[0]), 'droppable fields like hashes must not survive compaction');
+    strictEqual(body.orphanAnalysisCount, 1);
+  });
+
+  it('get_project_version reports an actionable error rather than a false-clean result on a non-JSON body', async () => {
+    // A misrouted proxy or a stale DEPENDABLY_BASE_URL can return an HTML login page with a
+    // 200 status; the client decodes a non-JSON content type to a plain string. Feeding that
+    // into compactAnalysis would previously produce `{"items":[],"orphanAnalysisCount":0}`
+    // with no isError — indistinguishable from a real "nothing vulnerable" answer.
+    globalThis.fetch = async () =>
+      new Response('<html><body>Please log in</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    const res = await call(base, 'get_project_version', { projectId: 'p1' });
+    ok(res.isError, 'a non-JSON body must not be reported as a normal (and falsely clean) result');
+    ok(res.content[0].text.includes('DEPENDABLY_BASE_URL'), res.content[0].text);
+    ok(res.content[0].text.includes('/versions/latest/analysis'), res.content[0].text);
+  });
+
+  it('get_project_version reports an actionable error rather than throwing on a 204/empty body', async () => {
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    const res = await call(base, 'get_project_version', { projectId: 'p1' });
+    ok(res.isError, 'a 204/empty body must not throw or be silently misread');
+    ok(!res.content[0].text.includes("Cannot read properties of null"), res.content[0].text);
+    ok(res.content[0].text.includes('DEPENDABLY_BASE_URL'), res.content[0].text);
+  });
+
+  it('get_project_version rejects an empty projectId and an empty versionId', async () => {
+    stubFetch();
+    ok((await call(base, 'get_project_version', { projectId: '' })).isError, 'empty projectId must be a schema error');
+    ok(
+      (await call(base, 'get_project_version', { projectId: 'p1', versionId: '' })).isError,
+      'empty versionId must be a schema error',
+    );
   });
 });
 

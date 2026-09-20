@@ -57,11 +57,14 @@ const CORE_TOOLS = [
   'get_install_command',
   'get_license_policy',
   'get_package',
+  'get_project',
+  'get_project_version',
   'get_publish_command',
   'get_remediation',
   'get_remediation_skill',
   'get_vulnerability',
   'list_packages',
+  'list_projects',
   'list_remediation_skills',
   'list_vulnerabilities',
   'lookup_package',
@@ -282,6 +285,8 @@ const REQUIRED = {
   get_remediation_skill: ['skillIds'],
   get_install_command: ['ecosystem', 'package'],
   get_publish_command: ['ecosystem', 'artifact_path'],
+  get_project: ['projectId'],
+  get_project_version: ['projectId'],
 };
 
 {
