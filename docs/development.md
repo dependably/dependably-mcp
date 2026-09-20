@@ -48,9 +48,12 @@ src/
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
 ├── server.ts          # registers the 4 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
+├── ecosystems.ts       # the ecosystem enums, one vocabulary per server plane
+├── semver.ts           # minimal version ordering, for comparing against a fix
+├── vuln.ts             # vulnerability scoping and remediation enrichment
 └── tools/
     ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
-    ├── vuln.ts         # check_dependencies, get_remediation
+    ├── vuln.ts         # check_dependencies, get_remediation, list_remediation_skills, get_remediation_skill
     ├── observability.ts# health_check, readiness_check
     └── setup.ts        # get_install_command, get_publish_command
 

@@ -26,15 +26,15 @@ literals keep their exact spelling.
 ### Description (2000 characters max)
 
 > Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven,
-> RPM, OCI, Go and Cargo, self-hosted or run as a hosted SaaS instance. This extension connects
-> Claude to your own instance with a personal access token you create there.
+> RPM, OCI, Go, Cargo, apk, Terraform and Hex, self-hosted or run as a hosted SaaS instance. This
+> extension connects Claude to your own instance with a personal access token you create there.
 >
 > With it, Claude can list and search your packages, look up a package before you adopt it, and
 > explain an advisory and its fix. It can also scope your vulnerability report to one project's
 > lockfile with the version to bump to, check a licence against your policy, and write the
-> install or publish command for any of the eight ecosystems. Two more tools check whether the
-> registry itself is up and healthy. Every tool is read-only: none of them can change or delete
-> anything in your registry.
+> install or publish command for the eight ecosystems that have one. Two more tools check
+> whether the registry itself is up and healthy. Every tool is read-only: none of them can
+> change or delete anything in your registry.
 >
 > All traffic goes straight from your machine to your own Dependably instance, and nowhere else.
 > Your token stays in your operating system's keychain. Instances behind a private certificate
@@ -44,7 +44,7 @@ literals keep their exact spelling.
 > Requires Dependably v0.3.0 or later and a token with `read:packages` — the Pull preset, which
 > any member can create.
 
-That is 1,182 characters, and is the exact text of `long_description` in `manifest.json`. Keep
+That is 1,210 characters, and is the exact text of `long_description` in `manifest.json`. Keep
 the two in step.
 
 ## 2. Example prompts

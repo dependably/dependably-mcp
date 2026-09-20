@@ -206,7 +206,7 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
    assessed by Anthropic, not a developer choice. MCPB listings may stay in the Community tier;
    org-scoped installs by Team and Enterprise admins do not depend on the tier.
 4. **Open-source clause.** Relicensed from Apache-2.0 to MIT, which is on Anthropic's
-   required-license list for the submission form. The clause itself is required and not
+   required-licence list for the submission form. The clause itself is required and not
    waivable: the GitHub mirror must be public before submission, not moot either way.
 5. **Publisher identity and slug.** Permanent; decide before the first submission.
 6. **Capability guidance.** The config dialog cannot validate token capabilities, and no tool

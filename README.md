@@ -33,8 +33,8 @@ claude mcp add dependably \
 `npx` fetches the package from npm on first use. To install it once instead, run
 `npm install -g dependably-mcp` and use `dependably-mcp` in place of `npx -y dependably-mcp`.
 
-The first public npm release is 0.2.0; until it is published, install from a checkout instead
-with `npm install -g .`.
+The first public npm release is 0.2.0; until it is published, install from a clone of this
+repository instead: `npm ci && npm run build && npm install -g .`.
 
 Or edit `~/.claude.json`, or your project's `.mcp.json`, directly:
 
