@@ -45,9 +45,9 @@ All notable changes to this project are documented here. The format follows
 
 - **The extension's directory card and token dialog no longer promise an audit trail or an
   activity-feed and authentication-events capability** that no tool provides; `tools_generated` is
-  now `false`. The README gained install sections for Cursor, Windsurf, VS Code, Zed, Codex CLI and
-  Gemini CLI, each checked against that client's current documentation, and states that the public
-  npm release has not yet run. `SECURITY.md` routes reports to `support@dependably.ca`. The
+  now `false`. Install instructions for every MCP client (Claude Desktop, Claude Code, Cursor,
+  Windsurf, VS Code, Zed, Codex CLI, Gemini CLI) live in the documentation site's Integrations
+  section, not in this README. `SECURITY.md` routes reports to `support@dependably.ca`. The
   submission checklist corrections found by the review (the MCPB open-source clause is required and
   not waivable; a populated test account is needed for every submission; screenshot 4 shows
   `check_dependencies`, not a table that no tool produces) belong to the listing pack in the
