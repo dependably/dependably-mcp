@@ -162,10 +162,17 @@ describe('fetchEcosystems', () => {
   it('falls back on a timeout without echoing the DEPENDABLY_TIMEOUT_MS advice, which is wrong for this capped call', async () => {
     // A server that never responds: the stub rejects only when the request's
     // own AbortSignal fires, the same way real `fetch` behaves against a
-    // signal whose timeout elapses.
+    // signal whose timeout elapses. A real socket would keep the event loop
+    // alive while it waits; `AbortSignal.timeout`'s own timer is unref'd, so
+    // without the referenced timer below Node 22 drains the loop before the
+    // signal fires and the runner abandons the pending promise.
     globalThis.fetch = (_url, init) =>
       new Promise((_resolve, reject) => {
-        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+        const keepAlive = setTimeout(() => reject(new Error('stub outlived the cap')), 10_000);
+        init.signal.addEventListener('abort', () => {
+          clearTimeout(keepAlive);
+          reject(init.signal.reason);
+        }, { once: true });
       });
     const result = await fetchEcosystems(new DependablyClient({ ...cfg, timeoutMs: 200 }));
     strictEqual(result.source, 'fallback');
