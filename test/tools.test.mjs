@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
-import { json, err, withSummary, run } from '../dist/format.js';
+import { json, err, withSummary, run, RESULT_CHAR_BUDGET } from '../dist/format.js';
 
 const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -50,20 +50,32 @@ const call = (cfg, name, args = {}) => withServer(cfg, (c) => c.callTool({ name,
 const payload = (res) => JSON.parse(res.content[0].text);
 
 describe('format helpers', () => {
-  it('json stringifies objects and passes strings through', () => {
-    strictEqual(json({ a: 1 }).content[0].text, '{\n  "a": 1\n}');
+  it('json stringifies objects compactly (no pretty-print indent) and passes strings through', () => {
+    strictEqual(json({ a: 1 }).content[0].text, '{"a":1}');
     strictEqual(json('raw').content[0].text, 'raw');
   });
 
   it('withSummary prefixes the body', () => {
     ok(withSummary('done.', { a: 1 }).content[0].text.startsWith('done.\n\n'));
     ok(withSummary('done.', 'text').content[0].text.startsWith('done.\n\n'));
+    strictEqual(withSummary('done.', { a: 1 }).content[0].text, 'done.\n\n{"a":1}');
   });
 
   it('err marks the result as an error', () => {
     const e = err('boom');
     strictEqual(e.isError, true);
     strictEqual(e.content[0].text, 'boom');
+  });
+
+  it('err applies the same character budget as json/withSummary', () => {
+    // A 500 with a huge application/problem+json `detail` (proven: 3 MB) must not
+    // bypass the budget just because it is reported through err() rather than
+    // json(). isError must stay true and the trailer must still be machine-readable.
+    const huge = 'x'.repeat(RESULT_CHAR_BUDGET + 50_000);
+    const e = err(huge);
+    strictEqual(e.isError, true);
+    ok(e.content[0].text.length < huge.length, 'the error message must be truncated');
+    ok(e.content[0].text.includes(`[truncated: result exceeded ${RESULT_CHAR_BUDGET} characters`), e.content[0].text.slice(-200));
   });
 
   it('run converts a throw into an error result, including a non-Error throw', async () => {
@@ -78,6 +90,26 @@ describe('format helpers', () => {
     });
     strictEqual(raw.isError, true);
     ok(raw.content[0].text.includes('a string'));
+  });
+
+  it('leaves a small result untouched', () => {
+    const small = { hello: 'world' };
+    const text = json(small).content[0].text;
+    strictEqual(text, JSON.stringify(small));
+    ok(!text.includes('[truncated'));
+  });
+
+  it('truncates a result exceeding the shared character budget and appends a machine-readable trailer', () => {
+    const big = { items: Array.from({ length: RESULT_CHAR_BUDGET }, (_, i) => i) };
+    const text = json(big).content[0].text;
+    ok(text.length > RESULT_CHAR_BUDGET, 'truncated text still carries the trailer past the budget');
+    ok(text.includes(`[truncated: result exceeded ${RESULT_CHAR_BUDGET} characters`), text.slice(-200));
+    ok(text.startsWith('{"items":['));
+  });
+
+  it('applies the same truncation to withSummary', () => {
+    const text = withSummary('done.', 'x'.repeat(RESULT_CHAR_BUDGET + 1000)).content[0].text;
+    ok(text.includes('[truncated:'));
   });
 });
 
@@ -151,6 +183,12 @@ describe('list_vulnerabilities verbosity', () => {
     orgSlug: 'default',
     firstSeenAt: 'x',
   };
+
+  it('rejects a limit above 200, matching list_packages', async () => {
+    stubFetch(() => ({ items: [item], total: 1 }));
+    const res = await call(base, 'list_vulnerabilities', { limit: 201 });
+    ok(res.isError, 'limit above 200 must be rejected');
+  });
 
   it('compacts items by default', async () => {
     stubFetch(() => ({ items: [item], total: 1 }));
