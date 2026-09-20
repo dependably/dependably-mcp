@@ -112,7 +112,7 @@ command. The two environment variables that gated tool registration are no longe
   nothing was tested, but because nothing produced an lcov file and
   `sonar.javascript.lcov.reportPaths` was never set. Node's V8 coverage also names
   `dist/*.js`, which `sonar.sources=src` excludes, so the fix is `--enable-source-maps`,
-  which remaps each `SF:` line onto the `src/*.ts` file Sonar actually analyses. Verified on
+  which remaps each `SF:` line onto the `src/*.ts` file Sonar actually analyzes. Verified on
   `node:22`, the CI image. No new dependencies: this is Node's built-in test runner and
   coverage, not c8 or nyc.
 - CI: the `test` job publishes `coverage/lcov.info` and `sonarqube-check` now `needs` it,

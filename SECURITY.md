@@ -11,7 +11,7 @@ Please **do not** open a public issue for security problems.
 Report privately instead, either via:
 
 - **GitHub private vulnerability reporting** — [Security → Report a vulnerability](https://github.com/dependably/dependably-mcp/security/advisories/new) on this repository, or
-- **Email** — mikehiland@gmail.com with `[dependably-mcp security]` in the subject.
+- **Email** — support@dependably.ca with `[dependably-mcp security]` in the subject.
 
 Include what you can: affected version, a reproduction or proof of concept, and impact as you understand it. You'll get an acknowledgement within a few days, and a fix or mitigation plan before any public disclosure is coordinated with you.
 

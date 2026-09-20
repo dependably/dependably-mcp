@@ -8,6 +8,13 @@ Progress 2026-09-12: M1 steps 1 to 3 done and the bundle verifies; M2 steps 1 an
 GitLab and GitHub releases). Open decision 1 resolved by dropping the two probes. What remains is
 tracked in `docs/listing.md`, which is the pre-submission checklist.
 
+Progress 2026-09-19: corrected §3's stale tool count (18 → 15) and manifest-spec claim, rewrote
+§4's tool surface to the current 15 tools in three groups and dropped the prompts/resources/
+roadmap bullets the 242e1de refactor rejected, dropped the unverifiable 150,000-character and
+300 s numbers, and updated §7's open-source-clause and reviewer-test-account decisions to match
+Anthropic's current review-criteria page (required and not waivable; a universal submission
+requirement, not verified-tier only).
+
 ## 1. Goal
 
 Let a Claude Desktop user open **Settings → Extensions**, find **Dependably**, install it, paste the
@@ -72,8 +79,9 @@ documentation.
 
 **Anthropic**
 
-- Bundles are `.mcpb` (renamed from `.dxt`; old files still open). Manifest spec 0.3 or 0.4; CLI
-  `@anthropic-ai/mcpb` 2.1.2. Node is the recommended runtime because Claude Desktop ships one.
+- Bundles are `.mcpb` (renamed from `.dxt`; old files still open). Manifest spec 0.3 is current
+  for a Node bundle; 0.4 only adds the `uv` runtime. CLI `@anthropic-ai/mcpb` 2.1.2. Node is the
+  recommended runtime because Claude Desktop ships one.
   Platforms `darwin` and `win32`. Signing is optional, and `mcpb sign` currently produces bundles
   Desktop rejects (mcpb issue #278, open since 2026-06-12); ship unsigned with checksums.
 - The directory lists remote servers, desktop extensions, and MCP Apps. Remote is preferred; MCPB
@@ -85,7 +93,8 @@ documentation.
 - Review criteria: `title` plus a read-only or destructive annotation on every tool; separate read
   and write tools; no catch-all request tool; descriptions that do not steer Claude; actionable
   errors, never a bare "Internal Server Error".
-- Limits: tool results about 150,000 characters, 300 s timeout, no resource subscriptions or
+- Limits: not stated in current docs as fixed numbers — the guidance as of 2026-09-19 is
+  qualitative ("keep responses reasonably sized for the task"); no resource subscriptions or
   sampling. MCP spec 2026-07-28 and SDK v2 exist, but which Claude surfaces run them is unstated,
   so this repository stays on SDK 1.x for now.
 
@@ -103,27 +112,19 @@ manifest is stale. `.mcpbignore` keeps `src/`, tests, docs and dev tooling out o
 
 ### Tool surface
 
-All 18 default tools ship in the manifest; the two import tools appear at runtime only when an import
-folder is configured, flagged with `tools_generated: true`.
+All 15 tools ship in the manifest and are static: none is generated at runtime, and
+`tools_generated` is `false`.
 
 | Group | Tools | Notes |
 |---|---|---|
-| Discover | `list_packages`, `get_package`, `search_packages`, `lookup_package` | read-only |
-| Security | `list_vulnerabilities`, `get_vulnerability` | read-only |
-| Policy | `get_license_policy` | read-only |
-| Operate | `health_check`, `readiness_check` | both anonymous, and they answer from any host |
-| Set up | `get_install_command`, `get_publish_command` | local, never execute |
+| Read | `list_packages`, `get_package`, `search_packages`, `lookup_package`, `list_vulnerabilities`, `get_vulnerability`, `get_license_policy`, `check_dependencies`, `get_remediation`, `list_remediation_skills`, `get_remediation_skill` | read-only |
+| Observability | `health_check`, `readiness_check` | both anonymous, and they answer from any host |
+| Setup | `get_install_command`, `get_publish_command` | local, never execute |
 
-Additions that make every channel better, not just the extension:
-
-- **Prompts**: one per remediation skill, fetched from the instance at call time, plus a
-  `triage-vulnerabilities` prompt chaining list → detail → matching fix skill. This doubles as one of
-  the three example prompts the directory requires.
-- **Resources**: `dependably://policy/license`, `dependably://org/settings`, and the remediation
-  skill index.
-- **Roadmap read tools** the API already serves to a token: org stats, audit log, org, retention and
-  proxy settings, quarantine list, licence risk, blast radius, setup snippets, project and SBOM
-  reads. Each narrow and read-only.
+Prompts, resources, and the roadmap read tools once sketched here (org stats, audit log, org
+settings, quarantine list, and similar) are not planned; the 242e1de refactor rejected them and
+removed the audit- and admin-scoped tools that would have backed them. The surface stays the 15
+tools above, all reachable with a Pull token.
 
 ## 5. Milestones
 
@@ -197,13 +198,16 @@ Exit: a fresh Desktop install completes with only the config dialog; every read 
    `DEPENDABLY_TOOLSET` switch that used to hide them with them. The endpoints they wrapped are
    allowlisted to the Dependably host, so the tools failed for every client not running on it.
    Read `/version` and `/metrics` on the host, or scrape `/metrics` with Prometheus.
-2. **Reviewer access.** The verified tier requires Anthropic to exercise every tool. A public demo
-   instance with a scoped read-only token is the cleanest answer and also serves marketing.
-3. **Community tier.** MCPB listings may stay in the Community tier. Accepted; org-scoped installs
-   by Team and Enterprise admins do not depend on the tier.
-4. **Open-source clause.** Resolved: relicensed from Apache-2.0 to MIT, which is on Anthropic's
-   required-license list for the submission form; the open-source-clause question is moot either
-   way.
+2. **Reviewer access.** Test credentials are a universal submission requirement, not a
+   verified-tier concern — every submission needs a fully populated test account for Anthropic to
+   exercise every tool. A public demo instance with a scoped read-only token is the cleanest
+   answer and also serves marketing.
+3. **Community tier.** Community is the default label; escalation to verified is automatic and
+   assessed by Anthropic, not a developer choice. MCPB listings may stay in the Community tier;
+   org-scoped installs by Team and Enterprise admins do not depend on the tier.
+4. **Open-source clause.** Relicensed from Apache-2.0 to MIT, which is on Anthropic's
+   required-licence list for the submission form. The clause itself is required and not
+   waivable: the GitHub mirror must be public before submission, not moot either way.
 5. **Publisher identity and slug.** Permanent; decide before the first submission.
 6. **Capability guidance.** The config dialog cannot validate token capabilities, and no tool
    reports which tools a token reaches — `read:packages` is the floor, and a missing capability
