@@ -107,7 +107,7 @@ your whole registry. A TLS failure names both options and the host it could not 
 | `get_vulnerability` | Full advisory detail, including remediation guidance. |
 | `check_dependencies` | Scopes that report to one project's dependency list and names the version to bump to. |
 | `get_remediation` | Fixed versions for up to 200 advisories at once, without the prose. |
-| `list_projects` | Projects and folders, paginated; without `q` only the top level. |
+| `list_projects` | Projects and folders, paginated and searchable by name. |
 | `get_project` | One project or folder: versions, ancestors, and a folder's children and subtree rollup. |
 | `get_project_version` | A version's SBOM components with advisories and effective priority, plus a policy rollup. |
 | `lookup_package` | Pre-adoption verdict on a package not in the registry. Ingests nothing. |
