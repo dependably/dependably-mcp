@@ -40,8 +40,10 @@ interface NameRule {
 
 const NAME_RULES: Record<SetupEcosystem, NameRule> = {
   npm: {
-    test: (n) => /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(n),
-    message: 'npm package names are lowercase, optionally scoped (@scope/name), and made of letters, digits, . _ - only — no URL, no git shorthand.',
+    // Scopes are lowercase-only; the name part may carry upper-case letters,
+    // which npm still serves for packages registered before 2017 (JSONStream).
+    test: (n) => /^(@[a-z0-9][a-z0-9._-]*\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n),
+    message: 'npm package names are optionally scoped (@scope/name, lowercase scope) and made of letters, digits, . _ - only — no URL, no git shorthand.',
   },
   pypi: {
     test: (n) => /^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(n),

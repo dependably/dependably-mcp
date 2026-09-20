@@ -735,6 +735,7 @@ describe('setup tools — per-ecosystem package validation', () => {
     ['npm', 'https://evil.tld/x.tgz', 'a bare URL instead of a registry-resolved name'],
     ['npm', 'github:evil/pwn', 'npm git shorthand, which resolves outside --registry'],
     ['npm', '../../tmp/evil', 'a local path traversal'],
+    ['npm', '@Scope/name', 'an upper-case scope, which npm never issued'],
     ['pypi', 'https://evil.tld/x.whl', 'a bare URL instead of a PEP 508 name'],
     ['rpm', 'https://evil.tld/x.rpm', 'a bare URL instead of an rpm name'],
     ['oci', '../evil', 'a .. path segment'],
@@ -752,6 +753,7 @@ describe('setup tools — per-ecosystem package validation', () => {
 
   const legitCases = [
     ['npm', '@scope/name', "npm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'"],
+    ['npm', 'JSONStream', "npm install --registry=https://dep.example.com/npm/ 'JSONStream@1.2.3'"],
     ['pypi', 'zope.interface', "pip install --index-url https://dep.example.com/simple/ 'zope.interface==1.2.3'"],
     ['nuget', 'Microsoft.Extensions.Logging', "dotnet add package 'Microsoft.Extensions.Logging' --version '1.2.3' --source https://dep.example.com/nuget/v3/index.json"],
     ['maven', 'org.slf4j:slf4j-api', "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:1.2.3'"],
