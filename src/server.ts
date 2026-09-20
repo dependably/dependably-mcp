@@ -6,6 +6,7 @@ import type { DependablyClient } from './client.js';
 import type { Config } from './config.js';
 import { registerReadTools } from './tools/read.js';
 import { registerObservabilityTools } from './tools/observability.js';
+import { registerProjectTools } from './tools/projects.js';
 import { registerSetupTools } from './tools/setup.js';
 import { registerVulnTools } from './tools/vuln.js';
 
@@ -28,6 +29,7 @@ export function buildServer(client: DependablyClient, cfg: Config): McpServer {
   // Project-scoped vulnerability tools take the dependency list as an argument;
   // no tool in this server reads a local file.
   registerVulnTools(server, client);
+  registerProjectTools(server, client);
   registerObservabilityTools(server, client);
   registerSetupTools(server, cfg);
 

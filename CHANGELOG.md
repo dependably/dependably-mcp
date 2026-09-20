@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`list_projects` lists projects and folders, paginated and searchable.** A folder carries
+  `subtreeProjectCount`; a project's row carries its latest version, component count, severity
+  counts and policy status. Without `q` only the top level is returned, matching the tree view;
+  passing `q` searches at any depth, so a project nested inside folders no longer needs a
+  manual walk down the tree to find.
+- **`get_project` returns one project or folder's detail:** its versions (newest first), its
+  ancestor chain, and for a folder its direct children plus a rollup over the whole subtree. Use
+  it to resolve a `versionId` for `get_project_version`, or pass `"latest"` directly.
+- **`get_project_version` lists a version's SBOM components with their advisories and effective
+  priority**, plus a policy rollup by severity, scope and priority. This is the tool for "which
+  packages does project X ship right now and which are vulnerable" against a project already
+  tracked in Dependably; `check_dependencies` remains the tool for a lockfile you have locally.
+  Compact by default; pass `verbosity: "full"` for every server field.
+
 ### Security
 
 - **`get_install_command` and `get_publish_command` no longer pass their arguments into a shell

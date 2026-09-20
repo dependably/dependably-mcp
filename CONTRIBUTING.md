@@ -46,7 +46,7 @@ src/
 ├── index.ts           # entry: load config, start stdio
 ├── config.ts          # env parsing (PAT-only)
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
-├── server.ts          # registers the 4 tool modules
+├── server.ts          # registers the 5 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
 ├── ecosystems.ts       # the ecosystem enums, one vocabulary per server plane
 ├── semver.ts           # minimal version ordering, for comparing against a fix
@@ -54,6 +54,7 @@ src/
 └── tools/
     ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
     ├── vuln.ts         # check_dependencies, get_remediation, list_remediation_skills, get_remediation_skill
+    ├── projects.ts      # list_projects, get_project, get_project_version
     ├── observability.ts# readiness_check
     └── setup.ts        # get_install_command, get_publish_command
 
@@ -65,8 +66,9 @@ test/                  # node:test unit tests, run against dist/ with source map
 └── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
 ```
 
-Four modules register the tools listed under [What it can do](README.md#what-it-can-do):
-`vuln.ts` holds four tools that sit alongside the read tools.
+Five modules register the tools listed under [What it can do](README.md#what-it-can-do):
+`vuln.ts` holds four tools that sit alongside the read tools, and `projects.ts` holds the
+three project-scoped tools.
 
 ## Adding a tool
 
