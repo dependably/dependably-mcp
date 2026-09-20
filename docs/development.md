@@ -46,7 +46,7 @@ src/
 ├── index.ts           # entry: load config, start stdio
 ├── config.ts          # env parsing (PAT-only)
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
-├── server.ts          # registers the 5 tool modules
+├── server.ts          # registers the 4 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
 └── tools/
     ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
@@ -62,7 +62,7 @@ test/                  # node:test unit tests, run against dist/ with source map
 └── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
 ```
 
-Five modules register tools, grouped into the four groups shown in [tools.md](tools.md):
+Four modules register tools, grouped into the three groups shown in [tools.md](tools.md):
 `vuln.ts` holds four tools that belong to the read group.
 
 ## Adding a tool

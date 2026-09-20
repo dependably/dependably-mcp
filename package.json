@@ -1,14 +1,20 @@
 {
   "name": "dependably-mcp",
   "version": "0.2.0",
-  "description": "MCP server for the Dependably artifact repository, self-hosted or SaaS (npm/PyPI/NuGet/Maven/RPM/OCI/Go/Cargo).",
+  "description": "MCP server for Dependably, a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo, self-hosted or SaaS.",
   "keywords": [
     "mcp",
     "model-context-protocol",
     "dependably",
     "artifact-repository",
+    "pull-through-proxy",
+    "vulnerabilities",
+    "license-policy",
     "supply-chain",
-    "registry"
+    "npm",
+    "pypi",
+    "nuget",
+    "maven"
   ],
   "author": "Michael Hiland",
   "repository": {

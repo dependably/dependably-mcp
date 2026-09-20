@@ -92,7 +92,8 @@ guidance for Go rather than a command.
 ## Choosing capabilities for a token
 
 One preset covers the whole server: **Pull** (`read:metadata`, `read:artifact`,
-`read:packages`). Any member can mint it, including one with no admin rights.
+`read:packages`). Any member can mint it, including one with no admin rights. Of the three,
+`read:packages` is the one every tool here needs.
 
 That is the point of the surface being this size. A token never carries more than the role of the
 person who minted it, so anything needing `read:audit` or `read:tenant` has to be issued by an
