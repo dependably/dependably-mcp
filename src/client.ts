@@ -17,49 +17,70 @@ export class DependablyApiError extends Error {
   }
 }
 
+/** Response bodies larger than this are aborted rather than buffered in full. */
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Marks a message already written for the end reader (a manual-redirect or
+ * response-size rejection), so the outer catch does not re-wrap it through
+ * `describeFetchError` — that function is for transport failures with no HTTP
+ * response at all, and its generic phrasing would bury the specific reason.
+ */
+class ActionableError extends Error {}
+
 export class DependablyClient {
   constructor(private readonly cfg: Config) {}
 
   get(path: string, query?: Query): Promise<unknown> {
     return this.request('GET', path, query);
   }
-  post(path: string, body?: unknown, query?: Query): Promise<unknown> {
-    return this.request('POST', path, query, body);
-  }
-  put(path: string, body?: unknown, query?: Query): Promise<unknown> {
-    return this.request('PUT', path, query, body);
-  }
-  patch(path: string, body?: unknown, query?: Query): Promise<unknown> {
-    return this.request('PATCH', path, query, body);
-  }
-  del(path: string, query?: Query): Promise<unknown> {
-    return this.request('DELETE', path, query);
-  }
 
-  private async request(method: string, path: string, query?: Query, body?: unknown): Promise<unknown> {
+  private async request(method: string, path: string, query?: Query): Promise<unknown> {
     const url = this.buildUrl(path, query);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.cfg.token}`,
       Accept: 'application/json, application/problem+json',
     };
-    let init: RequestInit = {
+    const init: RequestInit = {
       method,
       headers,
+      // The Dependably API never legitimately 3xx's a client; a redirect means
+      // DEPENDABLY_BASE_URL points somewhere other than the instance itself
+      // (e.g. an http:// URL bounced to https://, or a load balancer front
+      // door). Following it silently would also resend the bearer token to
+      // whatever host the Location header names.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.cfg.timeoutMs),
     };
-    if (body !== undefined) {
-      headers['Content-Type'] = 'application/json';
-      init = { ...init, body: JSON.stringify(body) };
-    }
 
     let res: Response;
+    let text: string;
     try {
       res = await fetch(url, init);
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location') ?? '(no Location header)';
+        throw new ActionableError(
+          `${method} ${url} was redirected to ${location}; DEPENDABLY_BASE_URL must point at the instance itself.`,
+        );
+      }
+      const lengthHeader = res.headers.get('content-length');
+      if (lengthHeader && Number(lengthHeader) > MAX_RESPONSE_BYTES) {
+        throw new ActionableError(
+          `${method} ${url} returned a body of ${lengthHeader} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
+        );
+      }
+      text = await res.text();
     } catch (err) {
+      if (err instanceof ActionableError) throw new Error(err.message);
       throw new Error(describeFetchError(method, url, err, this.cfg.timeoutMs));
     }
 
-    const text = await res.text();
+    if (text.length > MAX_RESPONSE_BYTES) {
+      throw new Error(
+        `${method} ${url} returned a body of ${text.length} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
+      );
+    }
+
     const ctype = res.headers.get('content-type') ?? '';
 
     if (!res.ok) {

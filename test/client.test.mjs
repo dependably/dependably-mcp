@@ -63,28 +63,17 @@ describe('DependablyClient request building', () => {
     deepStrictEqual(new URL(calls[0].url).searchParams.getAll('action'), ['login.failure', 'token.revoked']);
   });
 
-  it('sends a json body and content-type for write verbs', async () => {
+  it('never follows a redirect automatically', async () => {
     const calls = stubFetch();
-    const client = new DependablyClient(cfg);
-    await client.post('/x', { a: 1 });
-    strictEqual(calls[0].init.method, 'POST');
-    strictEqual(calls[0].init.headers['Content-Type'], 'application/json');
-    strictEqual(calls[0].init.body, '{"a":1}');
-
-    await client.put('/x', { b: 2 });
-    strictEqual(calls[1].init.method, 'PUT');
-    await client.patch('/x', { c: 3 });
-    strictEqual(calls[2].init.method, 'PATCH');
-    await client.del('/x');
-    strictEqual(calls[3].init.method, 'DELETE');
-    strictEqual(calls[3].init.body, undefined);
+    await new DependablyClient(cfg).get('/x');
+    strictEqual(calls[0].init.redirect, 'manual');
   });
 });
 
 describe('DependablyClient response handling', () => {
   it('returns null for 204 and for an empty body', async () => {
     stubFetch({ status: 204 });
-    strictEqual(await new DependablyClient(cfg).del('/x'), null);
+    strictEqual(await new DependablyClient(cfg).get('/x'), null);
     stubFetch({ body: '' });
     strictEqual(await new DependablyClient(cfg).get('/x'), null);
   });
@@ -116,6 +105,64 @@ describe('DependablyClient response handling', () => {
       throw e;
     };
     await rejects(() => new DependablyClient(cfg).get('/x'), /Nothing is listening/);
+  });
+
+  it('names method, url and cause when reading the response body fails', async () => {
+    globalThis.fetch = async (url) => ({
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json' }),
+      text: async () => {
+        const e = new Error('terminated');
+        e.cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' });
+        throw e;
+      },
+    });
+    const err = await new DependablyClient(cfg).get('/thing').catch((e) => e);
+    ok(err instanceof Error);
+    ok(err.message.includes('GET'), err.message);
+    ok(err.message.includes('https://dep.example.com/thing'), err.message);
+    ok(err.message.includes('other side closed'), err.message);
+  });
+
+  it('rejects a 3xx response instead of following it, naming the Location', async () => {
+    globalThis.fetch = async () =>
+      new Response(null, { status: 302, headers: { location: 'https://evil.example/steal' } });
+    await rejects(
+      () => new DependablyClient(cfg).get('/x'),
+      /was redirected to https:\/\/evil\.example\/steal; DEPENDABLY_BASE_URL must point at the instance itself/,
+    );
+  });
+
+  it('rejects a redirect with no Location header without throwing on the missing header', async () => {
+    globalThis.fetch = async () => new Response(null, { status: 301 });
+    await rejects(() => new DependablyClient(cfg).get('/x'), /was redirected to \(no Location header\)/);
+  });
+
+  it('aborts when Content-Length exceeds the response-size cap', async () => {
+    globalThis.fetch = async () =>
+      new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'content-length': String(9 * 1024 * 1024) },
+      });
+    const err = await new DependablyClient(cfg).get('/big').catch((e) => e);
+    ok(err instanceof Error);
+    ok(err.message.includes('exceeds the'), err.message);
+    ok(err.message.includes(String(9 * 1024 * 1024)), err.message);
+  });
+
+  it('aborts when the streamed body exceeds the response-size cap even without a Content-Length', async () => {
+    const bigBody = 'x'.repeat(8 * 1024 * 1024 + 1);
+    globalThis.fetch = async () => new Response(bigBody, { status: 200, headers: { 'content-type': 'text/plain' } });
+    const err = await new DependablyClient(cfg).get('/big').catch((e) => e);
+    ok(err instanceof Error);
+    ok(err.message.includes('exceeds the'), err.message);
+  });
+
+  it('accepts a body at or under the cap', async () => {
+    globalThis.fetch = async () =>
+      new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+    deepStrictEqual(await new DependablyClient(cfg).get('/x'), { ok: true });
   });
 });
 

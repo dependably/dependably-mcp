@@ -262,6 +262,31 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   });
 }
 
+// Every required input property has to be enforced at the schema boundary, not
+// just documented: call each tool with `{}` and confirm the missing property is
+// named in the validation error rather than the call reaching the network (or
+// silently defaulting to undefined and producing a confusing upstream error).
+{
+  await withClient(base, async (client) => {
+    const { tools } = await client.listTools();
+    for (const tool of tools) {
+      const required = tool.inputSchema?.required ?? [];
+      if (required.length === 0) continue;
+      const res = await client
+        .callTool({ name: tool.name, arguments: {} })
+        .catch((err) => ({ isError: true, content: [{ text: String(err) }] }));
+      ok(res.isError, `${tool.name} must reject a call missing its required properties, got: ${JSON.stringify(res)}`);
+      const text = res.content[0].text;
+      for (const prop of required) {
+        ok(
+          text.includes(prop),
+          `${tool.name}: validation error should name the missing required property "${prop}", got: ${text.slice(0, 200)}`,
+        );
+      }
+    }
+  });
+}
+
 console.log(
-  `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable`,
+  `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable, unknown/missing property validation enforced`,
 );

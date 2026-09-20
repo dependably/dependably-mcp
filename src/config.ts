@@ -5,9 +5,10 @@
  * sent as a bearer token on every request. There is intentionally no JWT/session
  * login: a PAT reaches every endpoint that opts into the `ApiToken` auth scheme —
  * since Dependably v0.3.0 that includes the read-only management surface
- * (packages, search, vulnerabilities, activity, license policy, lookup)
- * alongside SIEM — plus the anonymous health and readiness probes. 18 tools,
- * all read-only: nothing in the surface writes, deletes, or reads a local file.
+ * (packages, search, vulnerabilities, activity, license policy, lookup) —
+ * plus the anonymous health and readiness probes. 15 read-only tools, every one
+ * reachable with a Pull token (`read:packages`): nothing in the surface writes,
+ * deletes, or reads a local file.
  *
  * Against a Dependably server older than v0.3.0 the read tools return 401,
  * service/M2M tokens 404 on capability-gated endpoints, and MFA-required orgs
@@ -85,11 +86,24 @@ function trimTrailingSlashes(path: string): string {
   return path.slice(0, end);
 }
 
+/**
+ * `AbortSignal.timeout()` hands the delay straight to Node's timer internals,
+ * which require a 32-bit signed integer: a fractional value (`1500.7`) throws
+ * "The value of \"delay\" is out of range" on every request, and a value above
+ * `2147483647` (`TimeoutOverflowWarning`) silently clamps to a 1ms timeout —
+ * the opposite of the raise-it-if-slow advice `describeFetchError` gives.
+ * Validating the integer range at startup turns both into one actionable
+ * message instead of a per-request failure.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 function parseTimeout(raw: string | undefined): number {
   if (!raw) return 30000;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`DEPENDABLY_TIMEOUT_MS must be a positive number: ${raw}`);
+  if (!Number.isInteger(n) || n < 1 || n > MAX_TIMEOUT_MS) {
+    throw new Error(
+      `DEPENDABLY_TIMEOUT_MS must be an integer between 1 and ${MAX_TIMEOUT_MS}: ${raw}`,
+    );
   }
   return n;
 }
