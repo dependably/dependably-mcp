@@ -159,3 +159,112 @@ describe('PEP 440 pre/post tails', () => {
     ok(compare('0.0.33', '0.2.6') < 0);
   });
 });
+
+describe('PEP 440 alias spellings', () => {
+  // c, pre and preview all mean rc; alpha means a; beta means b; r and rev
+  // mean post. Comparing the raw marker text instead of the canonical phase
+  // ranked these alphabetically ("c" < "rc" always, regardless of the number),
+  // so a fix spelled one way and an installed version spelled the other never
+  // compared as the same release.
+  for (const [x, y] of [
+    ['1.0rc1', '1.0c1'],
+    ['1.0rc1', '1.0pre1'],
+    ['1.0rc1', '1.0preview1'],
+    ['1.0alpha1', '1.0a1'],
+    ['1.0beta1', '1.0b1'],
+    ['1.0post1', '1.0r1'],
+    ['1.0post1', '1.0rev1'],
+  ]) {
+    it(`treats ${x} and ${y} as the same release`, () => {
+      strictEqual(compare(x, y), 0, `${x} vs ${y}`);
+      strictEqual(compare(y, x), 0, `${y} vs ${x}`);
+    });
+  }
+
+  it('still orders the alias pair by number once the phase is canonicalized', () => {
+    // 1.0.rc1 sorted alphabetically-above 1.0c1 before the fix (marker "rc" >
+    // marker "c" as text), independent of the trailing number; canonicalizing
+    // both to "rc" restores the numeric comparison PEP 440 actually specifies.
+    ok(compare('1.0pre2', '1.0rc1') > 0, '1.0pre2 > 1.0rc1: both are rc-phase, and 2 > 1');
+    ok(compare('1.0rc1', '1.0pre2') < 0);
+  });
+
+  it('the bumpTarget consequence: a fix spelled with the short alias must not look older than an already-cleared installed version', () => {
+    // 1.0a5 is 1.0alpha5 under canonicalization. Before the fix, comparing the
+    // raw marker text ranked "a" < "alpha" (a string-prefix comparison)
+    // regardless of the trailing number, so an installed 1.0a5 compared as
+    // BELOW a fix of 1.0alpha2 even though alpha5 is the later release —
+    // gte() returned false and bumpTarget would have recommended downgrading
+    // to an older spelling of a release the project had already cleared.
+    ok(gte('1.0a5', '1.0alpha2'), 'installed alpha5 already clears a fix pinned to alpha2');
+    ok(!gte('1.0a1', '1.0alpha2'), 'and alpha1 genuinely has not');
+  });
+
+  it('strips an upper-case V prefix like the lower-case one', () => {
+    strictEqual(compare('V1.2.3', '1.2.3'), 0);
+    strictEqual(compare('V1.2.3', 'v1.2.3'), 0);
+  });
+});
+
+describe('rpm version-release ordering', () => {
+  // rpm's NEVRA glues a second ordered field onto the version with a hyphen:
+  // "1.2.3-4" is release 4 of version 1.2.3, not a semver prerelease "4" of
+  // "1.2.3". Reading it as semver's hyphen sorts every "1.2.3-N" BELOW plain
+  // "1.2.3" — installed 1.2.3-4.el9 against a fix of 1.2.3 read as a
+  // downgrade, when it is actually already at or past the fix.
+  it('a version-release is at or above its bare version, not below it', () => {
+    ok(gte('1.2.3-4', '1.2.3', 'rpm'), 'a release qualifier must not read as a prerelease');
+    ok(!gte('1.2.3-4', '1.2.3', undefined), 'without rpm ecosystem, the old (semver) reading still applies');
+  });
+
+  it('compares the release field numerically once the version fields tie', () => {
+    ok(compare('1.2.3-4', '1.2.3-10', 'rpm') < 0, '4 < 10 numerically, not lexically');
+    ok(compare('1.2.3-4', '1.2.3-4', 'rpm') === 0);
+  });
+
+  it('lets the version field win over the release field', () => {
+    ok(compare('1.2.3-4', '1.2.4-1', 'rpm') < 0);
+  });
+
+  it('ranks a missing release below any present release of the same version', () => {
+    ok(gte('1.2.3-0', '1.2.3', 'rpm'));
+    ok(!gte('1.2.3', '1.2.3-0', 'rpm'));
+  });
+
+  it('keeps the release qualifier suffix (e.g. .el9) as a tiebreak, not a parse failure', () => {
+    ok(compare('1.2.3-4.el9', '1.2.3-4.el8', 'rpm') > 0);
+  });
+});
+
+describe('rpm rpmvercmp-style segment comparison', () => {
+  // A plain numeric/lexical comparison of the version and release strings is
+  // not what rpm actually does: rpm tokenizes into alternating digit/letter
+  // runs (so "el9" < "el10" compares the trailing numbers as numbers, not as
+  // strings), treats "~" as sorting below everything including the end of
+  // the string, and orders the epoch ahead of both.
+  it('a tilde pre-release marker sorts below the plain release it precedes', () => {
+    ok(compare('1.2.3~rc1-1', '1.2.3-1', 'rpm') < 0);
+    ok(compare('1.2.3-1', '1.2.3~rc1-1', 'rpm') > 0);
+  });
+
+  it('compares a numeric run numerically, not lexically, inside a release qualifier', () => {
+    ok(compare('1.2.3-4.el9', '1.2.3-4.el10', 'rpm') < 0, 'el9 < el10 — a string compare would say the opposite');
+  });
+
+  it('compares the epoch prefix numerically, ahead of version and release', () => {
+    ok(compare('2:1.2.3-1', '10:1.2.3-1', 'rpm') < 0, '2 < 10 numerically, not "2" > "10" lexically');
+  });
+
+  it('a release with an extra trailing segment is newer than the release it extends', () => {
+    ok(compare('1.2.3-4.el9', '1.2.3-4.el9.1', 'rpm') < 0);
+  });
+
+  it('trailing alphabetic content with no tilde is newer, not a tiebreak toward equal', () => {
+    ok(compare('1.0-1', '1.0a-1', 'rpm') < 0);
+  });
+
+  it('the bumpTarget consequence: a tilde pre-release must still clear a plain-release fix', () => {
+    ok(gte('1.2.3-1', '1.2.3~rc1-1', 'rpm'), 'the real release clears its own pre-release');
+    ok(!gte('1.2.3~rc1-1', '1.2.3-1', 'rpm'), 'and the pre-release has not reached the real release yet');
+  });
+});

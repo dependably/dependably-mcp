@@ -87,7 +87,11 @@ export async function fetchReport(
   const pageSize = opts.pageSize ?? 200;
   const maxItems = opts.maxItems ?? 5000;
   const items: ReportItem[] = [];
-  let total = 0;
+  // `total` is only trustworthy once a response has actually carried it: a
+  // response that omits the field is not "a report of length batch.length",
+  // it is a report whose length is unknown, and stopping on that guess (as
+  // this used to) truncated every report the server didn't paginate.
+  let total: number | undefined;
 
   for (let page = 1; ; page++) {
     const res = (await client.get('/api/v1/vuln-report', {
@@ -97,15 +101,21 @@ export async function fetchReport(
     })) as { items?: ReportItem[]; total?: number } | null;
 
     const batch = res?.items ?? [];
-    total = res?.total ?? batch.length;
+    if (typeof res?.total === 'number') total = res.total;
     items.push(...batch);
 
     if (batch.length === 0) break;
-    if (items.length >= total) break;
-    if (items.length >= maxItems) return { items, total, truncated: true };
+    if (total !== undefined && items.length >= total) break;
+    if (items.length >= maxItems) {
+      // The cap is enforced on the returned array, not just the loop: without
+      // the slice, a page that pushed the running count past maxItems still
+      // shipped its whole page, so maxItems: 500 with pageSize: 200 returned
+      // 600 items — one whole page more than the cap promised.
+      return { items: items.slice(0, maxItems), total: total ?? items.length, truncated: true };
+    }
   }
 
-  return { items, total, truncated: false };
+  return { items, total: total ?? items.length, truncated: false };
 }
 
 /**
@@ -126,11 +136,37 @@ export function foldName(ecosystem: string | undefined, name: string): string {
   return ecosystem === 'pypi' ? lower.replace(/[-_.]+/g, '-') : lower;
 }
 
+/** Ecosystems whose registry omits a trailing `.0` release segment more often than a lockfile does. */
+const TRAILING_ZERO_ECOSYSTEMS = new Set(['pypi', 'nuget', 'maven']);
+
+/**
+ * Fold a version to the form both sides of the join must agree on.
+ *
+ * A raw string match misses versions that are the same release under a
+ * different spelling: a NuGet pin of `4.5` against a registry row of `4.5.0`,
+ * or a PyPI requirement of `1.0` against `1.0.0`. Conservative on purpose —
+ * this only strips a leading `v`/`V` and lower-cases everywhere, and only
+ * strips trailing `.0` segments on ecosystems where that spelling is common
+ * (pypi, nuget, maven); npm, cargo and golang keep every segment, since a
+ * dropped patch digit there is far more likely to be a real different release
+ * than an equivalent spelling of the same one.
+ */
+export function canonicalVersion(ecosystem: string | undefined, v: string): string {
+  let s = v.trim().replace(/^[vV]/, '').toLowerCase();
+  if (TRAILING_ZERO_ECOSYSTEMS.has(String(ecosystem))) {
+    const parts = s.split('.');
+    while (parts.length > 1 && /^0+$/.test(parts[parts.length - 1])) parts.pop();
+    s = parts.join('.');
+  }
+  return s;
+}
+
 /**
  * Join report rows onto the caller's dependency list by folded name @ version.
  *
- * Versions stay exact. A lockfile pin and an advisory's affected version are both
- * concrete releases, and folding them would risk matching a version the project
+ * The name side folds per `foldName`; the version side folds per
+ * `canonicalVersion`, conservatively, so an equivalent spelling of the same
+ * release still joins without risking a match against a version the project
  * does not actually have installed.
  */
 export function matchPackages(
@@ -140,14 +176,16 @@ export function matchPackages(
 ): { hits: ReportItem[]; devOf: Map<string, boolean> } {
   const devOf = new Map<string, boolean>();
   for (const p of packages) {
-    const key = `${foldName(ecosystem, p.name)}@${p.version}`;
+    const key = `${foldName(ecosystem, p.name)}@${canonicalVersion(ecosystem, p.version)}`;
     // A package present both as a dev and a prod dependency is prod: the
     // stricter classification wins, since it ships.
     const prior = devOf.get(key);
     const isDev = p.dev === true;
     devOf.set(key, prior === undefined ? isDev : prior && isDev);
   }
-  const hits = report.filter((r) => devOf.has(`${foldName(ecosystem, r.packageName)}@${r.version}`));
+  const hits = report.filter((r) =>
+    devOf.has(`${foldName(ecosystem, r.packageName)}@${canonicalVersion(ecosystem, r.version)}`),
+  );
   return { hits, devOf };
 }
 
@@ -257,11 +295,11 @@ function toAdvisory(hit: ReportItem, rem: RemediationLookup | undefined): Adviso
  * The ceiling matters because several advisories are explicit incomplete-fix
  * follow-ups, where the lowest fix leaves the rest open.
  */
-function bumpTarget(installed: string, advisories: readonly Advisory[]): string | null {
+function bumpTarget(installed: string, advisories: readonly Advisory[], ecosystem?: string): string | null {
   const fixes = advisories.map((a) => a.fixedVersion).filter((v): v is string => !!v);
-  const ceiling = maxVersion(fixes);
+  const ceiling = maxVersion(fixes, ecosystem);
   if (!ceiling) return null;
-  return gte(installed, ceiling) ? null : ceiling;
+  return gte(installed, ceiling, ecosystem) ? null : ceiling;
 }
 
 function bySeverityThenScore(a: Advisory, b: Advisory): number {
@@ -276,16 +314,27 @@ function byWorstAdvisory(a: Finding, b: Finding): number {
   );
 }
 
-/** Group matched rows into one finding per package, with a single bump target. */
+/**
+ * Group matched rows into one finding per package, with a single bump target.
+ *
+ * The grouping key must be built the same way `matchPackages` built `devOf`'s
+ * keys — folded name, canonicalized version — or a report row whose raw
+ * spelling differs from the caller's lockfile (a different case, a different
+ * PEP 503 separator run) looks up a `devOf` entry that was never written for
+ * it and silently falls back to "runtime", regardless of what the caller
+ * actually said. `ecosystem` is threaded through for both the fold and the
+ * rpm-aware bump-target ordering (see `semver.ts`).
+ */
 export function buildFindings(
   hits: readonly ReportItem[],
   devOf: ReadonlyMap<string, boolean>,
   remediations: ReadonlyMap<string, RemediationLookup>,
+  ecosystem?: string,
 ): Finding[] {
   const byPackage = new Map<string, Finding>();
 
   for (const hit of hits) {
-    const key = `${hit.packageName}@${hit.version}`;
+    const key = `${foldName(ecosystem, hit.packageName)}@${canonicalVersion(ecosystem, hit.version)}`;
     const finding = byPackage.get(key) ?? {
       package: hit.packageName,
       installed: hit.version,
@@ -299,7 +348,7 @@ export function buildFindings(
 
   for (const finding of byPackage.values()) {
     finding.advisories.sort(bySeverityThenScore);
-    finding.bumpTo = bumpTarget(finding.installed, finding.advisories);
+    finding.bumpTo = bumpTarget(finding.installed, finding.advisories, ecosystem);
   }
 
   return [...byPackage.values()].sort(byWorstAdvisory);

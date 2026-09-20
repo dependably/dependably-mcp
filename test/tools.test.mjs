@@ -269,6 +269,78 @@ describe('check_dependencies', () => {
     }
     ok((schema.required ?? []).includes('packages'));
   });
+
+  it('never reports clean on a truncated scan, even when no match was found on the pages it did read (B2)', async () => {
+    // A truncated fetch stops before every page of the org-wide report has
+    // been read; the page it never got to could contain the very match that
+    // would have made this dirty, so `clean` must not be true just because
+    // nothing matched among the pages it did see.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return {
+          items: Array.from({ length: 200 }, (_, i) => ({
+            packageName: `pkg-${i}`,
+            version: '1.0.0',
+            osvId: `O${i}`,
+            severity: 'LOW',
+          })),
+          total: 999999,
+        };
+      }
+      return { remediation: {} };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { packages: [{ name: 'hono', version: '4.12.27' }] }),
+    );
+    strictEqual(body.truncated, true);
+    strictEqual(body.clean, false, 'a truncated scan must never claim clean');
+    ok(body.note.toLowerCase().includes('inconclusive'), body.note);
+  });
+
+  it('does not recommend a downgrade for an rpm "version-release" string (B4)', async () => {
+    // rpm's NEVRA glues a release onto the version with a hyphen ("1.2.3-4"):
+    // read as semver's hyphen, that is a prerelease of 1.2.3 and sorts BELOW
+    // it, so an installed 1.2.3-4 against a fix of 1.2.3 used to come back as
+    // a bump — a downgrade recommendation for a package already fixed.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return u.searchParams.get('page') === '1'
+          ? { items: [{ packageName: 'openssl', version: '1.2.3-4', osvId: 'A', severity: 'HIGH' }], total: 1 }
+          : { items: [], total: 1 };
+      }
+      return { remediation: { fixedVersion: '1.2.3' } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'rpm',
+        packages: [{ name: 'openssl', version: '1.2.3-4' }],
+      }),
+    );
+    strictEqual(body.findings[0].bumpTo, null, '1.2.3-4 already clears a fix pinned to the bare release 1.2.3');
+  });
+
+  it('recommends the real release as the bump target for an installed rpm tilde pre-release (B4)', async () => {
+    // "~" sorts below everything, including a plain release: an installed
+    // 1.2.3~rc1-1 has not reached a fix of 1.2.3-1 and must be told to bump.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return u.searchParams.get('page') === '1'
+          ? { items: [{ packageName: 'openssl', version: '1.2.3~rc1-1', osvId: 'A', severity: 'HIGH' }], total: 1 }
+          : { items: [], total: 1 };
+      }
+      return { remediation: { fixedVersion: '1.2.3-1' } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'rpm',
+        packages: [{ name: 'openssl', version: '1.2.3~rc1-1' }],
+      }),
+    );
+    strictEqual(body.findings[0].bumpTo, '1.2.3-1');
+  });
 });
 
 describe('get_remediation', () => {
@@ -313,6 +385,29 @@ describe('get_remediation', () => {
     ok(body.advisories[0].error.includes('404'));
     strictEqual(body.advisories[1].fixedVersion, '1.0.0');
   });
+
+  it('marks the whole result as an error when every advisory lookup fails (B6)', async () => {
+    globalThis.fetch = async () =>
+      new Response('{"detail":"down"}', { status: 503, headers: { 'content-type': 'application/json' } });
+    const res = await call(base, 'get_remediation', { advisories: [{ osvId: 'A' }, { osvId: 'B' }] });
+    strictEqual(res.isError, true, 'a batch that is 100% failures is a tool error, not a quiet empty result');
+    const body = payload(res);
+    ok(body.advisories.every((a) => 'error' in a));
+  });
+
+  it('leaves isError unset when only some advisory lookups fail (a mixed batch stays a normal result)', async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('BAD')) {
+        return new Response('{"detail":"gone"}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ remediation: { fixedVersion: '1.0.0' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const res = await call(base, 'get_remediation', { advisories: [{ osvId: 'BAD' }, { osvId: 'GOOD' }] });
+    ok(!res.isError, 'a partial failure must not sink the whole result');
+  });
 });
 
 describe('list_remediation_skills', () => {
@@ -348,6 +443,37 @@ describe('get_remediation_skill', () => {
     );
     ok(body.skills.find((s) => s.skillId === 'unknown-skill').error.includes('404'));
     strictEqual(body.skills.find((s) => s.skillId === 'fix-xss').content, '# fix-xss');
+  });
+
+  it('marks the whole result as an error when every skill lookup fails (B6)', async () => {
+    globalThis.fetch = async () =>
+      new Response('{"detail":"down"}', { status: 503, headers: { 'content-type': 'application/json' } });
+    const res = await call(base, 'get_remediation_skill', { skillIds: ['fix-a', 'fix-b'] });
+    strictEqual(res.isError, true, 'a batch that is 100% failures is a tool error, not a quiet empty result');
+    const body = payload(res);
+    ok(body.skills.every((s) => 'error' in s));
+  });
+
+  it('rejects more than 5 skill ids per call (B7)', async () => {
+    const res = await call(base, 'get_remediation_skill', {
+      skillIds: Array.from({ length: 6 }, (_, i) => `skill-${i}`),
+    });
+    ok(res.isError, 'more than 5 ids per call must be rejected');
+  });
+
+  it('accepts exactly 5 skill ids', async () => {
+    stubFetch(() => '# doc');
+    const res = await call(base, 'get_remediation_skill', {
+      skillIds: Array.from({ length: 5 }, (_, i) => `skill-${i}`),
+    });
+    ok(!res.isError, res.content[0].text);
+  });
+
+  it('documents the 5-per-call cap and frames the returned markdown as third-party content (B7, B8)', async () => {
+    const tools = await withServer(base, (c) => c.listTools());
+    const tool = tools.tools.find((t) => t.name === 'get_remediation_skill');
+    ok(tool.inputSchema.properties.skillIds.description.includes('5'), tool.inputSchema.properties.skillIds.description);
+    ok(tool.description.includes('not by Anthropic'), tool.description);
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import {
   buildFindings,
+  canonicalVersion,
   compactReportItem,
   fetchRemediations,
   fetchReport,
@@ -86,6 +87,35 @@ describe('fetchReport', () => {
     const client = stubClient((_p, q) => (q.page === 1 ? { items: [reportItem()] } : { items: [] }));
     const { total } = await fetchReport(client);
     strictEqual(total, 1);
+  });
+
+  it('slices the returned array to maxItems instead of shipping the whole page that crossed it', async () => {
+    // maxItems: 500 with pageSize: 200 used to return 600 items: the cap was
+    // only checked as a loop-exit condition, after the whole 200-row page had
+    // already been pushed onto items.
+    const client = stubClient(() => ({
+      items: Array.from({ length: 200 }, () => reportItem()),
+      total: 100000,
+    }));
+    const { items, truncated } = await fetchReport(client, { pageSize: 200, maxItems: 500 });
+    strictEqual(items.length, 500, 'the cap must be exact, not rounded up to the next full page');
+    strictEqual(truncated, true);
+  });
+
+  it('keeps paging past a response that omits total, until an empty page', async () => {
+    // A missing `total` used to be read as "the report is exactly this page
+    // long", so fetchReport stopped after page 1 even when more rows were
+    // still on the way, silently truncating without ever setting `truncated`.
+    const client = stubClient((_p, q) => {
+      if (q.page === 1) return { items: [reportItem(), reportItem()] }; // no total field
+      if (q.page === 2) return { items: [reportItem(), reportItem(), reportItem()] }; // still none
+      return { items: [] };
+    });
+    const { items, total, truncated } = await fetchReport(client);
+    strictEqual(items.length, 5, 'must not stop after page 1 just because total was absent');
+    strictEqual(total, 5);
+    strictEqual(truncated, false);
+    strictEqual(client.calls.length, 3);
   });
 });
 
@@ -177,6 +207,51 @@ describe('foldName', () => {
     strictEqual(foldName('pypi', 'zope.interface'), 'zope-interface');
     strictEqual(foldName('pypi', 'a__b'), 'a-b');
     strictEqual(foldName('nuget', 'Newtonsoft.Json'), 'newtonsoft.json', 'nuget keeps the dot');
+  });
+});
+
+describe('canonicalVersion', () => {
+  it('collapses an equivalent trailing-zero spelling on pypi, nuget and maven', () => {
+    strictEqual(canonicalVersion('nuget', '4.5.0'), canonicalVersion('nuget', '4.5'));
+    strictEqual(canonicalVersion('pypi', '1.0.0'), canonicalVersion('pypi', '1.0'));
+    strictEqual(canonicalVersion('maven', '2.0.0'), canonicalVersion('maven', '2'));
+  });
+
+  it('does not strip trailing zeros for npm, cargo or golang', () => {
+    ok(canonicalVersion('npm', '4.5.0') !== canonicalVersion('npm', '4.5'));
+    ok(canonicalVersion('cargo', '4.5.0') !== canonicalVersion('cargo', '4.5'));
+    ok(canonicalVersion('golang', '4.5.0') !== canonicalVersion('golang', '4.5'));
+  });
+
+  it('does not collide a genuinely different version', () => {
+    ok(canonicalVersion('nuget', '4.5.1') !== canonicalVersion('nuget', '4.5'));
+  });
+
+  it('strips a leading v/V and lower-cases regardless of ecosystem', () => {
+    strictEqual(canonicalVersion('npm', 'V1.2.3'), canonicalVersion('npm', 'v1.2.3'));
+  });
+});
+
+// B5: an exact-string version join missed equivalent spellings, e.g. a NuGet
+// pin of "4.5" against a registry row of "4.5.0" — reported clean when it
+// was not.
+describe('matchPackages joins an equivalent version spelling', () => {
+  it('matches a NuGet pin of "4.5" against a registry row of "4.5.0"', () => {
+    const report = [reportItem({ packageName: 'left-pad', version: '4.5.0' })];
+    const { hits } = matchPackages(report, [{ name: 'left-pad', version: '4.5' }], 'nuget');
+    strictEqual(hits.length, 1);
+  });
+
+  it('matches a PyPI requirement of "1.0" against a registry row of "1.0.0"', () => {
+    const report = [reportItem({ packageName: 'left-pad', version: '1.0.0' })];
+    const { hits } = matchPackages(report, [{ name: 'left-pad', version: '1.0' }], 'pypi');
+    strictEqual(hits.length, 1);
+  });
+
+  it('still misses a genuinely different, non-equivalent version', () => {
+    const report = [reportItem({ packageName: 'left-pad', version: '4.5.1' })];
+    const { hits } = matchPackages(report, [{ name: 'left-pad', version: '4.5' }], 'nuget');
+    deepStrictEqual(hits, []);
   });
 });
 
@@ -407,6 +482,71 @@ describe('buildFindings', () => {
 
   it('returns nothing for no hits', () => {
     deepStrictEqual(buildFindings([], new Map(), new Map()), []);
+  });
+});
+
+// B1: buildFindings keyed a finding on the RAW report name, but matchPackages
+// built devOf keyed on the FOLDED name. A report row whose spelling differs
+// from the lockfile's (case, PEP 503 separators) found no devOf entry and
+// silently fell back to "runtime" — dropping the dev flag the caller sent.
+describe('buildFindings keeps the dev flag across a name-folding difference (B1)', () => {
+  it('for a pypi package the report spells with underscores and the lockfile with a hyphen and different case', () => {
+    const report = [reportItem({ packageName: 'typing_extensions', version: '4.5.0', osvId: 'A' })];
+    const { hits, devOf } = matchPackages(
+      report,
+      [{ name: 'Typing-Extensions', version: '4.5.0', dev: true }],
+      'pypi',
+    );
+    const findings = buildFindings(hits, devOf, new Map(), 'pypi');
+    strictEqual(findings.length, 1);
+    strictEqual(findings[0].dev, true, 'the dev flag must survive the pypi name fold');
+    const s = summarize(findings, 1);
+    strictEqual(s.runtime, 0);
+    strictEqual(s.devOnly, 1);
+  });
+
+  it('for a NuGet package the report spells Pascal-case and the lockfile spells lower-case', () => {
+    // The report row must NOT already be in the folded (lower-case) form, or
+    // buildFindings's old unfolded key (`hit.packageName@hit.version`) happens
+    // to equal the folded key by coincidence and the test passes even on the
+    // broken code.
+    const report = [reportItem({ packageName: 'Newtonsoft.Json', version: '12.0.3', osvId: 'A' })];
+    const { hits, devOf } = matchPackages(
+      report,
+      [{ name: 'newtonsoft.json', version: '12.0.3', dev: true }],
+      'nuget',
+    );
+    const findings = buildFindings(hits, devOf, new Map(), 'nuget');
+    strictEqual(findings.length, 1);
+    strictEqual(findings[0].dev, true, 'the dev flag must survive the nuget name fold');
+    const s = summarize(findings, 1);
+    strictEqual(s.runtime, 0);
+    strictEqual(s.devOnly, 1);
+  });
+});
+
+// B4: rpm's NEVRA "version-release" was read as a semver prerelease, so
+// gte('1.2.3-4', '1.2.3') came back false and a project already at a fixed
+// release got told to bump to the same (or an older) version.
+describe('buildFindings orders rpm version-release strings correctly (B4)', () => {
+  it('does not recommend a bump when the installed release already clears the fix', () => {
+    const [finding] = buildFindings(
+      [reportItem({ packageName: 'openssl', version: '1.2.3-4', osvId: 'A' })],
+      new Map([['openssl@1.2.3-4', false]]),
+      new Map([['A@@1.2.3-4', { fixedVersion: '1.2.3', cwes: [], owasp: [], skills: [] }]]),
+      'rpm',
+    );
+    strictEqual(finding.bumpTo, null, '1.2.3-4 already clears a fix pinned to the bare release 1.2.3');
+  });
+
+  it('does recommend a bump when the installed release genuinely predates the fix', () => {
+    const [finding] = buildFindings(
+      [reportItem({ packageName: 'openssl', version: '1.2.3-4', osvId: 'A' })],
+      new Map([['openssl@1.2.3-4', false]]),
+      new Map([['A@@1.2.3-4', { fixedVersion: '1.2.3-10', cwes: [], owasp: [], skills: [] }]]),
+      'rpm',
+    );
+    strictEqual(finding.bumpTo, '1.2.3-10');
   });
 });
 
