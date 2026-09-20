@@ -10,7 +10,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { DependablyClient } from '../dist/client.js';
 import { compare, gte, maxVersion } from '../dist/semver.js';
 import { buildFindings, parseNpmLockfile } from '../dist/vuln.js';
-import { LOOKUP_ECOSYSTEMS, REGISTRY_ECOSYSTEMS, SETUP_ECOSYSTEMS } from '../dist/ecosystems.js';
+import { FALLBACK_LOOKUP_ECOSYSTEMS, FALLBACK_REGISTRY_ECOSYSTEMS, FALLBACK_SETUP_ECOSYSTEMS } from '../dist/ecosystems.js';
 import { buildServer } from '../dist/server.js';
 
 async function toolNames(cfg) {
@@ -207,36 +207,72 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
 // planes. A single shared enum was wrong in both directions at once: it offered rpm
 // and oci to lookup_package (422 from the server) and withheld apk, terraform and hex
 // from the registry tools, which serve them. Pin each plane's set as it reaches the
-// client, not just the constant it came from.
+// client, not just the constant it came from. This smoke server never fetches an
+// instance, so `buildServer` falls back to the FALLBACK_* lists.
 {
   const enumOf = async (tool, field) => (await toolSchema(base, tool)).properties?.[field]?.enum;
 
   for (const tool of ['list_packages', 'get_package', 'list_vulnerabilities']) {
-    deepStrictEqual(await enumOf(tool, 'ecosystem'), [...REGISTRY_ECOSYSTEMS], `${tool} offers the registry set`);
+    deepStrictEqual(await enumOf(tool, 'ecosystem'), [...FALLBACK_REGISTRY_ECOSYSTEMS], `${tool} offers the registry set`);
   }
   deepStrictEqual(
     await enumOf('check_dependencies', 'ecosystem'),
-    [...REGISTRY_ECOSYSTEMS],
+    [...FALLBACK_REGISTRY_ECOSYSTEMS],
     'check_dependencies offers the registry set',
   );
   deepStrictEqual(
     await enumOf('lookup_package', 'ecosystem'),
-    [...LOOKUP_ECOSYSTEMS],
+    [...FALLBACK_LOOKUP_ECOSYSTEMS],
     'lookup_package offers only what /api/v1/lookup accepts',
   );
   for (const tool of ['get_install_command', 'get_publish_command']) {
-    deepStrictEqual(await enumOf(tool, 'ecosystem'), [...SETUP_ECOSYSTEMS], `${tool} offers only what it can spell`);
+    deepStrictEqual(
+      await enumOf(tool, 'ecosystem'),
+      [...FALLBACK_SETUP_ECOSYSTEMS],
+      `${tool} offers only what it can spell`,
+    );
   }
 
   // The specific regressions, stated as behaviour rather than as list membership.
   for (const eco of ['apk', 'terraform', 'hex']) {
-    ok(REGISTRY_ECOSYSTEMS.includes(eco), `registry tools must reach ${eco} — the instance serves packages there`);
+    ok(FALLBACK_REGISTRY_ECOSYSTEMS.includes(eco), `registry tools must reach ${eco} — the instance serves packages there`);
   }
   for (const eco of ['rpm', 'oci', 'apk', 'terraform']) {
-    ok(!LOOKUP_ECOSYSTEMS.includes(eco), `lookup_package must not offer ${eco} — the server answers 422`);
+    ok(!FALLBACK_LOOKUP_ECOSYSTEMS.includes(eco), `lookup_package must not offer ${eco} — the server answers 422`);
   }
-  ok(LOOKUP_ECOSYSTEMS.includes('hex'), 'lookup_package must offer hex — the server accepts it');
-  ok(!REGISTRY_ECOSYSTEMS.includes('go'), 'the Go ecosystem is spelled "golang"; "go" filters to nothing');
+  ok(FALLBACK_LOOKUP_ECOSYSTEMS.includes('hex'), 'lookup_package must offer hex — the server accepts it');
+  ok(!FALLBACK_REGISTRY_ECOSYSTEMS.includes('go'), 'the Go ecosystem is spelled "golang"; "go" filters to nothing');
+}
+
+// buildServer's third argument — the fetched planes — must actually reach the live
+// tool enums, not just be accepted and ignored. A custom plane set adds `zig` to the
+// registry (no builder knows it, so setup tools must still withhold it) and drops
+// `hex` from lookup.
+{
+  const customPlanes = {
+    registry: [...FALLBACK_REGISTRY_ECOSYSTEMS, 'zig'],
+    lookup: FALLBACK_LOOKUP_ECOSYSTEMS.filter((e) => e !== 'hex'),
+    setup: [...FALLBACK_SETUP_ECOSYSTEMS, 'zig'],
+  };
+  const cfg = { ...base };
+  const server = buildServer(new DependablyClient(cfg), cfg, customPlanes);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'smoke', version: '0.0.0' });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  try {
+    const { tools } = await client.listTools();
+    const schemaOf = (name) => tools.find((t) => t.name === name)?.inputSchema;
+
+    ok(schemaOf('list_packages').properties.ecosystem.enum.includes('zig'), 'registry tools offer a custom-plane ecosystem');
+    ok(!schemaOf('lookup_package').properties.ecosystem.enum.includes('hex'), 'lookup_package respects a custom plane dropping hex');
+    ok(
+      !schemaOf('get_install_command').properties.ecosystem.enum.includes('zig'),
+      'setup tools never offer an ecosystem no command builder knows, even if the instance lists it',
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
 }
 
 // Every tool advertises `additionalProperties: false`. That was a claim the runtime

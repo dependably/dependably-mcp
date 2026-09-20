@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
-import { REGISTRY_ECOSYSTEMS } from '../ecosystems.js';
+import { FALLBACK_REGISTRY_ECOSYSTEMS, enumOf, type EcosystemPlanes } from '../ecosystems.js';
 import {
   buildFindings,
   fetchRemediations,
@@ -14,8 +14,6 @@ import {
   mapLimit,
   type Finding,
 } from '../vuln.js';
-
-const ecosystem = z.enum(REGISTRY_ECOSYSTEMS);
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -44,7 +42,9 @@ const READ_ANNOTATIONS = {
  * `parseNpmLockfile` in ../vuln.ts stays exported and tested so a caller can do the
  * extraction in one JSON.parse and a map.
  */
-export function registerVulnTools(server: McpServer, client: DependablyClient): void {
+export function registerVulnTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): void {
+  const ecosystem = enumOf(planes.registry, FALLBACK_REGISTRY_ECOSYSTEMS);
+
   server.registerTool(
     'check_dependencies',
     {

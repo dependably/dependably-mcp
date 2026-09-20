@@ -56,6 +56,13 @@ All notable changes to this project are documented here. The format follows
   third-party data, not instructions; `list_packages` points at `search_packages` for quick lookups.
 - Removed the unused write verbs (`post`, `put`, `patch`, `del`) from the HTTP client, so the
   read-only server's client surface has no write methods to audit.
+- **Ecosystem enums are now read from the instance, not hardcoded.** At startup the server calls
+  `GET /api/v1/ecosystems` and builds each tool's ecosystem enum from the returned `planes`
+  (registry/lookup/setup), so an ecosystem the instance adds reaches every tool without a client
+  release. An instance that cannot answer — a server older than the endpoint (404), one that is
+  unreachable, or one that answers with an unexpected shape — falls back to the previous built-in
+  lists, and exactly one line is written to stderr naming which case it was
+  (`dependably-mcp: using the built-in ecosystem list; /api/v1/ecosystems <reason>`).
 
 ### Docs
 
