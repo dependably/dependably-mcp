@@ -1,6 +1,6 @@
 {
   "name": "dependably-mcp",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "MCP server for Dependably, a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go and Cargo, self-hosted or SaaS.",
   "keywords": [
     "mcp",
@@ -16,7 +16,7 @@
     "nuget",
     "maven"
   ],
-  "author": "Michael Hiland",
+  "author": "Dependably <support@dependably.ca> (https://dependably.ca)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/dependably/dependably-mcp.git"
