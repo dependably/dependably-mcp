@@ -4,6 +4,7 @@ import { afterEach, describe, it } from 'node:test';
 import {
   DependablyApiError,
   DependablyClient,
+  MAX_RESPONSE_BYTES,
   describeFetchError,
   extractCapability,
   formatHttpError,
@@ -151,12 +152,49 @@ describe('DependablyClient response handling', () => {
     ok(err.message.includes(String(9 * 1024 * 1024)), err.message);
   });
 
+  it('cancels the response body once the Content-Length cap trips, to release the connection', async () => {
+    let cancelled = false;
+    const stream = new ReadableStream({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    globalThis.fetch = async () =>
+      new Response(stream, {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'content-length': String(9 * 1024 * 1024) },
+      });
+    const err = await new DependablyClient(cfg).get('/big').catch((e) => e);
+    ok(err instanceof Error);
+    ok(err.message.includes('exceeds the'), err.message);
+    ok(cancelled, 'the body stream should be cancelled once the Content-Length cap trips');
+  });
+
   it('aborts when the streamed body exceeds the response-size cap even without a Content-Length', async () => {
-    const bigBody = 'x'.repeat(8 * 1024 * 1024 + 1);
+    const bigBody = 'x'.repeat(MAX_RESPONSE_BYTES + 1);
     globalThis.fetch = async () => new Response(bigBody, { status: 200, headers: { 'content-type': 'text/plain' } });
     const err = await new DependablyClient(cfg).get('/big').catch((e) => e);
     ok(err instanceof Error);
     ok(err.message.includes('exceeds the'), err.message);
+    ok(err.message.includes(`${bigBody.length} bytes`), err.message);
+  });
+
+  it('measures the streamed-body cap in bytes, not UTF-16 length, so the reported count matches the cap', async () => {
+    // Each '€' is 1 UTF-16 code unit but 3 bytes: a body whose *character*
+    // count sits under MAX_RESPONSE_BYTES can still be over the cap in bytes.
+    // The rejection message must report the byte count the cap actually
+    // enforces, or the two figures disagree with each other.
+    const charCount = Math.floor(MAX_RESPONSE_BYTES / 3) + 10;
+    const bigBody = '€'.repeat(charCount);
+    const expectedBytes = Buffer.byteLength(bigBody);
+    ok(expectedBytes > MAX_RESPONSE_BYTES, 'fixture must actually exceed the byte cap');
+    ok(bigBody.length < expectedBytes, 'fixture must have fewer UTF-16 units than bytes, or it does not distinguish the two measures');
+    globalThis.fetch = async () =>
+      new Response(bigBody, { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+    const err = await new DependablyClient(cfg).get('/big').catch((e) => e);
+    ok(err instanceof Error);
+    ok(err.message.includes(`${expectedBytes} bytes`), err.message);
+    ok(!err.message.includes(`${bigBody.length} bytes`), err.message);
   });
 
   it('accepts a body at or under the cap', async () => {

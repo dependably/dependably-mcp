@@ -67,6 +67,17 @@ describe('format helpers', () => {
     strictEqual(e.content[0].text, 'boom');
   });
 
+  it('err applies the same character budget as json/withSummary', () => {
+    // A 500 with a huge application/problem+json `detail` (proven: 3 MB) must not
+    // bypass the budget just because it is reported through err() rather than
+    // json(). isError must stay true and the trailer must still be machine-readable.
+    const huge = 'x'.repeat(RESULT_CHAR_BUDGET + 50_000);
+    const e = err(huge);
+    strictEqual(e.isError, true);
+    ok(e.content[0].text.length < huge.length, 'the error message must be truncated');
+    ok(e.content[0].text.includes(`[truncated: result exceeded ${RESULT_CHAR_BUDGET} characters`), e.content[0].text.slice(-200));
+  });
+
   it('run converts a throw into an error result, including a non-Error throw', async () => {
     const thrown = await run(async () => {
       throw new Error('nope');

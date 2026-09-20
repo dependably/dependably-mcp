@@ -65,6 +65,13 @@ export class DependablyClient {
       }
       const lengthHeader = res.headers.get('content-length');
       if (lengthHeader && Number(lengthHeader) > MAX_RESPONSE_BYTES) {
+        // Release the connection rather than leaving it half-read: we are
+        // refusing the body on the strength of the header alone.
+        try {
+          await res.body?.cancel();
+        } catch {
+          // Best-effort; the ActionableError below is what matters to the caller.
+        }
         throw new ActionableError(
           `${method} ${url} returned a body of ${lengthHeader} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
         );
@@ -75,9 +82,14 @@ export class DependablyClient {
       throw new Error(describeFetchError(method, url, err, this.cfg.timeoutMs));
     }
 
-    if (text.length > MAX_RESPONSE_BYTES) {
+    // `text.length` counts UTF-16 code units, not bytes — a body full of
+    // multi-byte characters could clear the cap in `.length` while still
+    // being under it in bytes, or vice versa. Measure what the message and
+    // the cap both claim to mean.
+    const byteLength = Buffer.byteLength(text);
+    if (byteLength > MAX_RESPONSE_BYTES) {
       throw new Error(
-        `${method} ${url} returned a body of ${text.length} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
+        `${method} ${url} returned a body of ${byteLength} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
       );
     }
 

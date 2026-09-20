@@ -32,7 +32,7 @@ export function withSummary(summary: string, value: unknown): ToolResult {
 }
 
 export function err(message: string): ToolResult {
-  return { content: [{ type: 'text', text: message }], isError: true };
+  return { content: [{ type: 'text', text: bounded(message) }], isError: true };
 }
 
 export async function run(fn: () => Promise<ToolResult>): Promise<ToolResult> {

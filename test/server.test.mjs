@@ -88,46 +88,53 @@ describe('server over a real child process (stdio)', () => {
   it('speaks clean JSON-RPC on stdout, reports serverInfo, keeps stderr empty, and exits 0 on stdin close', async () => {
     const { child, rpc, notify, rawStdoutLines, stderr } = driveChildProcess();
 
-    const init = await rpc('initialize', {
-      protocolVersion: '2025-06-18',
-      capabilities: {},
-      clientInfo: { name: 'server-test', version: '0.0.1' },
-    });
-    notify('notifications/initialized');
-    const list = await rpc('tools/list', {});
-
-    ok(!init.TIMEOUT, 'initialize should not time out');
-    ok(!list.TIMEOUT, 'tools/list should not time out');
-    deepStrictEqual(init.result.serverInfo, { name: 'dependably-mcp', version: pkg.version });
-    ok(Array.isArray(list.result.tools) && list.result.tools.length > 0, 'tools/list should return tools');
-
-    for (const line of rawStdoutLines) {
-      let parsed;
-      try {
-        parsed = JSON.parse(line);
-      } catch (e) {
-        throw new Error(`stdout line did not parse as JSON: ${line}\n${e.message}`);
-      }
-      ok(parsed.jsonrpc === '2.0', `every stdout line must be JSON-RPC 2.0: ${line}`);
-    }
-
-    strictEqual(stderr(), '', `stderr should be empty, got: ${stderr()}`);
-
-    const exitInfo = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve({ exited: false }), 5000);
-      child.on('exit', (code, signal) => {
-        clearTimeout(t);
-        resolve({ exited: true, code, signal });
+    // A failing assertion below must not leave this process running: node:test
+    // would otherwise hang waiting for the child's stdio pipes to close, timing
+    // out the whole run instead of reporting the failure. SIGKILL after the
+    // process has already exited (the success path) is a harmless no-op.
+    try {
+      const init = await rpc('initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'server-test', version: '0.0.1' },
       });
-      child.stdin.end();
-    });
+      notify('notifications/initialized');
+      const list = await rpc('tools/list', {});
 
-    if (!exitInfo.exited) {
+      ok(!init.TIMEOUT, 'initialize should not time out');
+      ok(!list.TIMEOUT, 'tools/list should not time out');
+      deepStrictEqual(init.result.serverInfo, { name: 'dependably-mcp', version: pkg.version });
+      ok(Array.isArray(list.result.tools) && list.result.tools.length > 0, 'tools/list should return tools');
+
+      for (const line of rawStdoutLines) {
+        let parsed;
+        try {
+          parsed = JSON.parse(line);
+        } catch (e) {
+          throw new Error(`stdout line did not parse as JSON: ${line}\n${e.message}`);
+        }
+        ok(parsed.jsonrpc === '2.0', `every stdout line must be JSON-RPC 2.0: ${line}`);
+      }
+
+      strictEqual(stderr(), '', `stderr should be empty, got: ${stderr()}`);
+
+      const exitInfo = await new Promise((resolve) => {
+        const t = setTimeout(() => resolve({ exited: false }), 5000);
+        child.on('exit', (code, signal) => {
+          clearTimeout(t);
+          resolve({ exited: true, code, signal });
+        });
+        child.stdin.end();
+      });
+
+      if (!exitInfo.exited) {
+        throw new Error('process did not exit within 5s of stdin closing');
+      }
+      strictEqual(exitInfo.code, 0, `process should exit 0 when stdin closes, got code=${exitInfo.code} signal=${exitInfo.signal}`);
+      strictEqual(stderr(), '', `stderr should still be empty after shutdown, got: ${stderr()}`);
+    } finally {
       child.kill('SIGKILL');
-      throw new Error('process did not exit within 5s of stdin closing');
     }
-    strictEqual(exitInfo.code, 0, `process should exit 0 when stdin closes, got code=${exitInfo.code} signal=${exitInfo.signal}`);
-    strictEqual(stderr(), '', `stderr should still be empty after shutdown, got: ${stderr()}`);
   });
 });
 
