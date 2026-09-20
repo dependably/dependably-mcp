@@ -151,7 +151,9 @@ describe('server over a real child process (stdio)', () => {
 /**
  * Exactly one line matching the fallback-startup message, and nothing else —
  * a stray extra line (e.g. an unrelated warning) or silence (the fallback
- * happened but nothing was logged) both fail this.
+ * happened but nothing was logged) both fail this. Also bounds the line's
+ * length: the reason comes from `fetchEcosystems`, which never echoes a
+ * response body, so nothing here should ever approach an unbounded size.
  */
 function assertOneFallbackLine(stderrText) {
   const lines = stderrText.split('\n').filter((l) => l.length > 0);
@@ -160,6 +162,7 @@ function assertOneFallbackLine(stderrText) {
     /^dependably-mcp: using the built-in ecosystem list; /.test(lines[0]),
     `stderr line should report the ecosystem fallback, got: ${lines[0]}`,
   );
+  ok(lines[0].length < 200, `stderr line should be short, got ${lines[0].length} chars: ${lines[0]}`);
 }
 
 describe('every registered tool advertises read-only annotations', () => {

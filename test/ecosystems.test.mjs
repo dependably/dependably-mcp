@@ -97,7 +97,7 @@ describe('fetchEcosystems', () => {
     const result = await fetchEcosystems(new DependablyClient(cfg));
     strictEqual(result.source, 'fallback');
     deepStrictEqual(result.planes, FALLBACK_PLANES);
-    ok(result.reason.includes('404'), result.reason);
+    strictEqual(result.reason, 'returned 404');
   });
 
   it('falls back, never throwing, on a network error', async () => {
@@ -125,6 +125,61 @@ describe('fetchEcosystems', () => {
     const result = await fetchEcosystems(new DependablyClient(cfg));
     strictEqual(result.source, 'fallback');
     ok(result.reason.includes('unexpected shape'), result.reason);
+  });
+
+  // The reason must never be built from response bytes: an HTTP status other
+  // than 200 is "returned <status>" and nothing else, regardless of what body
+  // or content-type came with it. Otherwise an HTML error page (or a MITM'd
+  // instance) can turn one intended stderr line into several, or leak the
+  // body onto stderr.
+  it('falls back with exactly "returned 400" on a 400 with a multi-line HTML body, never the body itself', async () => {
+    stubFetch({
+      status: 400,
+      body: '<html>\n<head><title>400 Bad Request</title></head>\n<body>\nbad request\n</body>\n</html>\n',
+      ctype: 'text/html',
+    });
+    const result = await fetchEcosystems(new DependablyClient(cfg));
+    strictEqual(result.source, 'fallback');
+    strictEqual(result.reason, 'returned 400');
+    ok(!result.reason.includes('\n'), result.reason);
+  });
+
+  it('falls back with "returned 401" rather than "unreachable" when the instance demands auth', async () => {
+    stubFetch({ status: 401, body: '{"title":"Unauthorized"}' });
+    const result = await fetchEcosystems(new DependablyClient(cfg));
+    strictEqual(result.source, 'fallback');
+    strictEqual(result.reason, 'returned 401');
+    ok(!result.reason.includes('unreachable'), result.reason);
+  });
+
+  it('falls back with "returned 500" on a server error', async () => {
+    stubFetch({ status: 500, body: '{"title":"Internal Server Error"}' });
+    const result = await fetchEcosystems(new DependablyClient(cfg));
+    strictEqual(result.source, 'fallback');
+    strictEqual(result.reason, 'returned 500');
+  });
+
+  it('falls back on a timeout without echoing the DEPENDABLY_TIMEOUT_MS advice, which is wrong for this capped call', async () => {
+    // A server that never responds: the stub rejects only when the request's
+    // own AbortSignal fires, the same way real `fetch` behaves against a
+    // signal whose timeout elapses.
+    globalThis.fetch = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      });
+    const result = await fetchEcosystems(new DependablyClient({ ...cfg, timeoutMs: 200 }));
+    strictEqual(result.source, 'fallback');
+    ok(result.reason.startsWith('was unreachable: timed out'), result.reason);
+    ok(!result.reason.includes('DEPENDABLY_TIMEOUT_MS'), result.reason);
+  });
+
+  it('clamps an overlong reason to 160 characters', async () => {
+    globalThis.fetch = async () => {
+      throw new Error('x'.repeat(400));
+    };
+    const result = await fetchEcosystems(new DependablyClient(cfg));
+    strictEqual(result.source, 'fallback');
+    ok(result.reason.length <= 160, `expected <= 160 chars, got ${result.reason.length}`);
   });
 });
 

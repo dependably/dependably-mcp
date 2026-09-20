@@ -116,14 +116,19 @@ const ECOSYSTEMS_FETCH_TIMEOUT_CAP_MS = 5000;
 
 /**
  * Read the ecosystem vocabulary from the instance (`GET /api/v1/ecosystems`),
- * falling back to the built-in lists when the instance cannot answer: the
- * endpoint 404s (a server older than the one that introduced it), the request
- * is unreachable, or the body does not match the contract shape.
+ * falling back to the built-in lists when the instance cannot answer: any
+ * HTTP status other than 200 (a server older than the endpoint answers 404;
+ * an auth or server-side failure answers 401/500/…), the request is
+ * unreachable at the transport level, or the body does not match the
+ * contract shape.
  *
  * Never throws — every failure mode resolves to a `source: 'fallback'` result
- * with a human-readable `reason`, so the caller can log one line and move on
- * rather than fail startup over an instance detail the server can serve
- * without.
+ * with a short, single-line `reason`, so the caller can log exactly one line
+ * and move on rather than fail startup over an instance detail the server can
+ * serve without. The reason is never built from response bytes: an instance
+ * (or a MITM sitting in front of one) answering with an oversized or
+ * multi-line body — an HTML error page, a stack trace — cannot turn one
+ * stderr line into several, or leak that body onto stderr at all.
  */
 export async function fetchEcosystems(
   client: DependablyClient,
@@ -132,24 +137,47 @@ export async function fetchEcosystems(
   try {
     const body = await client.get('/api/v1/ecosystems', undefined, { timeoutMs });
     const planes = parsePlanes(body);
-    if (!planes) return { planes: FALLBACK_PLANES, source: 'fallback', reason: 'answered with an unexpected shape' };
+    if (!planes) return fallbackResult('answered with an unexpected shape');
     return { planes, source: 'instance' };
   } catch (e) {
-    if (e instanceof DependablyApiError && e.status === 404) {
-      return { planes: FALLBACK_PLANES, source: 'fallback', reason: 'returned 404' };
-    }
-    return { planes: FALLBACK_PLANES, source: 'fallback', reason: `was unreachable: ${unreachableReason(e)}` };
+    // The instance answered — with a status other than 2xx — so this is not
+    // "unreachable"; and the reason is the status alone, never the response
+    // body or DependablyApiError's formatted message, which can embed either.
+    if (e instanceof DependablyApiError) return fallbackResult(`returned ${e.status}`);
+    return fallbackResult(`was unreachable: ${transportReasonCause(e)}`);
   }
 }
 
+function fallbackResult(reason: string): { planes: EcosystemPlanes; source: 'fallback'; reason: string } {
+  return { planes: FALLBACK_PLANES, source: 'fallback', reason: normalizeReason(reason) };
+}
+
 /**
- * Reduce a transport failure to the underlying cause code (e.g. `ECONNREFUSED`)
- * when {@link describeFetchError} embedded one, so the one-line startup log
- * reads as a short cause rather than the full multi-sentence remediation
- * message that error is written for.
+ * Collapse whitespace (including newlines) to single spaces and cap the
+ * length, so nothing that reaches this point — even a reason string this
+ * module did not fully control the shape of — can turn the caller's one
+ * `stderr.write` into more than one line, or an unbounded one.
  */
-function unreachableReason(e: unknown): string {
+function normalizeReason(reason: string): string {
+  return reason.replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
+/**
+ * Reduce a transport failure (no HTTP response at all) to a short cause:
+ * `ECONNREFUSED`, `timed out after 200ms`, `bad port` — never
+ * {@link describeFetchError}'s full remediation sentence. In particular, a
+ * timeout's own message says "Raise DEPENDABLY_TIMEOUT_MS if the instance is
+ * just slow", which is the wrong advice here: this fetch is capped at
+ * `min(cfg.timeoutMs, 5000)ms`, not the configured request timeout, so
+ * raising the latter would not change this call's behaviour.
+ */
+function transportReasonCause(e: unknown): string {
   const message = e instanceof Error ? e.message : String(e);
+  const timedOut = /timed out after \d+ms/.exec(message);
+  if (timedOut) return timedOut[0];
   const code = /\(([A-Z][A-Z0-9_]*)\)/.exec(message);
-  return code ? code[1] : message;
+  if (code) return code[1];
+  const failed = /failed: ([^.]+)\./.exec(message);
+  if (failed) return failed[1];
+  return message;
 }
