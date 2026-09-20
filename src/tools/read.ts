@@ -4,11 +4,7 @@ import { z } from 'zod';
 import type { DependablyClient } from '../client.js';
 import { json, run } from '../format.js';
 import { compactReportItem, type ReportItem } from '../vuln.js';
-import { LOOKUP_ECOSYSTEMS, REGISTRY_ECOSYSTEMS } from '../ecosystems.js';
-
-const ecosystem = z.enum(REGISTRY_ECOSYSTEMS);
-// /api/v1/lookup enforces its own, narrower set and 422s anything outside it.
-const lookupEcosystem = z.enum(LOOKUP_ECOSYSTEMS);
+import { FALLBACK_LOOKUP_ECOSYSTEMS, FALLBACK_REGISTRY_ECOSYSTEMS, enumOf, type EcosystemPlanes } from '../ecosystems.js';
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -17,7 +13,11 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-export function registerReadTools(server: McpServer, client: DependablyClient): void {
+export function registerReadTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): void {
+  const ecosystem = enumOf(planes.registry, FALLBACK_REGISTRY_ECOSYSTEMS);
+  // /api/v1/lookup enforces its own, narrower set and 422s anything outside it.
+  const lookupEcosystem = enumOf(planes.lookup, FALLBACK_LOOKUP_ECOSYSTEMS);
+
   server.registerTool(
     'list_packages',
     {

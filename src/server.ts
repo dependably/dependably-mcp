@@ -4,6 +4,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { DependablyClient } from './client.js';
 import type { Config } from './config.js';
+import { FALLBACK_PLANES, type EcosystemPlanes } from './ecosystems.js';
 import { registerReadTools } from './tools/read.js';
 import { registerObservabilityTools } from './tools/observability.js';
 import { registerProjectTools } from './tools/projects.js';
@@ -19,19 +20,19 @@ const { version } = createRequire(import.meta.url)('../package.json') as { versi
  * mint. Nothing in the surface requires a capability that only an admin or owner
  * can grant, which is what keeps the install instruction to one sentence.
  */
-export function buildServer(client: DependablyClient, cfg: Config): McpServer {
+export function buildServer(client: DependablyClient, cfg: Config, planes: EcosystemPlanes = FALLBACK_PLANES): McpServer {
   const server = new McpServer({
     name: 'dependably-mcp',
     version,
   });
 
-  registerReadTools(server, client);
+  registerReadTools(server, client, planes);
   // Project-scoped vulnerability tools take the dependency list as an argument;
   // no tool in this server reads a local file.
-  registerVulnTools(server, client);
+  registerVulnTools(server, client, planes);
   registerProjectTools(server, client);
   registerObservabilityTools(server, client);
-  registerSetupTools(server, cfg);
+  registerSetupTools(server, cfg, planes);
 
   return server;
 }

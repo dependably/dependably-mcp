@@ -115,8 +115,7 @@ Every tool is read-only with a user-generated token with **Pull** permissions.
 | `readiness_check` | Readiness with per-subsystem detail; needs no token. |
 | `get_install_command`, `get_publish_command` | Build an install or publish command, returned as text. |
 
-Ecosystems: npm, pypi, nuget, maven, rpm, oci, golang, cargo, apk, terraform, hex — `lookup_package`
-and the two setup tools cover narrower sets, which their tool descriptions name.
+The ecosystems each tool offers are read from your instance at startup; an instance without that endpoint gets the built-in list.
 
 The setup tools return text for you to run, so this server never shells out to your package manager.
 Nothing here needs `read:audit`, `read:tenant`, `publish:*` or `yank:*`.

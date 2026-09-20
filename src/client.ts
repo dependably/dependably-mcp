@@ -31,11 +31,16 @@ class ActionableError extends Error {}
 export class DependablyClient {
   constructor(private readonly cfg: Config) {}
 
-  get(path: string, query?: Query): Promise<unknown> {
-    return this.request('GET', path, query);
+  /** The configured per-request timeout, for callers computing their own bounded override. */
+  get timeoutMs(): number {
+    return this.cfg.timeoutMs;
   }
 
-  private async request(method: string, path: string, query?: Query): Promise<unknown> {
+  get(path: string, query?: Query, opts?: { timeoutMs?: number }): Promise<unknown> {
+    return this.request('GET', path, query, opts?.timeoutMs);
+  }
+
+  private async request(method: string, path: string, query?: Query, timeoutMs?: number): Promise<unknown> {
     const url = this.buildUrl(path, query);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.cfg.token}`,
@@ -50,7 +55,7 @@ export class DependablyClient {
       // door). Following it silently would also resend the bearer token to
       // whatever host the Location header names.
       redirect: 'manual',
-      signal: AbortSignal.timeout(this.cfg.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs ?? this.cfg.timeoutMs),
     };
 
     let res: Response;
@@ -79,7 +84,7 @@ export class DependablyClient {
       text = await res.text();
     } catch (err) {
       if (err instanceof ActionableError) throw new Error(err.message);
-      throw new Error(describeFetchError(method, url, err, this.cfg.timeoutMs));
+      throw new Error(describeFetchError(method, url, err, timeoutMs ?? this.cfg.timeoutMs));
     }
 
     // `text.length` counts UTF-16 code units, not bytes — a body full of

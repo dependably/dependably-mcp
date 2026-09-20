@@ -3,11 +3,9 @@ import { z } from 'zod';
 
 import type { Config } from '../config.js';
 import { err, type ToolResult } from '../format.js';
-import { SETUP_ECOSYSTEMS } from '../ecosystems.js';
+import { FALLBACK_SETUP_ECOSYSTEMS, enumOf, type EcosystemPlanes } from '../ecosystems.js';
 
-type SetupEcosystem = (typeof SETUP_ECOSYSTEMS)[number];
-
-const ecosystem = z.enum(SETUP_ECOSYSTEMS).describe('Package ecosystem the command targets.');
+type SetupEcosystem = (typeof FALLBACK_SETUP_ECOSYSTEMS)[number];
 
 const LOCAL_READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -75,6 +73,21 @@ const NAME_RULES: Record<SetupEcosystem, NameRule> = {
   },
 };
 
+/**
+ * What the command builders below actually know how to spell — read from
+ * {@link NAME_RULES}'s own keys rather than hand-listed again, so this set
+ * cannot drift from the switches in {@link installCommand} and
+ * {@link publishCommand}. `planes.setup` is intersected against this set: an
+ * instance may advertise an ecosystem (e.g. `hex`) that no builder here knows,
+ * and that ecosystem is withheld rather than offered with no command to give.
+ */
+const BUILDER_ECOSYSTEMS = new Set<string>(Object.keys(NAME_RULES));
+
+/** `planes.setup`, narrowed to the ecosystems a builder here actually knows. */
+function offeredSetupEcosystems(setupPlane: readonly string[]): string[] {
+  return setupPlane.filter((eco) => BUILDER_ECOSYSTEMS.has(eco));
+}
+
 const VERSION_PATTERN = /^(?!-)[A-Za-z0-9._+!~^-]+$/;
 const VERSION_MESSAGE = 'Version may only contain letters, digits, and . _ + - ! ~ ^, no whitespace, and must not start with -.';
 
@@ -116,7 +129,11 @@ function fenced(lang: string, body: string): ToolResult {
   return { content: [{ type: 'text', text: `\`\`\`${lang}\n${body}\n\`\`\`` }] };
 }
 
-export function registerSetupTools(server: McpServer, cfg: Config): void {
+export function registerSetupTools(server: McpServer, cfg: Config, planes: EcosystemPlanes): void {
+  const ecosystem = enumOf(offeredSetupEcosystems(planes.setup), FALLBACK_SETUP_ECOSYSTEMS).describe(
+    'Package ecosystem the command targets.',
+  );
+
   server.registerTool(
     'get_install_command',
     {
@@ -141,7 +158,12 @@ export function registerSetupTools(server: McpServer, cfg: Config): void {
     // preserves the advertised schema; the per-ecosystem check still runs
     // before any command text is built.
     async (args) => {
-      const rule = NAME_RULES[args.ecosystem];
+      // `args.ecosystem` is drawn from `offeredSetupEcosystems`, which is
+      // already filtered to keys of NAME_RULES — this lookup cannot actually
+      // miss, but the enum built from a runtime vocabulary is typed as a
+      // plain string, so TypeScript cannot see that on its own.
+      const rule = NAME_RULES[args.ecosystem as SetupEcosystem];
+      if (!rule) return err(`Unsupported ecosystem: ${args.ecosystem}`);
       if (!rule.test(args.package)) return err(rule.message);
       return installCommand(cfg.baseUrl, args.ecosystem, args.package, args.version);
     },

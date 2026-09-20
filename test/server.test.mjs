@@ -85,7 +85,7 @@ function driveChildProcess() {
 }
 
 describe('server over a real child process (stdio)', () => {
-  it('speaks clean JSON-RPC on stdout, reports serverInfo, keeps stderr empty, and exits 0 on stdin close', async () => {
+  it('speaks clean JSON-RPC on stdout, reports serverInfo, logs exactly one fallback line to stderr, exits 0 on stdin close', async () => {
     const { child, rpc, notify, rawStdoutLines, stderr } = driveChildProcess();
 
     // A failing assertion below must not leave this process running: node:test
@@ -116,7 +116,17 @@ describe('server over a real child process (stdio)', () => {
         ok(parsed.jsonrpc === '2.0', `every stdout line must be JSON-RPC 2.0: ${line}`);
       }
 
-      strictEqual(stderr(), '', `stderr should be empty, got: ${stderr()}`);
+      // The instance at 127.0.0.1:9 is unreachable, so startup falls back to the
+      // built-in ecosystem list and logs exactly one line naming why — never a
+      // stray line, never silence about a fallback that changes tool schemas.
+      assertOneFallbackLine(stderr());
+
+      const listPackagesSchema = list.result.tools.find((t) => t.name === 'list_packages')?.inputSchema;
+      deepStrictEqual(
+        listPackagesSchema?.properties?.ecosystem?.enum,
+        ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo', 'apk', 'terraform', 'hex'],
+        'tools/list still returns every tool with the fallback registry enum when the instance is unreachable',
+      );
 
       const exitInfo = await new Promise((resolve) => {
         const t = setTimeout(() => resolve({ exited: false }), 5000);
@@ -131,12 +141,26 @@ describe('server over a real child process (stdio)', () => {
         throw new Error('process did not exit within 5s of stdin closing');
       }
       strictEqual(exitInfo.code, 0, `process should exit 0 when stdin closes, got code=${exitInfo.code} signal=${exitInfo.signal}`);
-      strictEqual(stderr(), '', `stderr should still be empty after shutdown, got: ${stderr()}`);
+      assertOneFallbackLine(stderr());
     } finally {
       child.kill('SIGKILL');
     }
   });
 });
+
+/**
+ * Exactly one line matching the fallback-startup message, and nothing else —
+ * a stray extra line (e.g. an unrelated warning) or silence (the fallback
+ * happened but nothing was logged) both fail this.
+ */
+function assertOneFallbackLine(stderrText) {
+  const lines = stderrText.split('\n').filter((l) => l.length > 0);
+  deepStrictEqual(lines.length, 1, `stderr should carry exactly one line, got: ${JSON.stringify(lines)}`);
+  ok(
+    /^dependably-mcp: using the built-in ecosystem list; /.test(lines[0]),
+    `stderr line should report the ecosystem fallback, got: ${lines[0]}`,
+  );
+}
 
 describe('every registered tool advertises read-only annotations', () => {
   it('has a non-empty title, readOnlyHint true and destructiveHint false', async () => {
