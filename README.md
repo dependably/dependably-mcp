@@ -2,8 +2,8 @@
 
 An MCP server that lets Claude Desktop, Claude Code, Cursor, or anything else that speaks the
 Model Context Protocol query your [Dependably](https://github.com/dependably/dependably-community)
-instance: packages, vulnerabilities, licence policy, and the install or publish command for each
-ecosystem.
+instance: package inventory, vulnerability reports, licence policy, audit events and incident
+triage.
 
 Dependably is a private artefact repository, self-hosted or as a hosted SaaS instance. This server
 is read-only and runs over stdio through a single personal access token: no tool writes to your
@@ -31,9 +31,6 @@ claude mcp add dependably \
 
 `npx` fetches the package from npm on first use. To install it once instead, run
 `npm install -g dependably-mcp` and use `dependably-mcp` in place of `npx -y dependably-mcp`.
-
-The first public npm release is 0.2.0; until it is published, install from a clone of this
-repository instead: `npm ci && npm run build && npm install -g .`.
 
 Or edit `~/.claude.json`, or your project's `.mcp.json`, directly:
 
@@ -65,125 +62,6 @@ private certificate authority bundle.
 To keep a hand-written config instead, edit
 `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, or the equivalent on
 your OS, using the same shape as the Claude Code example above.
-
-### Cursor
-
-Edit `~/.cursor/mcp.json` (every project) or your project's `.cursor/mcp.json` (one project):
-
-```jsonc
-{
-  "mcpServers": {
-    "dependably": {
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
-      "env": {
-        "DEPENDABLY_BASE_URL": "https://dependably.example.com",
-        "DEPENDABLY_TOKEN": "dpb_xxx"
-      }
-    }
-  }
-}
-```
-
-### Windsurf
-
-Edit `~/.codeium/windsurf/mcp_config.json`:
-
-```jsonc
-{
-  "mcpServers": {
-    "dependably": {
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
-      "env": {
-        "DEPENDABLY_BASE_URL": "https://dependably.example.com",
-        "DEPENDABLY_TOKEN": "dpb_xxx"
-      }
-    }
-  }
-}
-```
-
-### VS Code
-
-Edit your project's `.vscode/mcp.json`. Use an `inputs` prompt for the token instead of writing
-it into the file, so it is not committed:
-
-```jsonc
-{
-  "inputs": [
-    {
-      "type": "promptString",
-      "id": "dependably-token",
-      "description": "Dependably personal access token",
-      "password": true
-    }
-  ],
-  "servers": {
-    "dependably": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
-      "env": {
-        "DEPENDABLY_BASE_URL": "https://dependably.example.com",
-        "DEPENDABLY_TOKEN": "${input:dependably-token}"
-      }
-    }
-  }
-}
-```
-
-### Zed
-
-Edit `settings.json` (`zed: open settings file`):
-
-```jsonc
-{
-  "context_servers": {
-    "dependably": {
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
-      "env": {
-        "DEPENDABLY_BASE_URL": "https://dependably.example.com",
-        "DEPENDABLY_TOKEN": "dpb_xxx"
-      }
-    }
-  }
-}
-```
-
-### Codex CLI
-
-Edit `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.dependably]
-command = "npx"
-args = ["-y", "dependably-mcp"]
-
-[mcp_servers.dependably.env]
-DEPENDABLY_BASE_URL = "https://dependably.example.com"
-DEPENDABLY_TOKEN = "dpb_xxx"
-```
-
-### Gemini CLI
-
-Edit `~/.gemini/settings.json` (or your project's `.gemini/settings.json`):
-
-```jsonc
-{
-  "mcpServers": {
-    "dependably": {
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
-      "env": {
-        "DEPENDABLY_BASE_URL": "https://dependably.example.com",
-        "DEPENDABLY_TOKEN": "dpb_xxx"
-      }
-    }
-  }
-}
-```
 
 ## Verify
 
