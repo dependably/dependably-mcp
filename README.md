@@ -95,8 +95,7 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-Every tool is read-only, none reads a local file, and every one is reachable with a
-**Pull** token — the preset any member can mint for themselves.
+Every tool is read-only with a user-generated token with **Pull** permissions.
 
 | Tool | What it does |
 |---|---|
