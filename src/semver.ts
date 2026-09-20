@@ -21,6 +21,16 @@
  * Not modelled, because neither an advisory nor a lockfile has been observed to
  * carry one: PEP 440 epochs (`1!1.0`) and local version labels (`1.0+ubuntu1`,
  * whose `+` tail is dropped as build metadata).
+ *
+ * PEP 440 also permits several spellings of the same phase — `c`, `pre` and
+ * `preview` all mean `rc`; `a` means `alpha`; `b` means `beta`; `r` and `rev`
+ * mean `post` — and treats them as equal. Comparing the raw marker text (as
+ * this module used to) instead ranks them alphabetically, which is a real but
+ * different order (`"c" < "rc"` always, regardless of the number after it), so
+ * a fix spelled `2.0.0c1` and an installed version spelled `2.0.0rc1` compared
+ * as different releases instead of the same one — occasionally recommending a
+ * bump to a spelling that was already superseded. Every marker is canonicalized
+ * before it enters `prerelease` so the two spellings compare as one phase.
  */
 
 /** dev < pre < release < post, per PEP 440. */
@@ -37,15 +47,30 @@ type Parsed = { release: string[]; phase: number; prerelease: string[] };
  */
 const PEP440_TAIL = /[.\-_]?(dev|alpha|beta|pre|preview|post|rev|a|b|c|rc|r)[.\-_]?(\d*)$/i;
 
-function phaseOf(marker: string): number {
+/** PEP 440's alias spellings, folded onto the one form each phase compares as. */
+const PEP440_ALIASES: Record<string, string> = {
+  c: 'rc',
+  pre: 'rc',
+  preview: 'rc',
+  a: 'alpha',
+  b: 'beta',
+  r: 'post',
+  rev: 'post',
+};
+
+function canonicalMarker(marker: string): string {
   const m = marker.toLowerCase();
-  if (m === 'dev') return DEV;
-  if (m === 'post' || m === 'rev' || m === 'r') return POST;
+  return PEP440_ALIASES[m] ?? m;
+}
+
+function phaseOf(marker: string): number {
+  if (marker === 'dev') return DEV;
+  if (marker === 'post') return POST;
   return PRE;
 }
 
 function parse(version: string): Parsed {
-  const cleaned = version.trim().replace(/^v/, '').split('+')[0];
+  const cleaned = version.trim().replace(/^[vV]/, '').split('+')[0];
 
   // A hyphenated tail is semver's spelling and is already a prerelease; keep that
   // path exactly as it was so existing orderings do not shift underneath callers.
@@ -64,10 +89,11 @@ function parse(version: string): Parsed {
     // Guard against eating a release that merely ends in a marker letter, and
     // against a bare marker with no release in front of it.
     if (head.length > 0 && /[0-9]$/.test(head)) {
+      const marker = canonicalMarker(tail[1]);
       return {
         release: head.split('.'),
-        phase: phaseOf(tail[1]),
-        prerelease: [tail[1].toLowerCase(), ...(tail[2] ? [tail[2]] : [])],
+        phase: phaseOf(marker),
+        prerelease: [marker, ...(tail[2] ? [tail[2]] : [])],
       };
     }
   }
@@ -124,8 +150,40 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
   return 0;
 }
 
+/**
+ * rpm's NEVRA packs a second ordered field onto the version: `1.2.3-4` is
+ * release `4` of version `1.2.3`, not a semver prerelease `4` of `1.2.3`
+ * (semver's reading, which this module otherwise uses for the hyphen, sorts
+ * `1.2.3-4` *below* `1.2.3` — an every-rpm-package downgrade). Split on the
+ * LAST hyphen — a release qualifier such as `4.el9` can itself contain dots
+ * but rpm reserves the hyphen for the version/release boundary — compare the
+ * version half first, then the release half the same way, and rank a missing
+ * release below any present one (a bare `1.2.3` is older than every `1.2.3-N`
+ * has ever been, on the rpm ordering rules this approximates).
+ */
+function splitRpm(version: string): [string, string | undefined] {
+  const trimmed = version.trim();
+  const idx = trimmed.lastIndexOf('-');
+  if (idx === -1) return [trimmed, undefined];
+  return [trimmed.slice(0, idx), trimmed.slice(idx + 1)];
+}
+
+function compareRpmRelease(a: string | undefined, b: string | undefined): number {
+  if (a === undefined && b === undefined) return 0;
+  if (a === undefined) return -1;
+  if (b === undefined) return 1;
+  return compareRelease(a.split('.'), b.split('.'));
+}
+
+function compareRpm(a: string, b: string): number {
+  const [av, ar] = splitRpm(a);
+  const [bv, br] = splitRpm(b);
+  return compare(av, bv) || compareRpmRelease(ar, br);
+}
+
 /** -1 if a < b, 0 if equal, 1 if a > b. */
-export function compare(a: string, b: string): number {
+export function compare(a: string, b: string, ecosystem?: string): number {
+  if (ecosystem === 'rpm') return compareRpm(a, b);
   const pa = parse(a);
   const pb = parse(b);
   return (
@@ -135,16 +193,16 @@ export function compare(a: string, b: string): number {
   );
 }
 
-export function gte(a: string, b: string): boolean {
-  return compare(a, b) >= 0;
+export function gte(a: string, b: string, ecosystem?: string): boolean {
+  return compare(a, b, ecosystem) >= 0;
 }
 
 /** The highest of the given versions, or undefined for an empty list. */
-export function maxVersion(versions: readonly string[]): string | undefined {
+export function maxVersion(versions: readonly string[], ecosystem?: string): string | undefined {
   let best: string | undefined;
   for (const v of versions) {
     if (!v) continue;
-    if (best === undefined || compare(v, best) > 0) best = v;
+    if (best === undefined || compare(v, best, ecosystem) > 0) best = v;
   }
   return best;
 }
