@@ -6,8 +6,8 @@
 //   node scripts/sync-manifest.mjs          rewrite manifest.json in place
 //   node scripts/sync-manifest.mjs --check  exit 1 if manifest.json is stale
 //
-// Only the default surface is listed (no import root). The two import tools
-// are runtime opt-ins, which is what `tools_generated: true` signals.
+// No tool is generated at runtime any more: the 15 tools below are the whole
+// surface, so `tools_generated` is `false`.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

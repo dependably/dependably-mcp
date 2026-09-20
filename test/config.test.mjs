@@ -84,7 +84,11 @@ describe('loadConfig timeout', () => {
     withEnv(minimal, () => strictEqual(loadConfig().timeoutMs, 30000));
   });
 
-  it('accepts a positive number', () => {
+  it('defaults to 30s when DEPENDABLY_TIMEOUT_MS is an empty string', () => {
+    withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '' }, () => strictEqual(loadConfig().timeoutMs, 30000));
+  });
+
+  it('accepts a positive integer', () => {
     withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '1500' }, () =>
       strictEqual(loadConfig().timeoutMs, 1500),
     );
@@ -93,9 +97,33 @@ describe('loadConfig timeout', () => {
   it('rejects zero, negative and non-numeric values', () => {
     for (const v of ['0', '-1', 'abc']) {
       withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: v }, () =>
-        throws(loadConfig, /must be a positive number/),
+        throws(loadConfig, /must be an integer between 1 and/),
       );
     }
+  });
+
+  it('rejects a fractional value, which breaks AbortSignal.timeout with a Node range error', () => {
+    withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '1500.7' }, () =>
+      throws(loadConfig, /DEPENDABLY_TIMEOUT_MS must be an integer between 1 and \d+: 1500\.7/),
+    );
+  });
+
+  it('rejects a value above the 32-bit signed integer limit, which Node silently clamps to ~1ms', () => {
+    withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '2147483648' }, () =>
+      throws(loadConfig, /DEPENDABLY_TIMEOUT_MS must be an integer between 1 and 2147483647: 2147483648/),
+    );
+  });
+
+  it('rejects a value far outside the safe integer range', () => {
+    withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '1e21' }, () =>
+      throws(loadConfig, /DEPENDABLY_TIMEOUT_MS must be an integer between 1 and \d+: 1e21/),
+    );
+  });
+
+  it('accepts the maximum valid integer', () => {
+    withEnv({ ...minimal, DEPENDABLY_TIMEOUT_MS: '2147483647' }, () =>
+      strictEqual(loadConfig().timeoutMs, 2147483647),
+    );
   });
 });
 

@@ -24,13 +24,16 @@ function run(cmd, args, cwd = root, extraEnv = {}) {
   }
 }
 
-// The CLI is a pinned devDependency; fall back to a pinned npx fetch when the
-// dev tree is not installed (e.g. a release job that only ran `npm ci --omit=dev`).
-const MCPB_VERSION = '2.1.2';
+// The CLI is a pinned devDependency staged by the lockfile; never fetch it
+// from the network at build time. A `npx --yes` fallback would download and
+// execute a package outside the lockfile's integrity pin on every cold build,
+// which is exactly the supply-chain exposure this project audits others for.
 function mcpb(args) {
   const local = join(root, 'node_modules', '.bin', 'mcpb');
-  if (existsSync(local)) return run(local, args);
-  return run('npx', ['--yes', `@anthropic-ai/mcpb@${MCPB_VERSION}`, ...args]);
+  if (!existsSync(local)) {
+    throw new Error(`${local} not found; run npm ci first`);
+  }
+  return run(local, args);
 }
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));

@@ -144,7 +144,7 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
 }
 
 // check_dependencies is on the default surface and takes its input as an argument:
-// it must expose no way to name a local file. Only the import tools read from disk.
+// it must expose no way to name a local file. No tool reads from disk.
 {
   const schema = await toolSchema(base, 'check_dependencies');
   const props = Object.keys(schema.properties ?? {});
@@ -261,6 +261,69 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   });
 }
 
+// Every required input property has to be enforced at the schema boundary, not
+// just documented: call each tool with `{}` and confirm the missing property is
+// named in the validation error rather than the call reaching the network (or
+// silently defaulting to undefined and producing a confusing upstream error).
+//
+// The expected set is spelled out here rather than read back off the schema
+// under test: deriving "what's required" from the same schema you're
+// validating is circular — relaxing a `z.string()` to `.optional()` would
+// silently shrink the assertion instead of failing it. Every tool with at
+// least one required property must be listed; a tool with none is omitted
+// (and is asserted to have none below).
+const REQUIRED = {
+  get_package: ['ecosystem', 'name'],
+  search_packages: ['q'],
+  get_vulnerability: ['osvId'],
+  lookup_package: ['ecosystem', 'name'],
+  check_dependencies: ['packages'],
+  get_remediation: ['advisories'],
+  get_remediation_skill: ['skillIds'],
+  get_install_command: ['ecosystem', 'package'],
+  get_publish_command: ['ecosystem', 'artifact_path'],
+};
+
+{
+  await withClient(base, async (client) => {
+    const { tools } = await client.listTools();
+    const liveNames = new Set(tools.map((t) => t.name));
+
+    // Every tool named in REQUIRED must still exist on the live surface — an
+    // orphaned entry here would mean this sweep silently stopped checking
+    // anything for a renamed or removed tool.
+    for (const name of Object.keys(REQUIRED)) {
+      ok(liveNames.has(name), `REQUIRED names "${name}", which is not a registered tool`);
+    }
+
+    for (const tool of tools) {
+      const expected = REQUIRED[tool.name] ?? [];
+      deepStrictEqual(
+        tool.inputSchema?.required ?? [],
+        expected,
+        `${tool.name}: live schema's required[] (${JSON.stringify(tool.inputSchema?.required ?? [])}) must match REQUIRED (${JSON.stringify(expected)}) — update REQUIRED if this tool's required properties changed on purpose`,
+      );
+      if (expected.length === 0) continue;
+
+      const res = await client
+        .callTool({ name: tool.name, arguments: {} })
+        .catch((err) => ({ isError: true, content: [{ text: String(err) }] }));
+      ok(res.isError, `${tool.name} must reject a call missing its required properties, got: ${JSON.stringify(res)}`);
+      const text = res.content[0].text;
+      ok(
+        text.includes(expected[0]),
+        `${tool.name}: validation error should name the first missing required property "${expected[0]}", got: ${text.slice(0, 200)}`,
+      );
+      for (const prop of expected) {
+        ok(
+          text.includes(prop),
+          `${tool.name}: validation error should name the missing required property "${prop}", got: ${text.slice(0, 200)}`,
+        );
+      }
+    }
+  });
+}
+
 console.log(
-  `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable`,
+  `smoke OK: ${CORE_TOOLS.length} tools, no local-file surface, version ordering + lockfile parsing checked, no file-path surface on check_dependencies, unreachable-instance errors actionable, unknown/missing property validation enforced`,
 );

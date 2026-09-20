@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
-import { json, err, withSummary, run } from '../dist/format.js';
+import { json, err, withSummary, run, RESULT_CHAR_BUDGET } from '../dist/format.js';
 
 const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -50,20 +50,32 @@ const call = (cfg, name, args = {}) => withServer(cfg, (c) => c.callTool({ name,
 const payload = (res) => JSON.parse(res.content[0].text);
 
 describe('format helpers', () => {
-  it('json stringifies objects and passes strings through', () => {
-    strictEqual(json({ a: 1 }).content[0].text, '{\n  "a": 1\n}');
+  it('json stringifies objects compactly (no pretty-print indent) and passes strings through', () => {
+    strictEqual(json({ a: 1 }).content[0].text, '{"a":1}');
     strictEqual(json('raw').content[0].text, 'raw');
   });
 
   it('withSummary prefixes the body', () => {
     ok(withSummary('done.', { a: 1 }).content[0].text.startsWith('done.\n\n'));
     ok(withSummary('done.', 'text').content[0].text.startsWith('done.\n\n'));
+    strictEqual(withSummary('done.', { a: 1 }).content[0].text, 'done.\n\n{"a":1}');
   });
 
   it('err marks the result as an error', () => {
     const e = err('boom');
     strictEqual(e.isError, true);
     strictEqual(e.content[0].text, 'boom');
+  });
+
+  it('err applies the same character budget as json/withSummary', () => {
+    // A 500 with a huge application/problem+json `detail` (proven: 3 MB) must not
+    // bypass the budget just because it is reported through err() rather than
+    // json(). isError must stay true and the trailer must still be machine-readable.
+    const huge = 'x'.repeat(RESULT_CHAR_BUDGET + 50_000);
+    const e = err(huge);
+    strictEqual(e.isError, true);
+    ok(e.content[0].text.length < huge.length, 'the error message must be truncated');
+    ok(e.content[0].text.includes(`[truncated: result exceeded ${RESULT_CHAR_BUDGET} characters`), e.content[0].text.slice(-200));
   });
 
   it('run converts a throw into an error result, including a non-Error throw', async () => {
@@ -78,6 +90,26 @@ describe('format helpers', () => {
     });
     strictEqual(raw.isError, true);
     ok(raw.content[0].text.includes('a string'));
+  });
+
+  it('leaves a small result untouched', () => {
+    const small = { hello: 'world' };
+    const text = json(small).content[0].text;
+    strictEqual(text, JSON.stringify(small));
+    ok(!text.includes('[truncated'));
+  });
+
+  it('truncates a result exceeding the shared character budget and appends a machine-readable trailer', () => {
+    const big = { items: Array.from({ length: RESULT_CHAR_BUDGET }, (_, i) => i) };
+    const text = json(big).content[0].text;
+    ok(text.length > RESULT_CHAR_BUDGET, 'truncated text still carries the trailer past the budget');
+    ok(text.includes(`[truncated: result exceeded ${RESULT_CHAR_BUDGET} characters`), text.slice(-200));
+    ok(text.startsWith('{"items":['));
+  });
+
+  it('applies the same truncation to withSummary', () => {
+    const text = withSummary('done.', 'x'.repeat(RESULT_CHAR_BUDGET + 1000)).content[0].text;
+    ok(text.includes('[truncated:'));
   });
 });
 
@@ -151,6 +183,12 @@ describe('list_vulnerabilities verbosity', () => {
     orgSlug: 'default',
     firstSeenAt: 'x',
   };
+
+  it('rejects a limit above 200, matching list_packages', async () => {
+    stubFetch(() => ({ items: [item], total: 1 }));
+    const res = await call(base, 'list_vulnerabilities', { limit: 201 });
+    ok(res.isError, 'limit above 200 must be rejected');
+  });
 
   it('compacts items by default', async () => {
     stubFetch(() => ({ items: [item], total: 1 }));
@@ -269,6 +307,78 @@ describe('check_dependencies', () => {
     }
     ok((schema.required ?? []).includes('packages'));
   });
+
+  it('never reports clean on a truncated scan, even when no match was found on the pages it did read (B2)', async () => {
+    // A truncated fetch stops before every page of the org-wide report has
+    // been read; the page it never got to could contain the very match that
+    // would have made this dirty, so `clean` must not be true just because
+    // nothing matched among the pages it did see.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return {
+          items: Array.from({ length: 200 }, (_, i) => ({
+            packageName: `pkg-${i}`,
+            version: '1.0.0',
+            osvId: `O${i}`,
+            severity: 'LOW',
+          })),
+          total: 999999,
+        };
+      }
+      return { remediation: {} };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { packages: [{ name: 'hono', version: '4.12.27' }] }),
+    );
+    strictEqual(body.truncated, true);
+    strictEqual(body.clean, false, 'a truncated scan must never claim clean');
+    ok(body.note.toLowerCase().includes('inconclusive'), body.note);
+  });
+
+  it('does not recommend a downgrade for an rpm "version-release" string (B4)', async () => {
+    // rpm's NEVRA glues a release onto the version with a hyphen ("1.2.3-4"):
+    // read as semver's hyphen, that is a prerelease of 1.2.3 and sorts BELOW
+    // it, so an installed 1.2.3-4 against a fix of 1.2.3 used to come back as
+    // a bump — a downgrade recommendation for a package already fixed.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return u.searchParams.get('page') === '1'
+          ? { items: [{ packageName: 'openssl', version: '1.2.3-4', osvId: 'A', severity: 'HIGH' }], total: 1 }
+          : { items: [], total: 1 };
+      }
+      return { remediation: { fixedVersion: '1.2.3' } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'rpm',
+        packages: [{ name: 'openssl', version: '1.2.3-4' }],
+      }),
+    );
+    strictEqual(body.findings[0].bumpTo, null, '1.2.3-4 already clears a fix pinned to the bare release 1.2.3');
+  });
+
+  it('recommends the real release as the bump target for an installed rpm tilde pre-release (B4)', async () => {
+    // "~" sorts below everything, including a plain release: an installed
+    // 1.2.3~rc1-1 has not reached a fix of 1.2.3-1 and must be told to bump.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return u.searchParams.get('page') === '1'
+          ? { items: [{ packageName: 'openssl', version: '1.2.3~rc1-1', osvId: 'A', severity: 'HIGH' }], total: 1 }
+          : { items: [], total: 1 };
+      }
+      return { remediation: { fixedVersion: '1.2.3-1' } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'rpm',
+        packages: [{ name: 'openssl', version: '1.2.3~rc1-1' }],
+      }),
+    );
+    strictEqual(body.findings[0].bumpTo, '1.2.3-1');
+  });
 });
 
 describe('get_remediation', () => {
@@ -313,6 +423,29 @@ describe('get_remediation', () => {
     ok(body.advisories[0].error.includes('404'));
     strictEqual(body.advisories[1].fixedVersion, '1.0.0');
   });
+
+  it('marks the whole result as an error when every advisory lookup fails (B6)', async () => {
+    globalThis.fetch = async () =>
+      new Response('{"detail":"down"}', { status: 503, headers: { 'content-type': 'application/json' } });
+    const res = await call(base, 'get_remediation', { advisories: [{ osvId: 'A' }, { osvId: 'B' }] });
+    strictEqual(res.isError, true, 'a batch that is 100% failures is a tool error, not a quiet empty result');
+    const body = payload(res);
+    ok(body.advisories.every((a) => 'error' in a));
+  });
+
+  it('leaves isError unset when only some advisory lookups fail (a mixed batch stays a normal result)', async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('BAD')) {
+        return new Response('{"detail":"gone"}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ remediation: { fixedVersion: '1.0.0' } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const res = await call(base, 'get_remediation', { advisories: [{ osvId: 'BAD' }, { osvId: 'GOOD' }] });
+    ok(!res.isError, 'a partial failure must not sink the whole result');
+  });
 });
 
 describe('list_remediation_skills', () => {
@@ -349,6 +482,37 @@ describe('get_remediation_skill', () => {
     ok(body.skills.find((s) => s.skillId === 'unknown-skill').error.includes('404'));
     strictEqual(body.skills.find((s) => s.skillId === 'fix-xss').content, '# fix-xss');
   });
+
+  it('marks the whole result as an error when every skill lookup fails (B6)', async () => {
+    globalThis.fetch = async () =>
+      new Response('{"detail":"down"}', { status: 503, headers: { 'content-type': 'application/json' } });
+    const res = await call(base, 'get_remediation_skill', { skillIds: ['fix-a', 'fix-b'] });
+    strictEqual(res.isError, true, 'a batch that is 100% failures is a tool error, not a quiet empty result');
+    const body = payload(res);
+    ok(body.skills.every((s) => 'error' in s));
+  });
+
+  it('rejects more than 5 skill ids per call (B7)', async () => {
+    const res = await call(base, 'get_remediation_skill', {
+      skillIds: Array.from({ length: 6 }, (_, i) => `skill-${i}`),
+    });
+    ok(res.isError, 'more than 5 ids per call must be rejected');
+  });
+
+  it('accepts exactly 5 skill ids', async () => {
+    stubFetch(() => '# doc');
+    const res = await call(base, 'get_remediation_skill', {
+      skillIds: Array.from({ length: 5 }, (_, i) => `skill-${i}`),
+    });
+    ok(!res.isError, res.content[0].text);
+  });
+
+  it('documents the 5-per-call cap and frames the returned markdown as third-party content (B7, B8)', async () => {
+    const tools = await withServer(base, (c) => c.listTools());
+    const tool = tools.tools.find((t) => t.name === 'get_remediation_skill');
+    ok(tool.inputSchema.properties.skillIds.description.includes('5'), tool.inputSchema.properties.skillIds.description);
+    ok(tool.description.includes('not by Anthropic'), tool.description);
+  });
 });
 
 describe('observability tools', () => {
@@ -379,9 +543,15 @@ describe('setup tools', () => {
 
   it('covers every ecosystem, both with and without a pinned version', async () => {
     stubFetch();
+    // Each ecosystem validates `package` against its own rules (see the
+    // "package validation" describe block below), so this needs one name per
+    // ecosystem that actually satisfies its rule rather than one generic `pkg`.
+    const validPackage = {
+      npm: 'pkg', pypi: 'pkg', nuget: 'pkg', maven: 'group:pkg', rpm: 'pkg', oci: 'pkg', golang: 'example.com/pkg', cargo: 'pkg',
+    };
     for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']) {
       for (const version of ['1.0.0', undefined]) {
-        const install = await call(base, 'get_install_command', { ecosystem: eco, package: 'pkg', version });
+        const install = await call(base, 'get_install_command', { ecosystem: eco, package: validPackage[eco], version });
         ok(!install.isError, `${eco} install: ${install.content[0].text}`);
       }
       const publish = await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: './artifact' });
@@ -394,6 +564,256 @@ describe('setup tools', () => {
     const res = await call(base, 'get_publish_command', { ecosystem: 'golang', artifact_path: './artifact' });
     ok(!res.isError);
     ok(/tag/i.test(res.content[0].text), res.content[0].text);
+  });
+});
+
+describe('setup tools — command injection hardening', () => {
+  const shellMetaCases = [
+    ['semicolon', '; rm -rf ~'],
+    ['command substitution', '$(rm -rf ~)'],
+    ['backtick', '`rm -rf ~`'],
+    ['ampersand', '& rm -rf ~'],
+    ['pipe', '| rm -rf ~'],
+    ['newline', '\nrm -rf ~'],
+  ];
+
+  for (const [label, suffix] of shellMetaCases) {
+    it(`rejects a ${label} in package and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: `left-pad${suffix}`, version: '1.0.0' });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+
+    it(`rejects a ${label} in version and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: `1.0.0${suffix}` });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+
+    it(`rejects a ${label} in artifact_path and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: `a.rpm${suffix}` });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+  }
+
+  it('rejects a leading - in package, version and artifact_path', async () => {
+    stubFetch();
+    const pkgRes = await call(base, 'get_install_command', { ecosystem: 'npm', package: '-rf', version: '1.0.0' });
+    const verRes = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '-rf' });
+    const artifactRes = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: '-rf' });
+    ok(pkgRes.isError, pkgRes.content[0].text);
+    ok(verRes.isError, verRes.content[0].text);
+    ok(artifactRes.isError, artifactRes.content[0].text);
+  });
+
+  it('produces the exact command for a scoped npm name and pinned version', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: '@scope/name', version: '1.2.3' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\nnpm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'\n```",
+    );
+  });
+
+  it('produces the exact command for an oci name and pinned version', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# docker login dep.example.com first\ndocker pull dep.example.com/'library/nginx':'1.27'\n```",
+    );
+  });
+});
+
+describe('setup tools — maven artifact coordinate', () => {
+  it('pins :LATEST and warns when no version is given', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
+        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:LATEST'\n# pin a version in production\n```",
+    );
+  });
+
+  it('uses the pinned version verbatim when one is given', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api', version: '2.0.9' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
+        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:2.0.9'\n```",
+    );
+  });
+});
+
+describe('setup tools — cargo config hint', () => {
+  it('emits valid TOML for the registry config, split across comment lines', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'cargo', package: 'serde', version: '1.0.0' });
+    strictEqual(
+      res.content[0].text,
+      '```bash\n# In ~/.cargo/config.toml:\n#   [registries.dependably]\n#   index = "sparse+https://dep.example.com/cargo/"\n' +
+        "cargo add 'serde@1.0.0' --registry dependably\n```",
+    );
+  });
+});
+
+describe('setup tools — credential prerequisites', () => {
+  it('tells pypi installers to put their token in ~/.netrc, since --index-url would override pip.conf', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
+    ok(res.content[0].text.includes('# Put your token in ~/.netrc for dep.example.com (machine dep.example.com login user password <token>) first'), res.content[0].text);
+    ok(!res.content[0].text.includes('pip.conf'), res.content[0].text);
+    ok(res.content[0].text.includes('--index-url https://dep.example.com/simple/'), res.content[0].text);
+  });
+
+  it('tells nuget installers to add the authenticated source first', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'nuget', package: 'Newtonsoft.Json', version: '13.0.3' });
+    ok(res.content[0].text.includes('# dotnet nuget add source https://dep.example.com/nuget/v3/index.json --name dependably --username user --password <token> first'), res.content[0].text);
+  });
+
+  it('tells oci installers to docker login first', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'nginx', version: 'latest' });
+    ok(res.content[0].text.includes('# docker login dep.example.com first'), res.content[0].text);
+  });
+
+  it('tells golang installers to configure netrc and GONOSUMDB, and adds ,direct to GOPROXY', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
+    ok(res.content[0].text.includes('# Add dep.example.com credentials to ~/.netrc and set GONOSUMDB=dep.example.com first'), res.content[0].text);
+    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go,direct go get'), res.content[0].text);
+  });
+});
+
+describe('setup tools — path-prefixed base URL', () => {
+  const prefixed = { baseUrl: 'https://host.example.com/dependably', token: 'tok', timeoutMs: 5000 };
+
+  it('warns about OCI and a URL path prefix when the base URL has one', async () => {
+    stubFetch();
+    const res = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(res.content[0].text.includes('# Note: OCI registries cannot live under a URL path; use the instance host directly'), res.content[0].text);
+  });
+
+  it('omits the warning when the base URL has no path component', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(!res.content[0].text.includes('cannot live under a URL path'), res.content[0].text);
+  });
+
+  it('keeps host-only destinations bare even when the base URL carries a path prefix', async () => {
+    stubFetch();
+    const oci = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(oci.content[0].text.includes('# docker login host.example.com first'), oci.content[0].text);
+    ok(!oci.content[0].text.includes('docker login host.example.com/dependably'), oci.content[0].text);
+
+    const ociPublish = await call(prefixed, 'get_publish_command', { ecosystem: 'oci', artifact_path: './image.tar' });
+    ok(ociPublish.content[0].text.includes('docker login host.example.com\n'), ociPublish.content[0].text);
+    ok(!ociPublish.content[0].text.includes('docker login host.example.com/dependably'), ociPublish.content[0].text);
+
+    const golang = await call(prefixed, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
+    ok(golang.content[0].text.includes('# Add host.example.com credentials to ~/.netrc and set GONOSUMDB=host.example.com first'), golang.content[0].text);
+    // GOPROXY is a URL, not a bare host, so it keeps the path prefix.
+    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go,direct'), golang.content[0].text);
+
+    const pypi = await call(prefixed, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
+    ok(pypi.content[0].text.includes('# Put your token in ~/.netrc for host.example.com (machine host.example.com login user password <token>) first'), pypi.content[0].text);
+    // --index-url is a URL, not a bare host, so it keeps the path prefix.
+    ok(pypi.content[0].text.includes('--index-url https://host.example.com/dependably/simple/'), pypi.content[0].text);
+  });
+});
+
+describe('setup tools — per-ecosystem package validation', () => {
+  const maliciousCases = [
+    ['npm', 'https://evil.tld/x.tgz', 'a bare URL instead of a registry-resolved name'],
+    ['npm', 'github:evil/pwn', 'npm git shorthand, which resolves outside --registry'],
+    ['npm', '../../tmp/evil', 'a local path traversal'],
+    ['npm', '@Scope/name', 'an upper-case scope, which npm never issued'],
+    ['pypi', 'https://evil.tld/x.whl', 'a bare URL instead of a PEP 508 name'],
+    ['rpm', 'https://evil.tld/x.rpm', 'a bare URL instead of an rpm name'],
+    ['oci', '../evil', 'a .. path segment'],
+    ['golang', 'evil.tld/../x', 'a .. path segment in a module path'],
+    ['maven', 'org.slf4j/slf4j-api', 'a / where a Maven coordinate needs exactly one :'],
+  ];
+
+  for (const [eco, pkg, why] of maliciousCases) {
+    it(`rejects ${eco} package ${JSON.stringify(pkg)} (${why})`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version: '1.0.0' });
+      ok(res.isError, res.content[0].text);
+    });
+  }
+
+  const legitCases = [
+    ['npm', '@scope/name', "npm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'"],
+    ['npm', 'JSONStream', "npm install --registry=https://dep.example.com/npm/ 'JSONStream@1.2.3'"],
+    ['pypi', 'zope.interface', "pip install --index-url https://dep.example.com/simple/ 'zope.interface==1.2.3'"],
+    ['nuget', 'Microsoft.Extensions.Logging', "dotnet add package 'Microsoft.Extensions.Logging' --version '1.2.3' --source https://dep.example.com/nuget/v3/index.json"],
+    ['maven', 'org.slf4j:slf4j-api', "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:1.2.3'"],
+    ['golang', 'github.com/org/repo/v2', "go get 'github.com/org/repo/v2'@'1.2.3'"],
+    ['cargo', 'serde_json', "cargo add 'serde_json@1.2.3' --registry dependably"],
+    ['rpm', 'kernel-devel', "dnf install 'kernel-devel-1.2.3'"],
+    ['oci', 'library/nginx', "docker pull dep.example.com/'library/nginx':'1.2.3'"],
+  ];
+
+  for (const [eco, pkg, expectedSubstring] of legitCases) {
+    it(`accepts the legitimate ${eco} package name ${JSON.stringify(pkg)}`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version: '1.2.3' });
+      ok(!res.isError, res.content[0].text);
+      ok(res.content[0].text.includes(expectedSubstring), res.content[0].text);
+    });
+  }
+});
+
+describe('setup tools — artifact path globs and spaces', () => {
+  it('rejects a shell glob rather than single-quoting it into a no-op', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: './dist/*.tgz' });
+    ok(res.isError, res.content[0].text);
+  });
+
+  it('accepts and quotes one concrete artefact file', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: './dist/package.tgz' });
+    ok(!res.isError, res.content[0].text);
+    ok(res.content[0].text.includes("'./dist/package.tgz'"), res.content[0].text);
+  });
+
+  it('accepts a path with spaces, quoted as one shell word', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: '/Users/me/My Builds/out.rpm' });
+    ok(!res.isError, res.content[0].text);
+    ok(res.content[0].text.includes("'/Users/me/My Builds/out.rpm'"), res.content[0].text);
+  });
+
+  it('describes artifact_path in Canadian English prose, keeping the identifier as-is', async () => {
+    const { tools } = await withServer(base, (c) => c.listTools());
+    const publish = tools.find((t) => t.name === 'get_publish_command');
+    ok('artifact_path' in publish.inputSchema.properties, 'the field identifier stays artifact_path');
+    ok(publish.inputSchema.properties.artifact_path.description.includes('artefact'), publish.inputSchema.properties.artifact_path.description);
+  });
+});
+
+describe('setup tools — empty version means unpinned', () => {
+  it('treats an empty string version the same as omitting it', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '' });
+    ok(!res.isError, res.content[0].text);
+    strictEqual(res.content[0].text, "```bash\nnpm install --registry=https://dep.example.com/npm/ 'left-pad'\n```");
+  });
+
+  it('treats a whitespace-only version the same as omitting it', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '   ' });
+    ok(!res.isError, res.content[0].text);
+    strictEqual(res.content[0].text, "```bash\nnpm install --registry=https://dep.example.com/npm/ 'left-pad'\n```");
   });
 });
 
