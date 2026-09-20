@@ -69,7 +69,7 @@ rmSync(bundlePath, { force: true });
 mcpb(['validate', join(stage, 'manifest.json')]);
 mcpb(['pack', stage, bundlePath]);
 
-// 4. Checksum beside the bundle (the bundle ships unsigned; see docs/distribution-plan.md).
+// 4. Checksum beside the bundle (the bundle ships unsigned; the distribution plan covers why).
 const sha256 = createHash('sha256').update(readFileSync(bundlePath)).digest('hex');
 writeFileSync(`${bundlePath}.sha256`, `${sha256}  ${bundleName}\n`);
 console.log(`bundle: ${bundlePath}\nsha256: ${sha256}`);

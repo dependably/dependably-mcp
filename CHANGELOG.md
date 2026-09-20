@@ -45,13 +45,37 @@ All notable changes to this project are documented here. The format follows
 
 - **The extension's directory card and token dialog no longer promise an audit trail or an
   activity-feed and authentication-events capability** that no tool provides; `tools_generated` is
-  now `false`. `docs/listing.md` and `docs/distribution-plan.md` describe the 15-tool surface and the
-  current review criteria (the MCPB open-source clause is required, and a populated test account is
-  needed for every submission). The README gained install sections for Cursor, Windsurf, VS Code,
-  Zed, Codex CLI and Gemini CLI, each checked against that client's current documentation, and states
-  that the public npm release has not yet run. `SECURITY.md` routes reports to `support@dependably.ca`.
+  now `false`. The README gained install sections for Cursor, Windsurf, VS Code, Zed, Codex CLI and
+  Gemini CLI, each checked against that client's current documentation, and states that the public
+  npm release has not yet run. `SECURITY.md` routes reports to `support@dependably.ca`. The
+  submission checklist corrections found by the review (the MCPB open-source clause is required and
+  not waivable; a populated test account is needed for every submission; screenshot 4 shows
+  `check_dependencies`, not a table that no tool produces) belong to the listing pack in the
+  tracker (#25), not to this repository.
 
 ### Removed
+
+- **`health_check`.** Liveness is a strict subset of readiness: if `/ready` answers, `/health` adds
+  nothing, and if it does not, `/health` will not either. A developer never needed both. What
+  `readiness_check` is actually for on this surface is separating "the base URL is wrong" from "the
+  token is wrong" — it is the only tool needing no capability, which is why it leads the
+  install-verification sequence. That role is unaffected. 14 tools.
+
+
+- **The `docs/` tree.** It shipped to nobody: `package.json` `files` is
+  `dist, README.md, CHANGELOG.md, LICENSE`, and `.mcpbignore` excluded `docs/` from the extension
+  bundle — so the README linked twice to a `docs/tools.md` that is absent from both the npm tarball
+  and the `.mcpb`, dead for every consumer who did not browse the repo. It also diverged from the
+  convention `dependably-community` adopted in 2026-08: prose lives in the documentation, enterprise
+  and spec repos, split by audience.
+
+  `docs/tools.md` is folded into the README, which is the only file that reaches a user.
+  `docs/development.md` becomes `CONTRIBUTING.md` at the repo root. The four planning documents move
+  to the tracker with their content preserved: distribution plan (#24), listing pack (#25), desktop
+  E2E runbook (#26), API asks (#27). Those four carried live status — `pending, this Mac`,
+  `external, blocking` — and a tool count that went stale three times in one day without anything
+  catching it, which is what status in git looks like.
+
 
 - **`list_activity`, `siem_list_auth_events` and `siem_vulnerabilities_summary`.** They were the
   only three tools needing `read:audit`, a capability a member cannot mint — so the install

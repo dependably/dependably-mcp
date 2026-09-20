@@ -12,8 +12,8 @@ import { gte, maxVersion } from './semver.js';
  * caller's dependency list, and one detail call per distinct advisory.
  *
  * Doing that here rather than in each caller keeps it consistent and costs one
- * tool call instead of dozens. See docs/api-asks.md for the server-side changes
- * that would let this collapse into a single request.
+ * tool call instead of dozens. The server-side changes that would let this
+ * collapse into a single request are tracked as asks against the API, not here.
  */
 
 export type InputPackage = { name: string; version: string; dev?: boolean };

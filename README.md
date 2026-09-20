@@ -15,9 +15,8 @@ instance or your filesystem, and none of them runs a command.
   npm refuses to install below it.
 - **A Dependably instance,** and its base URL.
 - **A personal access token**, created in that instance's web UI under Tokens. Choose the
-  **Pull** preset: it is read-only, any member can create it, and it covers package browsing,
-  search, vulnerabilities and licence policy. See
-  [capabilities](docs/tools.md#choosing-capabilities-for-a-token) for what the others add.
+  **Pull** preset: it is read-only, any member can create it, and it is the only preset this
+  server needs.
 
 ## Install
 
@@ -218,26 +217,29 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-15 tools in 3 groups, every one of them read-only, and every one reachable with a **Pull**
-token that any member can mint.
+14 tools. Every one is read-only, none reads a local file, and every one is reachable with a
+**Pull** token — the preset any member can mint for themselves.
 
-| Group | What it covers |
+| Tool | What it does |
 |---|---|
-| Read | Package inventory, search, per-package detail, org-wide and per-project vulnerability reports, individual advisory detail, remediation versions, curated remediation skills, pre-adoption lookups and licence policy. |
-| Observability | Liveness and readiness, including per-subsystem health. |
-| Setup | Build an install or publish command for npm, PyPI, NuGet, Maven, RPM, OCI, Go or Cargo. |
+| `list_packages` | Paginated inventory, with ecosystem and search filters. |
+| `get_package` | One package: versions, SPDX licences, vulnerability links. |
+| `search_packages` | Quick name search across the registry. |
+| `list_vulnerabilities` | Org-wide report of every affected package. |
+| `get_vulnerability` | Full advisory detail, including remediation guidance. |
+| `check_dependencies` | Scopes that report to one project's dependency list and names the version to bump to. |
+| `get_remediation` | Fixed versions for up to 200 advisories at once, without the prose. |
+| `lookup_package` | Pre-adoption verdict on a package not in the registry. Ingests nothing. |
+| `get_license_policy` | Enforcement mode, plus the SPDX allowlist and blocklist. |
+| `list_remediation_skills`, `get_remediation_skill` | Curated how-to-fix guides, one per vulnerability class. |
+| `readiness_check` | Readiness with per-subsystem detail; needs no token. |
+| `get_install_command`, `get_publish_command` | Build an install or publish command, returned as text. |
 
-The read tools cover **npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, Alpine (apk), Terraform and
-Hex** — everything the registry serves. The setup tools cover the eight above: they are bounded by
-the commands they know how to write, not by what the registry holds. `lookup_package` is narrower
-again, because a pre-adoption verdict needs an upstream to resolve the candidate against;
-[docs/tools.md](docs/tools.md) gives the exact set for each.
+Ecosystems: npm, pypi, nuget, maven, rpm, oci, golang, cargo, apk, terraform, hex — `lookup_package`
+and the two setup tools cover narrower sets, which their tool descriptions name.
 
-The two setup tools return the command as text for you to run, so this server never shells out
-to your package manager. Go modules are published by tagging a release in source, so
-`get_publish_command` returns that guidance for Go rather than a command.
-
-[docs/tools.md](docs/tools.md) has every tool, what it does, and the capability it needs.
+The setup tools return text for you to run, so this server never shells out to your package manager.
+Nothing here needs `read:audit`, `read:tenant`, `publish:*` or `yank:*`.
 
 ## Privacy Policy
 
