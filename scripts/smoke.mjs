@@ -145,7 +145,7 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
 }
 
 // check_dependencies is on the default surface and takes its input as an argument:
-// it must expose no way to name a local file. Only the import tools read from disk.
+// it must expose no way to name a local file. No tool reads from disk.
 {
   const schema = await toolSchema(base, 'check_dependencies');
   const props = Object.keys(schema.properties ?? {});

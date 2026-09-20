@@ -6,6 +6,51 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **`get_install_command` and `get_publish_command` no longer pass their arguments into a shell
+  command unchecked.** A package name, version or artefact path is now validated against the
+  ecosystem's own naming rules before it is interpolated, and every interpolated field is
+  single-quoted. Before this, a name taken from advisory prose or package metadata could append a
+  second command, add a flag such as `--registry=http://evil.tld`, or point npm, pip or dnf at a
+  remote tarball, in text the user is told to paste and run. Shell globs in `artifact_path` are
+  rejected; name the file.
+- **The client no longer follows HTTP redirects.** A 3xx response is rejected with a message naming
+  the `Location` and pointing at `DEPENDABLY_BASE_URL`, rather than depending on the runtime to strip
+  the bearer token when a redirect crosses origins.
+- **Response bodies are capped at 8 MB** and tool results at 100,000 characters (with a truncation
+  trailer that names the narrowing argument). `list_vulnerabilities` and `check_dependencies` could
+  previously return 700 to 800 thousand characters, past what MCP hosts such as Claude Desktop will
+  display; error results honour the same budget, so an oversized upstream `detail` cannot bypass it.
+- **CI images that hold write tokens are digest-pinned** (`publish:github` and `release` in
+  `.gitlab-ci.yml`), the public GitHub workflow runs `npm ci --ignore-scripts`, and
+  `scripts/bundle.mjs` no longer falls back to fetching the `mcpb` CLI over the network at build time.
+
+### Changed
+
+- **`list_vulnerabilities.limit` is capped at 200**, matching `list_packages` and the server's own
+  clamp. **`get_remediation_skill` accepts at most 5 skill ids per call** (was 25); the documents
+  are long.
+- **`get_remediation` and `get_remediation_skill` return a tool-level error when every item in the
+  batch failed**, instead of a quiet success whose every element carries an `error`.
+- **Tool results are serialized compactly** rather than pretty-printed, roughly halving payload size.
+- **Descriptions were reworded for the directory review.** The setup tools describe what they return
+  instead of instructing the model; `lookup_package`, `get_vulnerability`, `list_vulnerabilities` and
+  `get_remediation_skill` say that upstream metadata, advisory text and operator-written Markdown are
+  third-party data, not instructions; `list_packages` points at `search_packages` for quick lookups.
+- Removed the unused write verbs (`post`, `put`, `patch`, `del`) from the HTTP client, so the
+  read-only server's client surface has no write methods to audit.
+
+### Docs
+
+- **The extension's directory card and token dialog no longer promise an audit trail or an
+  activity-feed and authentication-events capability** that no tool provides; `tools_generated` is
+  now `false`. `docs/listing.md` and `docs/distribution-plan.md` describe the 15-tool surface and the
+  current review criteria (the MCPB open-source clause is required, and a populated test account is
+  needed for every submission). The README gained install sections for Cursor, Windsurf, VS Code,
+  Zed, Codex CLI and Gemini CLI, each checked against that client's current documentation, and states
+  that the public npm release has not yet run. `SECURITY.md` routes reports to `support@dependably.ca`.
+
 ### Removed
 
 - **`list_activity`, `siem_list_auth_events` and `siem_vulnerabilities_summary`.** They were the
@@ -20,6 +65,29 @@ All notable changes to this project are documented here. The format follows
   still reaches them — read them in the web UI or with your own client.
 
 ### Fixed
+
+- **`check_dependencies` could misfile or miss a package.** The dev/runtime flag was lost whenever
+  the report spelled a name differently from the lockfile (case, or PyPI separators), so a dev-only
+  hit was counted as runtime; `clean: true` was reported from a scan that had hit the fetch cap;
+  the cap returned a whole extra page; a response without `total` stopped paging after one page;
+  and a NuGet, PyPI or Maven pin that differed from the registry only by a trailing `.0` was never
+  matched. All five are fixed and pinned by tests.
+- **Version ordering.** PEP 440 alias spellings (`c`, `pre`, `preview` for `rc`; `alpha` and `beta`
+  for `a` and `b`; `r` and `rev` for `post`) and an upper-case `V` prefix now compare as equal to
+  their canonical forms, so a project on `2.0.0rc2` is no longer told to "bump" to `2.0.0c1`. For
+  the `rpm` ecosystem a `version-release` string is ordered the way `rpmvercmp` does (epoch, then
+  digit and letter runs, with `~` sorting below everything), instead of being read as a semver
+  prerelease that sorts below its bare version and produces a downgrade recommendation.
+- **`DEPENDABLY_TIMEOUT_MS` rejects fractional or oversized values at startup.** `1500.7` or
+  `2147483648` previously passed validation and then broke or crippled every request, with an
+  error that told the user to raise the value.
+- **A body that could not be read after the headers arrived** now reports the method, URL and cause
+  instead of a bare "terminated".
+- **Setup commands.** An unpinned Maven install emitted an invalid `groupId:artifactId` coordinate
+  (now `:LATEST` with a note); the Cargo config hint was invalid TOML; the pypi, NuGet, OCI and Go
+  install commands omitted the credential step and would 401 against an authenticated instance;
+  `docker login` and `GONOSUMDB` used the base URL's path prefix where only a host is valid; and an
+  empty `version` is treated as unpinned rather than rejected.
 
 - **A Python prerelease sorted above its own release, so `bumpTo` went silent.** Python spells a
   prerelease without semver's hyphen (`2.0.0rc1`, `1.0a1`, `1.0.dev1`), and the parser split only
