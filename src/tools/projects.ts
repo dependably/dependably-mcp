@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
-import { json, run } from '../format.js';
+import { err, json, run } from '../format.js';
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -173,9 +173,10 @@ export function registerProjectTools(server: McpServer, client: DependablyClient
       annotations: READ_ANNOTATIONS,
       inputSchema: z
         .object({
-          projectId: z.string().describe('Project id.'),
+          projectId: z.string().min(1).describe('Project id.'),
           versionId: z
             .string()
+            .min(1)
             .optional()
             .describe('Version id, or "latest" (default) which the server resolves to the version marked latest.'),
           page: z.number().int().min(1).optional().describe('1-based page number, default 1.'),
@@ -210,26 +211,38 @@ export function registerProjectTools(server: McpServer, client: DependablyClient
         })
         .strict(),
     },
-    async (args) =>
-      run(async () => {
-        const res = (await client.get(
-          `/api/v1/projects/${encodeURIComponent(args.projectId)}/versions/${encodeURIComponent(args.versionId ?? 'latest')}/analysis`,
-          {
-            page: args.page,
-            limit: args.limit,
-            sort: args.sort,
-            dir: args.dir,
-            q: args.q,
-            scope: args.scope,
-            sev: args.sev,
-            reach: args.reach,
-            registry: args.registry,
-            violations: args.violations,
-            suppressed: args.suppressed,
-          },
-        )) as AnalysisResponse;
-        if (args.verbosity === 'full') return json(res);
-        return json(compactAnalysis(res));
-      }),
+    async (args) => {
+      const url = `/api/v1/projects/${encodeURIComponent(args.projectId)}/versions/${encodeURIComponent(args.versionId ?? 'latest')}/analysis`;
+      return run(async () => {
+        const res = await client.get(url, {
+          page: args.page,
+          limit: args.limit,
+          sort: args.sort,
+          dir: args.dir,
+          q: args.q,
+          scope: args.scope,
+          sev: args.sev,
+          reach: args.reach,
+          registry: args.registry,
+          violations: args.violations,
+          suppressed: args.suppressed,
+        });
+        // A 204/empty body decodes to `null`; a non-JSON content type (e.g. an HTML
+        // login page from a misrouted proxy) decodes to a string. Either would
+        // otherwise flow into compactAnalysis(), which reads `res.rollup`/`res.items`
+        // and would either throw (null) or silently produce an empty-looking,
+        // "nothing vulnerable" result (string, since `(res.items ?? [])` on a string
+        // is `undefined ?? []`). Catch both before they can be misread as data.
+        if (res === null || typeof res !== 'object' || Array.isArray(res)) {
+          return err(
+            `GET ${url} did not return a JSON analysis object (got ${res === null ? 'an empty/204 body' : typeof res}). ` +
+              'Check DEPENDABLY_BASE_URL points at the Dependably API itself, not a login page or a misrouted proxy path.',
+          );
+        }
+        const analysis = res as AnalysisResponse;
+        if (args.verbosity === 'full') return json(analysis);
+        return json(compactAnalysis(analysis));
+      });
+    },
   );
 }

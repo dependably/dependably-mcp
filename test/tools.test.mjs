@@ -835,6 +835,77 @@ describe('project tools', () => {
     const body = payload(await call(base, 'get_project_version', { projectId: 'p1', verbosity: 'full' }));
     deepStrictEqual(body, stub);
   });
+
+  it('get_project_version is compact by default (no verbosity argument): matches compactAnalysis(stub) exactly', async () => {
+    const stub = {
+      rollup: { componentTotal: 1 },
+      page: 1,
+      limit: 50,
+      total: 1,
+      items: [
+        {
+          componentId: 'c1',
+          purl: 'pkg:npm/a@1.0.0',
+          name: 'a',
+          version: '1.0.0',
+          ecosystem: 'npm',
+          dependencyScope: 'runtime',
+          isProd: true,
+          dependencyKind: 'direct',
+          licenseSpdx: 'MIT',
+          description: 'a description that should be dropped',
+          author: 'someone that should be dropped',
+          hashes: [{ alg: 'SHA-256', content: 'deadbeef' }],
+          registry: null,
+          policyViolations: [],
+          advisories: [],
+        },
+      ],
+      orphanAnalysis: [{ purlKey: 'orphan1', vulnKey: 'vOrphan' }],
+    };
+    stubFetch(() => stub);
+    // Called with NO verbosity argument at all — proves "compact by default" rather than
+    // merely "compact when asked", which a default flip to 'full' would not fail without this.
+    const body = payload(await call(base, 'get_project_version', { projectId: 'p1' }));
+    deepStrictEqual(body, compactAnalysis(stub));
+    strictEqual(body.items[0].description, undefined, 'droppable fields like description must not survive compaction');
+    ok(!('author' in body.items[0]), 'droppable fields like author must not survive compaction');
+    ok(!('hashes' in body.items[0]), 'droppable fields like hashes must not survive compaction');
+    strictEqual(body.orphanAnalysisCount, 1);
+  });
+
+  it('get_project_version reports an actionable error rather than a false-clean result on a non-JSON body', async () => {
+    // A misrouted proxy or a stale DEPENDABLY_BASE_URL can return an HTML login page with a
+    // 200 status; the client decodes a non-JSON content type to a plain string. Feeding that
+    // into compactAnalysis would previously produce `{"items":[],"orphanAnalysisCount":0}`
+    // with no isError — indistinguishable from a real "nothing vulnerable" answer.
+    globalThis.fetch = async () =>
+      new Response('<html><body>Please log in</body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      });
+    const res = await call(base, 'get_project_version', { projectId: 'p1' });
+    ok(res.isError, 'a non-JSON body must not be reported as a normal (and falsely clean) result');
+    ok(res.content[0].text.includes('DEPENDABLY_BASE_URL'), res.content[0].text);
+    ok(res.content[0].text.includes('/versions/latest/analysis'), res.content[0].text);
+  });
+
+  it('get_project_version reports an actionable error rather than throwing on a 204/empty body', async () => {
+    globalThis.fetch = async () => new Response(null, { status: 204 });
+    const res = await call(base, 'get_project_version', { projectId: 'p1' });
+    ok(res.isError, 'a 204/empty body must not throw or be silently misread');
+    ok(!res.content[0].text.includes("Cannot read properties of null"), res.content[0].text);
+    ok(res.content[0].text.includes('DEPENDABLY_BASE_URL'), res.content[0].text);
+  });
+
+  it('get_project_version rejects an empty projectId and an empty versionId', async () => {
+    stubFetch();
+    ok((await call(base, 'get_project_version', { projectId: '' })).isError, 'empty projectId must be a schema error');
+    ok(
+      (await call(base, 'get_project_version', { projectId: 'p1', versionId: '' })).isError,
+      'empty versionId must be a schema error',
+    );
+  });
 });
 
 describe('observability tools', () => {
