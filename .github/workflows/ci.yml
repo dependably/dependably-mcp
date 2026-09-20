@@ -49,7 +49,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: node scripts/public-lockfile.mjs
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm test
 
   # Dogfood our own supply-chain checker against the lockfile, same as the
@@ -86,7 +86,7 @@ jobs:
           # Writes an auth-enabled user-level npmrc wired to NODE_AUTH_TOKEN.
           registry-url: https://registry.npmjs.org
       - run: node scripts/public-lockfile.mjs
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Tag must match package.json version
         run: |
           PKG=$(node -p "require('./package.json').version")
@@ -131,7 +131,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: node scripts/public-lockfile.mjs
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
       # Validates the manifest, packs, writes the .sha256, then boots the server
       # from the unpacked bundle.

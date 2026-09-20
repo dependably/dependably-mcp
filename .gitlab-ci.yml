@@ -225,8 +225,11 @@ publish:github:
   # prefix is the repo-wide rule rather than anything specific to this job —
   # this network cannot reach Docker Hub's CDN, so every image is pulled through
   # Dependably's own proxy.
+  # Digest pinned 2026-09-19, resolved from alpine/git:latest (this job holds
+  # GITHUB_TOKEN with contents:write, so a moving tag must not be able to swap
+  # what runs here).
   image:
-    name: ${DEP_IMAGE_REGISTRY}/alpine/git:latest
+    name: ${DEP_IMAGE_REGISTRY}/alpine/git:latest@sha256:0b5f57d22181e8b8fbe8ac5ca8754faa0d577f101b9857418f1acc43955ad464
     entrypoint: [""]
   interruptible: false
   resource_group: github-mirror
@@ -584,7 +587,11 @@ publish:
 # the npm publish above stays a manual gate.
 release:
   stage: publish
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  # Digest pinned 2026-09-19, resolved from registry.gitlab.com/gitlab-org/release-cli:latest.
+  # This image is GitLab's own container registry, not Docker Hub, so it is not
+  # routed through ${DEP_IMAGE_REGISTRY} — that proxy exists to work around the
+  # runner's inability to resolve Docker Hub's CDN, which does not apply here.
+  image: registry.gitlab.com/gitlab-org/release-cli:latest@sha256:3f52d526f48e8d10625c722fa6d6423ee82aadeae1b1aa91f07b62551d96dacf
   interruptible: false
   needs:
     - job: build
