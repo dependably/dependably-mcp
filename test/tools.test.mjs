@@ -320,6 +320,27 @@ describe('check_dependencies', () => {
     );
     strictEqual(body.findings[0].bumpTo, null, '1.2.3-4 already clears a fix pinned to the bare release 1.2.3');
   });
+
+  it('recommends the real release as the bump target for an installed rpm tilde pre-release (B4)', async () => {
+    // "~" sorts below everything, including a plain release: an installed
+    // 1.2.3~rc1-1 has not reached a fix of 1.2.3-1 and must be told to bump.
+    stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') {
+        return u.searchParams.get('page') === '1'
+          ? { items: [{ packageName: 'openssl', version: '1.2.3~rc1-1', osvId: 'A', severity: 'HIGH' }], total: 1 }
+          : { items: [], total: 1 };
+      }
+      return { remediation: { fixedVersion: '1.2.3-1' } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'rpm',
+        packages: [{ name: 'openssl', version: '1.2.3~rc1-1' }],
+      }),
+    );
+    strictEqual(body.findings[0].bumpTo, '1.2.3-1');
+  });
 });
 
 describe('get_remediation', () => {

@@ -31,6 +31,16 @@
  * as different releases instead of the same one — occasionally recommending a
  * bump to a spelling that was already superseded. Every marker is canonicalized
  * before it enters `prerelease` so the two spellings compare as one phase.
+ *
+ * `compare`/`gte`/`maxVersion` take an optional `ecosystem`: for `'rpm'` they
+ * switch to `rpmSegmentCompare` (defined below, with its own doc comment),
+ * a real rpmvercmp-style segment comparison over epoch, version and release —
+ * NOT the PEP 440 / semver parsing above, which reads an rpm NEVRA's
+ * `version-release` hyphen as a prerelease and gets the ordering backwards.
+ * Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
+ * (`el9` < `el10`), and `~` (tilde) pre-release markers. Not modelled: rpm
+ * 4.15's `^` (caret) post-release marker — the opposite of `~` — because no
+ * advisory or lockfile observed here has ever carried one.
  */
 
 /** dev < pre < release < post, per PEP 440. */
@@ -151,16 +161,75 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
 }
 
 /**
- * rpm's NEVRA packs a second ordered field onto the version: `1.2.3-4` is
- * release `4` of version `1.2.3`, not a semver prerelease `4` of `1.2.3`
+ * rpm's NEVRA packs an epoch, a version and a release into one ordering:
+ * `2:1.2.3-1` outranks `10:1.2.3-1` on epoch alone (2 < 10, compared
+ * numerically, before version or release is even looked at), and `1.2.3-4`
+ * is release `4` of version `1.2.3`, not a semver prerelease `4` of `1.2.3`
  * (semver's reading, which this module otherwise uses for the hyphen, sorts
  * `1.2.3-4` *below* `1.2.3` — an every-rpm-package downgrade). Split on the
  * LAST hyphen — a release qualifier such as `4.el9` can itself contain dots
- * but rpm reserves the hyphen for the version/release boundary — compare the
- * version half first, then the release half the same way, and rank a missing
- * release below any present one (a bare `1.2.3` is older than every `1.2.3-N`
- * has ever been, on the rpm ordering rules this approximates).
+ * but rpm reserves the hyphen for the version/release boundary — and compare
+ * both halves with `rpmSegmentCompare`, rpm's actual algorithm.
+ *
+ * `rpmSegmentCompare` walks each string as alternating runs of digits and
+ * letters; anything else (`.`, `_`, ...) is just a separator and orders
+ * nothing on its own. Two digit runs compare numerically, so `el9` < `el10`
+ * (a plain string compare would get that backwards); a digit run always
+ * outranks a letter run at the same position; and `~` sorts below
+ * everything, including the end of the string, so `1.2.3~rc1` is older than
+ * plain `1.2.3` and, symmetrically, `1.0` is older than `1.0a` (trailing
+ * content with no `~` is newer, not a tiebreak). A missing release ranks
+ * below any present one, the same way a missing segment does not.
+ *
+ * Not modelled: rpm 4.15's `^` (caret), which sorts ABOVE everything — the
+ * opposite of `~`, used for post-release build markers — because no advisory
+ * or lockfile observed here has ever carried one.
  */
+function rpmSegmentCompare(a: string, b: string): number {
+  const isDigit = (c: string | undefined): c is string => c !== undefined && /[0-9]/.test(c);
+  const isAlpha = (c: string | undefined): c is string => c !== undefined && /[A-Za-z]/.test(c);
+  const isAlnum = (c: string | undefined): c is string => isDigit(c) || isAlpha(c);
+  let ai = 0;
+  let bi = 0;
+
+  for (;;) {
+    while (a[ai] === '~' || b[bi] === '~') {
+      if (a[ai] !== '~') return 1;
+      if (b[bi] !== '~') return -1;
+      ai++;
+      bi++;
+    }
+    while (isAlnum(a[ai]) === false && a[ai] !== undefined) ai++;
+    while (isAlnum(b[bi]) === false && b[bi] !== undefined) bi++;
+    if (a[ai] === undefined || b[bi] === undefined) break;
+
+    if (isDigit(a[ai])) {
+      if (!isDigit(b[bi])) return 1; // a digit run always outranks a letter run here
+      const aStart = ai;
+      while (isDigit(a[ai])) ai++;
+      const bStart = bi;
+      while (isDigit(b[bi])) bi++;
+      const aNum = a.slice(aStart, ai).replace(/^0+/, '') || '0';
+      const bNum = b.slice(bStart, bi).replace(/^0+/, '') || '0';
+      if (aNum.length !== bNum.length) return aNum.length < bNum.length ? -1 : 1;
+      if (aNum !== bNum) return aNum < bNum ? -1 : 1;
+    } else {
+      if (isDigit(b[bi])) return -1;
+      const aStart = ai;
+      while (isAlpha(a[ai])) ai++;
+      const bStart = bi;
+      while (isAlpha(b[bi])) bi++;
+      const aWord = a.slice(aStart, ai);
+      const bWord = b.slice(bStart, bi);
+      if (aWord !== bWord) return aWord < bWord ? -1 : 1;
+    }
+  }
+
+  if (a[ai] === undefined && b[bi] === undefined) return 0;
+  if (a[ai] === undefined) return b[bi] === '~' ? 1 : -1;
+  return a[ai] === '~' ? -1 : 1;
+}
+
 function splitRpm(version: string): [string, string | undefined] {
   const trimmed = version.trim();
   const idx = trimmed.lastIndexOf('-');
@@ -172,13 +241,22 @@ function compareRpmRelease(a: string | undefined, b: string | undefined): number
   if (a === undefined && b === undefined) return 0;
   if (a === undefined) return -1;
   if (b === undefined) return 1;
-  return compareRelease(a.split('.'), b.split('.'));
+  return rpmSegmentCompare(a, b);
+}
+
+/** A leading `N:` epoch, compared numerically ahead of everything else. */
+function splitEpoch(version: string): [number, string] {
+  const m = /^(\d+):/.exec(version);
+  return m ? [Number(m[1]), version.slice(m[0].length)] : [0, version];
 }
 
 function compareRpm(a: string, b: string): number {
-  const [av, ar] = splitRpm(a);
-  const [bv, br] = splitRpm(b);
-  return compare(av, bv) || compareRpmRelease(ar, br);
+  const [aEpoch, aRest] = splitEpoch(a.trim());
+  const [bEpoch, bRest] = splitEpoch(b.trim());
+  if (aEpoch !== bEpoch) return aEpoch < bEpoch ? -1 : 1;
+  const [av, ar] = splitRpm(aRest);
+  const [bv, br] = splitRpm(bRest);
+  return rpmSegmentCompare(av, bv) || compareRpmRelease(ar, br);
 }
 
 /** -1 if a < b, 0 if equal, 1 if a > b. */

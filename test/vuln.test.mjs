@@ -505,11 +505,15 @@ describe('buildFindings keeps the dev flag across a name-folding difference (B1)
     strictEqual(s.devOnly, 1);
   });
 
-  it('for a NuGet package the report spells lower-case and the lockfile spells Pascal-case', () => {
-    const report = [reportItem({ packageName: 'newtonsoft.json', version: '12.0.3', osvId: 'A' })];
+  it('for a NuGet package the report spells Pascal-case and the lockfile spells lower-case', () => {
+    // The report row must NOT already be in the folded (lower-case) form, or
+    // buildFindings's old unfolded key (`hit.packageName@hit.version`) happens
+    // to equal the folded key by coincidence and the test passes even on the
+    // broken code.
+    const report = [reportItem({ packageName: 'Newtonsoft.Json', version: '12.0.3', osvId: 'A' })];
     const { hits, devOf } = matchPackages(
       report,
-      [{ name: 'Newtonsoft.Json', version: '12.0.3', dev: true }],
+      [{ name: 'newtonsoft.json', version: '12.0.3', dev: true }],
       'nuget',
     );
     const findings = buildFindings(hits, devOf, new Map(), 'nuget');

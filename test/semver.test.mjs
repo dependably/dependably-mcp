@@ -235,3 +235,36 @@ describe('rpm version-release ordering', () => {
     ok(compare('1.2.3-4.el9', '1.2.3-4.el8', 'rpm') > 0);
   });
 });
+
+describe('rpm rpmvercmp-style segment comparison', () => {
+  // A plain numeric/lexical comparison of the version and release strings is
+  // not what rpm actually does: rpm tokenizes into alternating digit/letter
+  // runs (so "el9" < "el10" compares the trailing numbers as numbers, not as
+  // strings), treats "~" as sorting below everything including the end of
+  // the string, and orders the epoch ahead of both.
+  it('a tilde pre-release marker sorts below the plain release it precedes', () => {
+    ok(compare('1.2.3~rc1-1', '1.2.3-1', 'rpm') < 0);
+    ok(compare('1.2.3-1', '1.2.3~rc1-1', 'rpm') > 0);
+  });
+
+  it('compares a numeric run numerically, not lexically, inside a release qualifier', () => {
+    ok(compare('1.2.3-4.el9', '1.2.3-4.el10', 'rpm') < 0, 'el9 < el10 — a string compare would say the opposite');
+  });
+
+  it('compares the epoch prefix numerically, ahead of version and release', () => {
+    ok(compare('2:1.2.3-1', '10:1.2.3-1', 'rpm') < 0, '2 < 10 numerically, not "2" > "10" lexically');
+  });
+
+  it('a release with an extra trailing segment is newer than the release it extends', () => {
+    ok(compare('1.2.3-4.el9', '1.2.3-4.el9.1', 'rpm') < 0);
+  });
+
+  it('trailing alphabetic content with no tilde is newer, not a tiebreak toward equal', () => {
+    ok(compare('1.0-1', '1.0a-1', 'rpm') < 0);
+  });
+
+  it('the bumpTarget consequence: a tilde pre-release must still clear a plain-release fix', () => {
+    ok(gte('1.2.3-1', '1.2.3~rc1-1', 'rpm'), 'the real release clears its own pre-release');
+    ok(!gte('1.2.3~rc1-1', '1.2.3-1', 'rpm'), 'and the pre-release has not reached the real release yet');
+  });
+});

@@ -50,7 +50,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient): 
     {
       title: "Check a project's dependencies",
       description:
-        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched. Requires read:packages capability.",
+        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched and the scan was not truncated. Requires read:packages capability.",
       annotations: READ_ANNOTATIONS,
       inputSchema: z.object({
         ecosystem: ecosystem.default('npm').describe('Ecosystem of the dependency list. Default npm.'),
