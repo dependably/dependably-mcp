@@ -95,7 +95,7 @@ your whole registry. A TLS failure names both options and the host it could not 
 
 ## What it can do
 
-17 tools. Every one is read-only, none reads a local file, and every one is reachable with a
+Every tool is read-only, none reads a local file, and every one is reachable with a
 **Pull** token — the preset any member can mint for themselves.
 
 | Tool | What it does |
@@ -106,7 +106,7 @@ your whole registry. A TLS failure names both options and the host it could not 
 | `list_vulnerabilities` | Org-wide report of every affected package. |
 | `get_vulnerability` | Full advisory detail, including remediation guidance. |
 | `check_dependencies` | Scopes that report to one project's dependency list and names the version to bump to. |
-| `get_remediation` | Fixed versions for up to 200 advisories at once, without the prose. |
+| `get_remediation` | Fixed versions for a batch of advisories at once, without the prose. |
 | `list_projects` | Projects and folders, paginated and searchable by name. |
 | `get_project` | One project or folder: versions, ancestors, and a folder's children and subtree rollup. |
 | `get_project_version` | A version's SBOM components with advisories and effective priority, plus a policy rollup. |
