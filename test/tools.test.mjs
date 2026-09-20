@@ -380,9 +380,15 @@ describe('setup tools', () => {
 
   it('covers every ecosystem, both with and without a pinned version', async () => {
     stubFetch();
+    // Each ecosystem validates `package` against its own rules (see the
+    // "package validation" describe block below), so this needs one name per
+    // ecosystem that actually satisfies its rule rather than one generic `pkg`.
+    const validPackage = {
+      npm: 'pkg', pypi: 'pkg', nuget: 'pkg', maven: 'group:pkg', rpm: 'pkg', oci: 'pkg', golang: 'example.com/pkg', cargo: 'pkg',
+    };
     for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']) {
       for (const version of ['1.0.0', undefined]) {
-        const install = await call(base, 'get_install_command', { ecosystem: eco, package: 'pkg', version });
+        const install = await call(base, 'get_install_command', { ecosystem: eco, package: validPackage[eco], version });
         ok(!install.isError, `${eco} install: ${install.content[0].text}`);
       }
       const publish = await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: './artifact' });
@@ -395,6 +401,254 @@ describe('setup tools', () => {
     const res = await call(base, 'get_publish_command', { ecosystem: 'golang', artifact_path: './artifact' });
     ok(!res.isError);
     ok(/tag/i.test(res.content[0].text), res.content[0].text);
+  });
+});
+
+describe('setup tools — command injection hardening', () => {
+  const shellMetaCases = [
+    ['semicolon', '; rm -rf ~'],
+    ['command substitution', '$(rm -rf ~)'],
+    ['backtick', '`rm -rf ~`'],
+    ['ampersand', '& rm -rf ~'],
+    ['pipe', '| rm -rf ~'],
+    ['newline', '\nrm -rf ~'],
+  ];
+
+  for (const [label, suffix] of shellMetaCases) {
+    it(`rejects a ${label} in package and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: `left-pad${suffix}`, version: '1.0.0' });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+
+    it(`rejects a ${label} in version and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: `1.0.0${suffix}` });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+
+    it(`rejects a ${label} in artifact_path and never echoes it`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: `a.rpm${suffix}` });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('rm -rf'), res.content[0].text);
+    });
+  }
+
+  it('rejects a leading - in package, version and artifact_path', async () => {
+    stubFetch();
+    const pkgRes = await call(base, 'get_install_command', { ecosystem: 'npm', package: '-rf', version: '1.0.0' });
+    const verRes = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '-rf' });
+    const artifactRes = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: '-rf' });
+    ok(pkgRes.isError, pkgRes.content[0].text);
+    ok(verRes.isError, verRes.content[0].text);
+    ok(artifactRes.isError, artifactRes.content[0].text);
+  });
+
+  it('produces the exact command for a scoped npm name and pinned version', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: '@scope/name', version: '1.2.3' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\nnpm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'\n```",
+    );
+  });
+
+  it('produces the exact command for an oci name and pinned version', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# docker login dep.example.com first\ndocker pull dep.example.com/'library/nginx':'1.27'\n```",
+    );
+  });
+});
+
+describe('setup tools — maven artifact coordinate', () => {
+  it('pins :LATEST and warns when no version is given', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
+        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:LATEST'\n# pin a version in production\n```",
+    );
+  });
+
+  it('uses the pinned version verbatim when one is given', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api', version: '2.0.9' });
+    strictEqual(
+      res.content[0].text,
+      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
+        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:2.0.9'\n```",
+    );
+  });
+});
+
+describe('setup tools — cargo config hint', () => {
+  it('emits valid TOML for the registry config, split across comment lines', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'cargo', package: 'serde', version: '1.0.0' });
+    strictEqual(
+      res.content[0].text,
+      '```bash\n# In ~/.cargo/config.toml:\n#   [registries.dependably]\n#   index = "sparse+https://dep.example.com/cargo/"\n' +
+        "cargo add 'serde@1.0.0' --registry dependably\n```",
+    );
+  });
+});
+
+describe('setup tools — credential prerequisites', () => {
+  it('tells pypi installers to put their token in ~/.netrc, since --index-url would override pip.conf', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
+    ok(res.content[0].text.includes('# Put your token in ~/.netrc for dep.example.com (machine dep.example.com login user password <token>) first'), res.content[0].text);
+    ok(!res.content[0].text.includes('pip.conf'), res.content[0].text);
+    ok(res.content[0].text.includes('--index-url https://dep.example.com/simple/'), res.content[0].text);
+  });
+
+  it('tells nuget installers to add the authenticated source first', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'nuget', package: 'Newtonsoft.Json', version: '13.0.3' });
+    ok(res.content[0].text.includes('# dotnet nuget add source https://dep.example.com/nuget/v3/index.json --name dependably --username user --password <token> first'), res.content[0].text);
+  });
+
+  it('tells oci installers to docker login first', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'nginx', version: 'latest' });
+    ok(res.content[0].text.includes('# docker login dep.example.com first'), res.content[0].text);
+  });
+
+  it('tells golang installers to configure netrc and GONOSUMDB, and adds ,direct to GOPROXY', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
+    ok(res.content[0].text.includes('# Add dep.example.com credentials to ~/.netrc and set GONOSUMDB=dep.example.com first'), res.content[0].text);
+    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go,direct go get'), res.content[0].text);
+  });
+});
+
+describe('setup tools — path-prefixed base URL', () => {
+  const prefixed = { baseUrl: 'https://host.example.com/dependably', token: 'tok', timeoutMs: 5000 };
+
+  it('warns about OCI and a URL path prefix when the base URL has one', async () => {
+    stubFetch();
+    const res = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(res.content[0].text.includes('# Note: OCI registries cannot live under a URL path; use the instance host directly'), res.content[0].text);
+  });
+
+  it('omits the warning when the base URL has no path component', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(!res.content[0].text.includes('cannot live under a URL path'), res.content[0].text);
+  });
+
+  it('keeps host-only destinations bare even when the base URL carries a path prefix', async () => {
+    stubFetch();
+    const oci = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
+    ok(oci.content[0].text.includes('# docker login host.example.com first'), oci.content[0].text);
+    ok(!oci.content[0].text.includes('docker login host.example.com/dependably'), oci.content[0].text);
+
+    const ociPublish = await call(prefixed, 'get_publish_command', { ecosystem: 'oci', artifact_path: './image.tar' });
+    ok(ociPublish.content[0].text.includes('docker login host.example.com\n'), ociPublish.content[0].text);
+    ok(!ociPublish.content[0].text.includes('docker login host.example.com/dependably'), ociPublish.content[0].text);
+
+    const golang = await call(prefixed, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
+    ok(golang.content[0].text.includes('# Add host.example.com credentials to ~/.netrc and set GONOSUMDB=host.example.com first'), golang.content[0].text);
+    // GOPROXY is a URL, not a bare host, so it keeps the path prefix.
+    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go,direct'), golang.content[0].text);
+
+    const pypi = await call(prefixed, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
+    ok(pypi.content[0].text.includes('# Put your token in ~/.netrc for host.example.com (machine host.example.com login user password <token>) first'), pypi.content[0].text);
+    // --index-url is a URL, not a bare host, so it keeps the path prefix.
+    ok(pypi.content[0].text.includes('--index-url https://host.example.com/dependably/simple/'), pypi.content[0].text);
+  });
+});
+
+describe('setup tools — per-ecosystem package validation', () => {
+  const maliciousCases = [
+    ['npm', 'https://evil.tld/x.tgz', 'a bare URL instead of a registry-resolved name'],
+    ['npm', 'github:evil/pwn', 'npm git shorthand, which resolves outside --registry'],
+    ['npm', '../../tmp/evil', 'a local path traversal'],
+    ['pypi', 'https://evil.tld/x.whl', 'a bare URL instead of a PEP 508 name'],
+    ['rpm', 'https://evil.tld/x.rpm', 'a bare URL instead of an rpm name'],
+    ['oci', '../evil', 'a .. path segment'],
+    ['golang', 'evil.tld/../x', 'a .. path segment in a module path'],
+    ['maven', 'org.slf4j/slf4j-api', 'a / where a Maven coordinate needs exactly one :'],
+  ];
+
+  for (const [eco, pkg, why] of maliciousCases) {
+    it(`rejects ${eco} package ${JSON.stringify(pkg)} (${why})`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version: '1.0.0' });
+      ok(res.isError, res.content[0].text);
+    });
+  }
+
+  const legitCases = [
+    ['npm', '@scope/name', "npm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'"],
+    ['pypi', 'zope.interface', "pip install --index-url https://dep.example.com/simple/ 'zope.interface==1.2.3'"],
+    ['nuget', 'Microsoft.Extensions.Logging', "dotnet add package 'Microsoft.Extensions.Logging' --version '1.2.3' --source https://dep.example.com/nuget/v3/index.json"],
+    ['maven', 'org.slf4j:slf4j-api', "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:1.2.3'"],
+    ['golang', 'github.com/org/repo/v2', "go get 'github.com/org/repo/v2'@'1.2.3'"],
+    ['cargo', 'serde_json', "cargo add 'serde_json@1.2.3' --registry dependably"],
+    ['rpm', 'kernel-devel', "dnf install 'kernel-devel-1.2.3'"],
+    ['oci', 'library/nginx', "docker pull dep.example.com/'library/nginx':'1.2.3'"],
+  ];
+
+  for (const [eco, pkg, expectedSubstring] of legitCases) {
+    it(`accepts the legitimate ${eco} package name ${JSON.stringify(pkg)}`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version: '1.2.3' });
+      ok(!res.isError, res.content[0].text);
+      ok(res.content[0].text.includes(expectedSubstring), res.content[0].text);
+    });
+  }
+});
+
+describe('setup tools — artifact path globs and spaces', () => {
+  it('rejects a shell glob rather than single-quoting it into a no-op', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: './dist/*.tgz' });
+    ok(res.isError, res.content[0].text);
+  });
+
+  it('accepts and quotes one concrete artefact file', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: './dist/package.tgz' });
+    ok(!res.isError, res.content[0].text);
+    ok(res.content[0].text.includes("'./dist/package.tgz'"), res.content[0].text);
+  });
+
+  it('accepts a path with spaces, quoted as one shell word', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'rpm', artifact_path: '/Users/me/My Builds/out.rpm' });
+    ok(!res.isError, res.content[0].text);
+    ok(res.content[0].text.includes("'/Users/me/My Builds/out.rpm'"), res.content[0].text);
+  });
+
+  it('describes artifact_path in Canadian English prose, keeping the identifier as-is', async () => {
+    const { tools } = await withServer(base, (c) => c.listTools());
+    const publish = tools.find((t) => t.name === 'get_publish_command');
+    ok('artifact_path' in publish.inputSchema.properties, 'the field identifier stays artifact_path');
+    ok(publish.inputSchema.properties.artifact_path.description.includes('artefact'), publish.inputSchema.properties.artifact_path.description);
+  });
+});
+
+describe('setup tools — empty version means unpinned', () => {
+  it('treats an empty string version the same as omitting it', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '' });
+    ok(!res.isError, res.content[0].text);
+    strictEqual(res.content[0].text, "```bash\nnpm install --registry=https://dep.example.com/npm/ 'left-pad'\n```");
+  });
+
+  it('treats a whitespace-only version the same as omitting it', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: 'left-pad', version: '   ' });
+    ok(!res.isError, res.content[0].text);
+    strictEqual(res.content[0].text, "```bash\nnpm install --registry=https://dep.example.com/npm/ 'left-pad'\n```");
   });
 });
 
