@@ -228,9 +228,16 @@ describe('describeFetchError', () => {
     }
   });
 
-  it('explains refused and unreachable connections', () => {
-    for (const code of ['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']) {
-      ok(call(code).includes('Nothing is listening'), code);
+  it('explains a refused connection', () => {
+    ok(call('ECONNREFUSED').includes('Nothing is listening'));
+  });
+
+  it('explains an unreachable host without claiming nothing is listening', () => {
+    for (const code of ['EHOSTUNREACH', 'ENETUNREACH']) {
+      const msg = call(code);
+      ok(msg.includes('No network route'), code);
+      ok(msg.includes('Local Network'), code);
+      ok(!msg.includes('Nothing is listening'), code);
     }
   });
 

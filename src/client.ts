@@ -157,7 +157,8 @@ function hostOf(url: string): string {
 }
 
 const DNS_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN']);
-const UNREACHABLE_CODES = new Set(['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH']);
+const REFUSED_CODES = new Set(['ECONNREFUSED']);
+const UNREACHABLE_CODES = new Set(['EHOSTUNREACH', 'ENETUNREACH']);
 const DROPPED_CODES = new Set(['ECONNRESET', 'EPIPE']);
 const TLS_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
@@ -173,8 +174,15 @@ function transportHint(code: string, host: string): string {
   if (DNS_CODES.has(code)) {
     return `Could not resolve "${host}". Check DEPENDABLY_BASE_URL for a typo, and that this machine can reach the instance (VPN?).`;
   }
-  if (UNREACHABLE_CODES.has(code)) {
+  if (REFUSED_CODES.has(code)) {
     return `Nothing is listening at ${host}. Check DEPENDABLY_BASE_URL (scheme and port) and that the Dependably instance is up.`;
+  }
+  if (UNREACHABLE_CODES.has(code)) {
+    return (
+      `No network route to ${host}. Check that the instance is up and this machine can reach it (VPN?). ` +
+      `On macOS, an instance on the local network also needs the host app (e.g. Claude) allowed under ` +
+      `System Settings > Privacy & Security > Local Network.`
+    );
   }
   if (TLS_CODES.has(code) || code.startsWith('ERR_TLS_')) {
     return (

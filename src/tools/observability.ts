@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
@@ -23,8 +23,10 @@ const READ_ANNOTATIONS = {
 //
 // /version and /metrics are not wrapped either — a live instance answers /metrics with more
 // Prometheus text than most model context windows hold, so no agent can usefully read it.
-export function registerObservabilityTools(server: McpServer, client: DependablyClient): void {
-  server.registerTool(
+export function registerObservabilityTools(server: McpServer, client: DependablyClient): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+
+  tools.push(server.registerTool(
     'readiness_check',
     {
       title: 'Readiness check',
@@ -33,5 +35,7 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
       inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/ready'))),
-  );
+  ));
+
+  return tools;
 }

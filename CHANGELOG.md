@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **The Claude Desktop extension no longer asks for a request timeout.** Each request uses the
+  30-second default. `DEPENDABLY_TIMEOUT_MS` still works when the server is configured through
+  environment variables.
+
+### Fixed
+
+- **An unreachable host no longer reports "Nothing is listening".** `EHOSTUNREACH` and
+  `ENETUNREACH` mean the host couldn't be reached at all, not that nothing answered on the
+  port. The error now says so, and points macOS users at the Local Network permission, which
+  blocks an app from reaching an instance on the local network until it is granted.
+- **The ecosystem list recovers when the instance was out of reach at startup.** The list is
+  fetched once when the server starts. A network error or 5xx at that moment (for example, a
+  desktop app launching the server just after install, before macOS allows it onto the local
+  network) used to pin the built-in list until the next restart. It is now retried in the
+  background (after 10 s, 30 s, 60 s, then every 5 minutes) until the instance answers, and
+  the tools are re-advertised with the live list.
+
 ## [1.0.0] - 2026-09-20
 
 ### Added

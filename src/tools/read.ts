@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
@@ -13,12 +13,14 @@ const READ_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-export function registerReadTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): void {
+export function registerReadTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): RegisteredTool[] {
   const ecosystem = enumOf(planes.registry, FALLBACK_REGISTRY_ECOSYSTEMS);
   // /api/v1/lookup enforces its own, narrower set and 422s anything outside it.
   const lookupEcosystem = enumOf(planes.lookup, FALLBACK_LOOKUP_ECOSYSTEMS);
 
-  server.registerTool(
+  const tools: RegisteredTool[] = [];
+
+  tools.push(server.registerTool(
     'list_packages',
     {
       title: 'List packages',
@@ -47,9 +49,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
           }),
         ),
       ),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_package',
     {
       title: 'Get package',
@@ -65,9 +67,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
       run(async () =>
         json(await client.get(`/api/v1/packages/${args.ecosystem}/${encodeURIComponent(args.name)}`)),
       ),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'search_packages',
     {
       title: 'Search packages',
@@ -80,9 +82,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
       }).strict(),
     },
     async (args) => run(async () => json(await client.get('/api/v1/search', { q: args.q, limit: args.limit }))),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'list_vulnerabilities',
     {
       title: 'List vulnerabilities',
@@ -117,9 +119,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
         if (args.verbosity === 'full' || !res?.items) return json(res);
         return json({ ...res, items: res.items.map(compactReportItem) });
       }),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_vulnerability',
     {
       title: 'Get vulnerability',
@@ -142,9 +144,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
           }),
         ),
       ),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_license_policy',
     {
       title: 'Get license policy',
@@ -154,9 +156,9 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
       inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/api/v1/license-policy'))),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'lookup_package',
     {
       title: 'Look up a candidate package',
@@ -184,5 +186,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
           }),
         ),
       ),
-  );
+  ));
+
+  return tools;
 }
