@@ -4,7 +4,7 @@
   "display_name": "Dependably",
   "version": "1.0.0",
   "description": "Ask Claude about the packages, vulnerabilities and licences in your Dependably registry.",
-  "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, apk, Terraform and Hex, self-hosted or run as a hosted SaaS instance. This extension connects Claude to your own instance with a personal access token you create there.\n\nWith it, Claude can list and search your packages, look up a package before you adopt it, and explain an advisory and its fix. It can also scope your vulnerability report to one project's lockfile with the version to bump to, check a licence against your policy, and write the install or publish command for every ecosystem that has one. One more tool checks whether the registry itself is up and ready. Every tool is read-only: none of them can change or delete anything in your registry.\n\nAll traffic goes straight from your machine to your own Dependably instance, and nowhere else. Your token stays in your operating system's keychain. Instances behind a private certificate authority are supported through an optional CA bundle setting; there is no option to disable certificate verification.\n\nRequires Dependably v0.3.0 or later and a token with `read:packages` — the Pull preset, which any member can create.",
+  "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, apk, Terraform and Hex, self-hosted or run as a hosted SaaS instance. This extension connects Claude to your own instance with a personal access token you create there.\n\nWith it, Claude can list and search your packages, look up a package before you adopt it, and explain an advisory and its fix. It can also scope your vulnerability report to one project's lockfile with the version to bump to, and check a licence against your policy.\n\nAll traffic goes straight from your machine to your own Dependably instance. Your token stays in your operating system's keychain. Instances behind a private certificate authority are supported through an optional CA bundle setting. Every tool is read-only: none of them can change or delete anything in your registry.\n\nRequires Dependably v1.0.0 or later and a token with Pull permissions.",
   "author": {
     "name": "Dependably",
     "email": "support@dependably.ca",
@@ -41,7 +41,6 @@
       "env": {
         "DEPENDABLY_BASE_URL": "${user_config.base_url}",
         "DEPENDABLY_TOKEN": "${user_config.token}",
-        "DEPENDABLY_TIMEOUT_MS": "${user_config.timeout_ms}",
         "NODE_EXTRA_CA_CERTS": "${user_config.ca_bundle}"
       }
     }
@@ -149,24 +148,15 @@
     "base_url": {
       "type": "string",
       "title": "Dependably URL",
-      "description": "The address of your Dependably instance, for example https://registry.example.com. On a multi-tenant host, use your organization's subdomain.",
+      "description": "https://registry.example.com",
       "required": true
     },
     "token": {
       "type": "string",
       "title": "Personal access token",
-      "description": "Create one in Dependably under Tokens. The Pull preset is enough — every tool this extension offers works on it.",
+      "description": "From Dependably > Tokens, with Pull permissions",
       "required": true,
       "sensitive": true
-    },
-    "timeout_ms": {
-      "type": "number",
-      "title": "Request timeout (milliseconds)",
-      "description": "How long to wait for a single request to your instance.",
-      "required": false,
-      "default": 30000,
-      "min": 1000,
-      "max": 300000
     },
     "ca_bundle": {
       "type": "file",

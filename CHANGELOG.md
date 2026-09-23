@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Removed
+
+- **The Claude Desktop extension no longer asks for a request timeout.** Each request uses the
+  30-second default. `DEPENDABLY_TIMEOUT_MS` still works when the server is configured through
+  environment variables.
+
 ## [1.0.0] - 2026-09-20
 
 ### Added
