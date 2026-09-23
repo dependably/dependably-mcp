@@ -22,7 +22,9 @@ import { DependablyApiError, type DependablyClient } from './client.js';
  * `GET /api/v1/ecosystems` (older server, unreachable at startup, or a malformed
  * response). When the instance answers, {@link fetchEcosystems} reads the live
  * vocabulary from it instead, so a newly-added ecosystem on the server reaches
- * every tool without a client release.
+ * every tool without a client release. A startup failure that may clear up — a
+ * transport error or a 5xx — is retried in the background by
+ * {@link retryEcosystems}.
  */
 
 /**
@@ -130,26 +132,88 @@ const ECOSYSTEMS_FETCH_TIMEOUT_CAP_MS = 5000;
  * multi-line body — an HTML error page, a stack trace — cannot turn one
  * stderr line into several, or leak that body onto stderr at all.
  */
-export async function fetchEcosystems(
-  client: DependablyClient,
-): Promise<{ planes: EcosystemPlanes; source: 'instance' } | { planes: EcosystemPlanes; source: 'fallback'; reason: string }> {
+export async function fetchEcosystems(client: DependablyClient): Promise<EcosystemsResult> {
   const timeoutMs = Math.min(client.timeoutMs, ECOSYSTEMS_FETCH_TIMEOUT_CAP_MS);
   try {
     const body = await client.get('/api/v1/ecosystems', undefined, { timeoutMs });
     const planes = parsePlanes(body);
-    if (!planes) return fallbackResult('answered with an unexpected shape');
+    if (!planes) return fallbackResult('answered with an unexpected shape', false);
     return { planes, source: 'instance' };
   } catch (e) {
     // The instance answered — with a status other than 2xx — so this is not
     // "unreachable"; and the reason is the status alone, never the response
     // body or DependablyApiError's formatted message, which can embed either.
-    if (e instanceof DependablyApiError) return fallbackResult(`returned ${e.status}`);
-    return fallbackResult(`was unreachable: ${transportReasonCause(e)}`);
+    // Only a 5xx is worth asking again: a 4xx or a malformed body will read
+    // the same on every retry for the life of this process.
+    if (e instanceof DependablyApiError) return fallbackResult(`returned ${e.status}`, e.status >= 500);
+    return fallbackResult(`was unreachable: ${transportReasonCause(e)}`, true);
   }
 }
 
-function fallbackResult(reason: string): { planes: EcosystemPlanes; source: 'fallback'; reason: string } {
-  return { planes: FALLBACK_PLANES, source: 'fallback', reason: normalizeReason(reason) };
+/**
+ * Delays between background retries of {@link fetchEcosystems} after a
+ * retryable startup fallback; the last entry repeats until the fetch settles.
+ */
+export const ECOSYSTEMS_RETRY_DELAYS_MS: readonly number[] = [10_000, 30_000, 60_000, 300_000];
+
+/**
+ * Keep asking the instance for its ecosystem vocabulary after a retryable
+ * startup fallback, and hand the live planes to `onPlanes` once it answers.
+ *
+ * Startup is exactly when the instance is most likely to be briefly out of
+ * reach — a Desktop host launching this server straight after install, before
+ * macOS has let the host app onto the local network, or a VPN still coming up.
+ * Without a retry, that one failed request would pin the built-in lists for
+ * the whole life of the process.
+ *
+ * Stops for good on success or on a non-retryable answer (4xx, malformed
+ * body), reporting the latter through `log`. The timers are unref'd: an idle
+ * retry must never be what keeps the process alive. Returns a function that
+ * cancels any pending retry.
+ */
+export function retryEcosystems(
+  client: DependablyClient,
+  onPlanes: (planes: EcosystemPlanes) => void,
+  log: (line: string) => void,
+  delaysMs: readonly number[] = ECOSYSTEMS_RETRY_DELAYS_MS,
+): () => void {
+  let attempt = 0;
+  let timer: NodeJS.Timeout | undefined;
+  let stopped = false;
+
+  const schedule = (): void => {
+    const delay = delaysMs[Math.min(attempt, delaysMs.length - 1)];
+    attempt++;
+    timer = setTimeout(() => void tick(), delay);
+    timer.unref();
+  };
+
+  const tick = async (): Promise<void> => {
+    const result = await fetchEcosystems(client);
+    if (stopped) return;
+    if (result.source === 'instance') {
+      onPlanes(result.planes);
+      log(`loaded the ecosystem list from the instance after ${attempt} ${attempt === 1 ? 'retry' : 'retries'}`);
+    } else if (result.retryable) {
+      schedule();
+    } else {
+      log(`keeping the built-in ecosystem list; /api/v1/ecosystems ${result.reason}`);
+    }
+  };
+
+  schedule();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
+  };
+}
+
+export type EcosystemsResult =
+  | { planes: EcosystemPlanes; source: 'instance' }
+  | { planes: EcosystemPlanes; source: 'fallback'; reason: string; retryable: boolean };
+
+function fallbackResult(reason: string, retryable: boolean): EcosystemsResult {
+  return { planes: FALLBACK_PLANES, source: 'fallback', reason: normalizeReason(reason), retryable };
 }
 
 /**

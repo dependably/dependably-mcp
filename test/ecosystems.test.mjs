@@ -3,9 +3,10 @@ import { afterEach, describe, it } from 'node:test';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 
 import { DependablyClient } from '../dist/client.js';
-import { buildServer } from '../dist/server.js';
+import { buildServer, createServer } from '../dist/server.js';
 import {
   FALLBACK_LOOKUP_ECOSYSTEMS,
   FALLBACK_PLANES,
@@ -13,6 +14,7 @@ import {
   FALLBACK_SETUP_ECOSYSTEMS,
   fetchEcosystems,
   parsePlanes,
+  retryEcosystems,
 } from '../dist/ecosystems.js';
 
 const cfg = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
@@ -98,6 +100,7 @@ describe('fetchEcosystems', () => {
     strictEqual(result.source, 'fallback');
     deepStrictEqual(result.planes, FALLBACK_PLANES);
     strictEqual(result.reason, 'returned 404');
+    strictEqual(result.retryable, false);
   });
 
   it('falls back, never throwing, on a network error', async () => {
@@ -110,6 +113,7 @@ describe('fetchEcosystems', () => {
     strictEqual(result.source, 'fallback');
     deepStrictEqual(result.planes, FALLBACK_PLANES);
     ok(result.reason.includes('ECONNREFUSED'), result.reason);
+    strictEqual(result.retryable, true);
   });
 
   it('falls back with an unexpected-shape reason on an HTML body', async () => {
@@ -118,6 +122,7 @@ describe('fetchEcosystems', () => {
     strictEqual(result.source, 'fallback');
     deepStrictEqual(result.planes, FALLBACK_PLANES);
     ok(result.reason.includes('unexpected shape'), result.reason);
+    strictEqual(result.retryable, false);
   });
 
   it('falls back with an unexpected-shape reason when planes is missing from an otherwise-200 body', async () => {
@@ -150,6 +155,7 @@ describe('fetchEcosystems', () => {
     strictEqual(result.source, 'fallback');
     strictEqual(result.reason, 'returned 401');
     ok(!result.reason.includes('unreachable'), result.reason);
+    strictEqual(result.retryable, false);
   });
 
   it('falls back with "returned 500" on a server error', async () => {
@@ -157,6 +163,7 @@ describe('fetchEcosystems', () => {
     const result = await fetchEcosystems(new DependablyClient(cfg));
     strictEqual(result.source, 'fallback');
     strictEqual(result.reason, 'returned 500');
+    strictEqual(result.retryable, true);
   });
 
   it('falls back on a timeout without echoing the DEPENDABLY_TIMEOUT_MS advice, which is wrong for this capped call', async () => {
@@ -187,6 +194,90 @@ describe('fetchEcosystems', () => {
     const result = await fetchEcosystems(new DependablyClient(cfg));
     strictEqual(result.source, 'fallback');
     ok(result.reason.length <= 160, `expected <= 160 chars, got ${result.reason.length}`);
+  });
+});
+
+describe('retryEcosystems', () => {
+  // The retry timers are unref'd, as they must be in production (stdin keeps
+  // the real server alive). Here nothing else would, so a referenced interval
+  // holds the loop open on Node 22 until the retry settles.
+  function settle(run) {
+    const keepAlive = setInterval(() => {}, 1000);
+    return new Promise((resolve) => run(resolve)).finally(() => clearInterval(keepAlive));
+  }
+
+  it('keeps retrying a transport failure and hands over the live planes once the instance answers', async () => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      if (calls < 3) {
+        const e = new Error('fetch failed');
+        e.cause = Object.assign(new Error('connect EHOSTUNREACH'), { code: 'EHOSTUNREACH' });
+        throw e;
+      }
+      return new Response(JSON.stringify(CONTRACT_BODY), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const lines = [];
+    const planes = await settle((resolve) =>
+      retryEcosystems(new DependablyClient(cfg), resolve, (line) => lines.push(line), [1, 1]),
+    );
+    deepStrictEqual(planes, CONTRACT_BODY.planes);
+    strictEqual(calls, 3);
+    deepStrictEqual(lines, ['loaded the ecosystem list from the instance after 3 retries']);
+  });
+
+  it('gives up on a non-retryable answer, logs one line, and never hands over planes', async () => {
+    stubFetch({ status: 401, body: '{"title":"Unauthorized"}' });
+    let handedOver = false;
+    const line = await settle((resolve) =>
+      retryEcosystems(new DependablyClient(cfg), () => (handedOver = true), resolve, [1]),
+    );
+    strictEqual(line, 'keeping the built-in ecosystem list; /api/v1/ecosystems returned 401');
+    strictEqual(handedOver, false);
+  });
+
+  it('never fetches once cancelled', async () => {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response('{}', { status: 500 });
+    };
+    const cancel = retryEcosystems(new DependablyClient(cfg), () => {}, () => {}, [20]);
+    cancel();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    strictEqual(calls, 0);
+  });
+});
+
+describe('createServer replacePlanes', () => {
+  it('swaps the advertised enums on a connected server and tells the client the tool list changed', async () => {
+    const { server, replacePlanes } = createServer(new DependablyClient(cfg), cfg);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'ecosystems-test', version: '0.0.0' });
+    let listChanged = 0;
+    client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+      listChanged++;
+    });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const before = (await client.listTools()).tools;
+      replacePlanes({ ...FALLBACK_PLANES, registry: [...FALLBACK_REGISTRY_ECOSYSTEMS, 'zig'] });
+      // Debounced notifications flush on a microtask; let it land.
+      await new Promise((resolve) => setImmediate(resolve));
+      const after = (await client.listTools()).tools;
+
+      ok(listChanged >= 1, 'the client should be told the tool list changed');
+      ok(listChanged <= 1, `one debounced notification, not one per tool; got ${listChanged}`);
+      deepStrictEqual(
+        after.map((t) => t.name),
+        before.map((t) => t.name),
+        'the same tools, in the same order',
+      );
+      ok(after.find((t) => t.name === 'list_packages').inputSchema.properties.ecosystem.enum.includes('zig'));
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
 

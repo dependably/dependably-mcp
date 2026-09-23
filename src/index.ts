@@ -3,8 +3,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { DependablyClient } from './client.js';
 import { loadConfig } from './config.js';
-import { fetchEcosystems } from './ecosystems.js';
-import { buildServer } from './server.js';
+import { fetchEcosystems, retryEcosystems } from './ecosystems.js';
+import { createServer } from './server.js';
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -13,9 +13,12 @@ async function main(): Promise<void> {
   if (eco.source === 'fallback') {
     process.stderr.write(`dependably-mcp: using the built-in ecosystem list; /api/v1/ecosystems ${eco.reason}\n`);
   }
-  const server = buildServer(client, cfg, eco.planes);
+  const { server, replacePlanes } = createServer(client, cfg, eco.planes);
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  if (eco.source === 'fallback' && eco.retryable) {
+    retryEcosystems(client, replacePlanes, (line) => process.stderr.write(`dependably-mcp: ${line}\n`));
+  }
 }
 
 main().catch((err) => {

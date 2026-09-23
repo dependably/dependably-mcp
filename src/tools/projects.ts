@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
@@ -110,8 +110,10 @@ export function compactAnalysis(res: AnalysisResponse): Record<string, unknown> 
   };
 }
 
-export function registerProjectTools(server: McpServer, client: DependablyClient): void {
-  server.registerTool(
+export function registerProjectTools(server: McpServer, client: DependablyClient): RegisteredTool[] {
+  const tools: RegisteredTool[] = [];
+
+  tools.push(server.registerTool(
     'list_projects',
     {
       title: 'List projects',
@@ -145,9 +147,9 @@ export function registerProjectTools(server: McpServer, client: DependablyClient
           }),
         ),
       ),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_project',
     {
       title: 'Get project',
@@ -162,9 +164,9 @@ export function registerProjectTools(server: McpServer, client: DependablyClient
     },
     async (args) =>
       run(async () => json(await client.get(`/api/v1/projects/${encodeURIComponent(args.projectId)}`))),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_project_version',
     {
       title: 'Get project version components',
@@ -244,5 +246,7 @@ export function registerProjectTools(server: McpServer, client: DependablyClient
         return json(compactAnalysis(analysis));
       });
     },
-  );
+  ));
+
+  return tools;
 }

@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { Config } from '../config.js';
@@ -129,12 +129,14 @@ function fenced(lang: string, body: string): ToolResult {
   return { content: [{ type: 'text', text: `\`\`\`${lang}\n${body}\n\`\`\`` }] };
 }
 
-export function registerSetupTools(server: McpServer, cfg: Config, planes: EcosystemPlanes): void {
+export function registerSetupTools(server: McpServer, cfg: Config, planes: EcosystemPlanes): RegisteredTool[] {
   const ecosystem = enumOf(offeredSetupEcosystems(planes.setup), FALLBACK_SETUP_ECOSYSTEMS).describe(
     'Package ecosystem the command targets.',
   );
 
-  server.registerTool(
+  const tools: RegisteredTool[] = [];
+
+  tools.push(server.registerTool(
     'get_install_command',
     {
       title: 'Install command',
@@ -167,9 +169,9 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
       if (!rule.test(args.package)) return err(rule.message);
       return installCommand(cfg.baseUrl, args.ecosystem, args.package, args.version);
     },
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_publish_command',
     {
       title: 'Publish command',
@@ -181,7 +183,9 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
       }).strict(),
     },
     async (args) => publishCommand(cfg.baseUrl, args.ecosystem, args.artifact_path),
-  );
+  ));
+
+  return tools;
 }
 
 function stripScheme(url: string): string {

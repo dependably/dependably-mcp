@@ -1,4 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
@@ -42,10 +42,12 @@ const READ_ANNOTATIONS = {
  * `parseNpmLockfile` in ../vuln.ts stays exported and tested so a caller can do the
  * extraction in one JSON.parse and a map.
  */
-export function registerVulnTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): void {
+export function registerVulnTools(server: McpServer, client: DependablyClient, planes: EcosystemPlanes): RegisteredTool[] {
   const ecosystem = enumOf(planes.registry, FALLBACK_REGISTRY_ECOSYSTEMS);
 
-  server.registerTool(
+  const tools: RegisteredTool[] = [];
+
+  tools.push(server.registerTool(
     'check_dependencies',
     {
       title: "Check a project's dependencies",
@@ -104,9 +106,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
           findings,
         });
       }),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_remediation',
     {
       title: 'Get remediation for advisories',
@@ -136,9 +138,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         if (allFailed(advisories)) result.isError = true;
         return result;
       }),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'list_remediation_skills',
     {
       title: 'List remediation skills',
@@ -148,9 +150,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
       inputSchema: z.object({}).strict(),
     },
     async () => run(async () => json(await client.get('/api/v1/remediation/skills'))),
-  );
+  ));
 
-  server.registerTool(
+  tools.push(server.registerTool(
     'get_remediation_skill',
     {
       title: 'Get remediation skill',
@@ -174,7 +176,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         if (allFailed(skills)) result.isError = true;
         return result;
       }),
-  );
+  ));
+
+  return tools;
 }
 
 /** True when every batched element carries an `error`, i.e. nothing in the batch succeeded. */
