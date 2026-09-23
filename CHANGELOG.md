@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`get_install_command` covers apk, Terraform and Hex.** The server has served all three for
+  a while, but the tool withheld them because it had no command to give. apk gets an
+  `apk add name=version` with a pointer to the `/etc/apk/repositories` line. Terraform gets a
+  `required_providers` block plus the `~/.terraformrc` network-mirror line, and a warning on a
+  plain-HTTP instance, since Terraform refuses an `http://` mirror. Hex gets the Mix dependency
+  on the `dependably` repository and the `mix hex.repo add` step that registers it. Each
+  package name is validated for its ecosystem before it reaches the output; a Hex name, for
+  example, must be a plain atom, so it cannot add options to the dependency.
+- **`get_publish_command` covers Hex** with `mix hex.publish` against the Hex API. For apk and
+  Terraform, which are proxy-only, it says there is no publish endpoint instead of returning a
+  command.
+
 ## [1.1.0] - 2026-09-23
 
 ### Added
