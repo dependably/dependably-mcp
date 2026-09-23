@@ -25,7 +25,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - **`get_license_policy` now says it covers licences only** and points to `get_policies` for
-  the full package policy.
+  the full package policy. Its title reads "Get licence policy"; the tool name is unchanged.
 
 ### Removed
 

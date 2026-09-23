@@ -24,13 +24,13 @@ const POLICIES_DESCRIPTION = [
   'The org\'s full package policy (GET /api/v1/policies): the licence rules plus every control that can refuse a package download, with its threshold. This answers "what is our package / third-party / open-source / supply-chain policy" — prefer it over get_license_policy for that question, which covers licences only. For "would package X be allowed?", call lookup_package instead: it returns the verdict for one package. Requires read:packages capability.',
   '',
   'How to report the result:',
-  '- Report each control\'s `effect` (off, warn or block), not its raw `mode`. warn lets the package through with a warning; block refuses it with a 403, and the refused version goes to Quarantine for admin review.',
+  '- Report each control\'s `effect` (off, warn or block), not its raw `mode`. warn serves the package and records the hit in Dependably (UI, reports, activity log); the installing client sees no warning. block refuses it with a 403, and the refused version goes to Quarantine for admin review.',
   '- Every control is always listed. effect "off" means the control exists and is switched off: say "off", never "no policy" or "not covered".',
   '- Thresholds at their allow-everything value report effect "off": vuln_score.maxScore 10, epss.maxProbability / epss_percentile.maxPercentile of 1.0 or null, release_age.minHours of null or 0.',
-  '- `active: false` means the control\'s data source is not refreshing (the vulnerability tracker is paused or not configured, or the threat feed is disabled or air-gapped). If the effect is not off, say "not refreshing, still enforcing on data already recorded". It does not mean the control is off.',
+  '- `active: false` means the control\'s data source is not refreshing (the vulnerability tracker is paused or not configured, or the threat feed is disabled or air-gapped). If the effect is not off, say "not refreshing, still enforcing on data already recorded". It does not mean the control is off. Exception: ssvc_exploitation also blocks on stale enrichment, so with a non-off effect and `active: false` it refuses more versions over time as their enrichment goes stale; warn about that.',
   '- provenance is per ecosystem. When an ecosystem\'s effect is block and `anchorsConfigured` is false, flag it: with no trust anchor, every package of that ecosystem is refused.',
   '- deprecated: report `mode` too. block_new refuses only versions not yet cached, so already-cached deprecated versions keep serving; block_all refuses cached ones as well.',
-  '- When the user quotes an X-Dependably-Block-Reason value, match it to the `controls` key of the same name.',
+  '- When the user quotes an X-Dependably-Block-Reason value, match it to the `controls` key of the same name. `manual` has no key: an admin blocked that specific version by hand, not a policy control.',
   '',
   'Top-level fields: `allowlistMode` "on" restricts installs and publishes to packages on the org\'s PURL allowlist (separate from the licence lists). `proxyPassthroughEnabled` false means only packages already cached are served; nothing new is fetched from upstream. `license` holds installMode and publishMode (off/warn/block) and the SPDX allowlist and blocklist.',
   '',
@@ -39,7 +39,7 @@ const POLICIES_DESCRIPTION = [
   '- malicious_live: narrower; the vulnerability tracker confirms the malicious code is live in this exact version.',
   '- kev: an advisory on the version is in the CISA Known Exploited Vulnerabilities Catalog (KEV), i.e. confirmed exploited in the wild.',
   '- kev_ransomware: narrower KEV check; only entries CISA marks as used in ransomware campaigns.',
-  '- ssvc_exploitation: CISA\'s SSVC (Stakeholder-Specific Vulnerability Categorization) exploitation assessment for an advisory is "active". Grades far more CVEs than KEV.',
+  '- ssvc_exploitation: CISA\'s SSVC (Stakeholder-Specific Vulnerability Categorization) exploitation assessment for an advisory is "active", or the vulnerability tracker\'s enrichment for an advisory has gone stale. Grades far more CVEs than KEV.',
   '- vuln_score: the version\'s highest CVSS score (Common Vulnerability Scoring System, 0–10 severity) exceeds maxScore.',
   '- epss: the highest EPSS score (FIRST.org\'s Exploit Prediction Scoring System: the 0–1 probability a CVE is exploited in the next 30 days) exceeds maxProbability.',
   '- epss_percentile: the EPSS percentile (0–1 rank among all scored CVEs; a relative position, not a probability) exceeds maxPercentile.',
@@ -47,7 +47,7 @@ const POLICIES_DESCRIPTION = [
   '- deprecated: the upstream registry marks the version deprecated.',
   '- revoked: the upstream registry removed the version after it was cached.',
   '- install_script: the version runs an install or lifecycle script, a common supply-chain attack surface.',
-  '- license: the declared licence is on the blocklist, or missing for an ecosystem that always declares one.',
+  '- license: in block mode, a licence on the blocklist is refused, and so is any licence not on the allowlist (allowed or conditional entries), so an empty allowlist refuses every licence. A missing licence is refused in an ecosystem that always declares one. In warn mode no download is refused for its licence.',
   '- provenance: the version\'s upstream signature or attestation is verified against the org\'s pinned trust anchors, per ecosystem.',
 ].join('\n');
 
@@ -191,7 +191,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
   tools.push(server.registerTool(
     'get_license_policy',
     {
-      title: 'Get license policy',
+      title: 'Get licence policy',
       description:
         'Licence rules only: enforcement mode (off/warn/block) plus the SPDX allowlist and blocklist (GET /api/v1/license-policy) — answers "which licences are approved here". This is not the whole org policy; for the full package policy (vulnerability, exploitation, release-age, install-script and signature controls) use get_policies. Requires read:packages capability.',
       annotations: READ_ANNOTATIONS,

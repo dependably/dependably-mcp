@@ -202,19 +202,32 @@ describe('read tools', () => {
     deepStrictEqual(JSON.parse(body), { mode: 'warn', allowlist: [], blocklist: [] });
   });
 
-  it('get_policies reports a non-404 failure as an error without falling back', async () => {
+  for (const status of [400, 401, 403, 500, 503]) {
+    it(`get_policies reports a ${status} as an error without falling back`, async () => {
+      const paths = [];
+      globalThis.fetch = async (url) => {
+        paths.push(new URL(String(url)).pathname);
+        return new Response('{"detail":"read:packages capability required."}', {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+      const res = await call(base, 'get_policies');
+      strictEqual(res.isError, true);
+      ok(res.content[0].text.includes(String(status)), res.content[0].text);
+      deepStrictEqual(paths, ['/api/v1/policies'], `a ${status} must not be papered over with the licence policy`);
+    });
+  }
+
+  it('get_policies reports a network failure as an error without falling back', async () => {
     const paths = [];
     globalThis.fetch = async (url) => {
       paths.push(new URL(String(url)).pathname);
-      return new Response('{"detail":"read:packages capability required."}', {
-        status: 403,
-        headers: { 'content-type': 'application/json' },
-      });
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
     };
     const res = await call(base, 'get_policies');
     strictEqual(res.isError, true);
-    ok(res.content[0].text.includes('403'));
-    deepStrictEqual(paths, ['/api/v1/policies'], 'a 403 must not be papered over with the licence policy');
+    deepStrictEqual(paths, ['/api/v1/policies']);
   });
 
   it('get_policies describes itself as the whole policy and carries the glossary; get_license_policy defers to it', async () => {
@@ -238,6 +251,10 @@ describe('read tools', () => {
       'block_new refuses only versions not yet cached',
       'vuln_score.maxScore 10',
       'CISA Known Exploited Vulnerabilities Catalog',
+      'the installing client sees no warning',
+      'refuses more versions over time as their enrichment goes stale',
+      '`manual` has no key',
+      'any licence not on the allowlist',
     ]) {
       ok(d.includes(needle), `get_policies description should mention ${JSON.stringify(needle)}`);
     }
@@ -251,6 +268,7 @@ describe('read tools', () => {
     const lic = byName.get_license_policy.description;
     ok(lic.startsWith('Licence rules only'), lic);
     ok(lic.includes('use get_policies'), lic);
+    strictEqual(byName.get_license_policy.title, 'Get licence policy');
   });
 
   it('surfaces an API error as an error result rather than throwing', async () => {
