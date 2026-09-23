@@ -12,6 +12,13 @@ All notable changes to this project are documented here. The format follows
   30-second default. `DEPENDABLY_TIMEOUT_MS` still works when the server is configured through
   environment variables.
 
+### Fixed
+
+- **An unreachable host no longer reports "Nothing is listening".** `EHOSTUNREACH` and
+  `ENETUNREACH` mean the host couldn't be reached at all, not that nothing answered on the
+  port. The error now says so, and points macOS users at the Local Network permission, which
+  blocks an app from reaching an instance on the local network until it is granted.
+
 ## [1.0.0] - 2026-09-20
 
 ### Added
