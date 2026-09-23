@@ -57,6 +57,7 @@ const CORE_TOOLS = [
   'get_install_command',
   'get_license_policy',
   'get_package',
+  'get_policies',
   'get_project',
   'get_project_version',
   'get_publish_command',

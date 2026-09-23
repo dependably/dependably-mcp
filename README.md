@@ -110,7 +110,8 @@ Every tool is read-only with a user-generated token with **Pull** permissions.
 | `get_project` | One project or folder: versions, ancestors, and a folder's children and subtree rollup. |
 | `get_project_version` | A version's SBOM components with advisories and effective priority, plus a policy rollup. |
 | `lookup_package` | Pre-adoption verdict on a package not in the registry. Ingests nothing. |
-| `get_license_policy` | Enforcement mode, plus the SPDX allowlist and blocklist. |
+| `get_policies` | The whole package policy: licence rules plus every control that can refuse a download (malware, KEV, SSVC, CVSS, EPSS, release age, install scripts, signatures), with thresholds. Answers *what is our third-party package policy?* |
+| `get_license_policy` | Licence rules only: enforcement mode, plus the SPDX allowlist and blocklist. |
 | `list_remediation_skills`, `get_remediation_skill` | Curated how-to-fix guides, one per vulnerability class. |
 | `readiness_check` | Readiness with per-subsystem detail; needs no token. |
 | `get_install_command`, `get_publish_command` | Build an install or publish command, returned as text. |

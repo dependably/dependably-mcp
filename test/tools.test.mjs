@@ -161,6 +161,116 @@ describe('read tools', () => {
     deepStrictEqual(paths, ['/api/v1/license-policy', '/api/v1/lookup']);
   });
 
+  it('get_policies returns the full policy from /api/v1/policies unchanged', async () => {
+    const policy = {
+      allowlistMode: 'off',
+      proxyPassthroughEnabled: true,
+      license: { installMode: 'block', publishMode: 'off', allowlist: [{ licenseSpdx: 'MIT' }], blocklist: [] },
+      controls: {
+        kev: { mode: 'block', effect: 'block', active: false },
+        vuln_score: { maxScore: 10, effect: 'off', active: true },
+        provenance: { npm: { mode: 'block', effect: 'block', anchorsConfigured: false } },
+      },
+    };
+    const calls = stubFetch(() => policy);
+    const res = await call(base, 'get_policies');
+    deepStrictEqual(calls.map((c) => new URL(c.url).pathname), ['/api/v1/policies']);
+    strictEqual(res.isError, undefined);
+    deepStrictEqual(payload(res), policy);
+  });
+
+  it('get_policies falls back to the licence policy on an older server that 404s', async () => {
+    const paths = [];
+    globalThis.fetch = async (url) => {
+      const path = new URL(String(url)).pathname;
+      paths.push(path);
+      if (path === '/api/v1/policies') {
+        return new Response('{"title":"Not Found"}', { status: 404, headers: { 'content-type': 'application/problem+json' } });
+      }
+      return new Response('{"mode":"warn","allowlist":[],"blocklist":[]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const res = await call(base, 'get_policies');
+    deepStrictEqual(paths, ['/api/v1/policies', '/api/v1/license-policy']);
+    strictEqual(res.isError, undefined);
+    const [note, body] = res.content[0].text.split('\n\n');
+    ok(note.includes('does not expose the full package policy yet'), note);
+    ok(note.includes('licence policy follows'), note);
+    ok(note.includes('Do not conclude the org has no other controls'), note);
+    deepStrictEqual(JSON.parse(body), { mode: 'warn', allowlist: [], blocklist: [] });
+  });
+
+  for (const status of [400, 401, 403, 500, 503]) {
+    it(`get_policies reports a ${status} as an error without falling back`, async () => {
+      const paths = [];
+      globalThis.fetch = async (url) => {
+        paths.push(new URL(String(url)).pathname);
+        return new Response('{"detail":"read:packages capability required."}', {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+      const res = await call(base, 'get_policies');
+      strictEqual(res.isError, true);
+      ok(res.content[0].text.includes(String(status)), res.content[0].text);
+      deepStrictEqual(paths, ['/api/v1/policies'], `a ${status} must not be papered over with the licence policy`);
+    });
+  }
+
+  it('get_policies reports a network failure as an error without falling back', async () => {
+    const paths = [];
+    globalThis.fetch = async (url) => {
+      paths.push(new URL(String(url)).pathname);
+      throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+    };
+    const res = await call(base, 'get_policies');
+    strictEqual(res.isError, true);
+    deepStrictEqual(paths, ['/api/v1/policies']);
+  });
+
+  it('get_policies describes itself as the whole policy and carries the glossary; get_license_policy defers to it', async () => {
+    const tools = await withServer(base, async (c) => (await c.listTools()).tools);
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const policies = byName.get_policies;
+    ok(policies, 'get_policies is registered');
+    deepStrictEqual(policies.inputSchema.properties ?? {}, {});
+    strictEqual(policies.inputSchema.additionalProperties, false);
+    const d = policies.description;
+    for (const needle of [
+      'GET /api/v1/policies',
+      'third-party',
+      'prefer it over get_license_policy',
+      'call lookup_package',
+      'X-Dependably-Block-Reason',
+      'not its raw `mode`',
+      'never "no policy"',
+      'still enforcing on data already recorded',
+      '`anchorsConfigured` is false',
+      'block_new refuses only versions not yet cached',
+      'vuln_score.maxScore 10',
+      'CISA Known Exploited Vulnerabilities Catalog',
+      'the installing client sees no warning',
+      'refuses more versions over time as their enrichment goes stale',
+      '`manual` has no key',
+      'any licence not on the allowlist',
+    ]) {
+      ok(d.includes(needle), `get_policies description should mention ${JSON.stringify(needle)}`);
+    }
+    // Every reason token the server keys `controls` by has a glossary line.
+    for (const key of [
+      'malicious', 'malicious_live', 'kev', 'kev_ransomware', 'ssvc_exploitation', 'vuln_score', 'epss',
+      'epss_percentile', 'release_age', 'deprecated', 'revoked', 'install_script', 'license', 'provenance',
+    ]) {
+      ok(d.includes(`\n- ${key}: `), `glossary is missing the "${key}" control`);
+    }
+    const lic = byName.get_license_policy.description;
+    ok(lic.startsWith('Licence rules only'), lic);
+    ok(lic.includes('use get_policies'), lic);
+    strictEqual(byName.get_license_policy.title, 'Get licence policy');
+  });
+
   it('surfaces an API error as an error result rather than throwing', async () => {
     globalThis.fetch = async () =>
       new Response('{"detail":"nope"}', { status: 403, headers: { 'content-type': 'application/json' } });

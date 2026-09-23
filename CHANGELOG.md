@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-23
+
+### Added
+
+- **`get_policies` returns the org's whole package policy.** It reads `GET /api/v1/policies`,
+  which a Pull token can call, and returns the licence rules plus every control that can refuse
+  a download: malicious packages, KEV and KEV ransomware, SSVC exploitation, CVSS and EPSS
+  ceilings, release age, deprecated and revoked versions, install scripts and per-ecosystem
+  signature checks, each with its effect and threshold. Asked *what is our policy for
+  third-party packages?*, Claude used to reach only the licence policy and then wrongly say
+  nothing covered vulnerabilities, package age or signatures. The tool's description carries
+  the glossary the server leaves out, so a control that is off is reported as off rather than
+  missing, a control whose data isn't refreshing is reported as still enforcing, and a signature
+  check set to block with no trust anchor is flagged. An older server without the endpoint gets
+  the licence policy, with a note that other controls may still apply.
+
+### Changed
+
+- **`get_license_policy` now says it covers licences only** and points to `get_policies` for
+  the full package policy. Its title reads "Get licence policy"; the tool name is unchanged.
+
 ### Removed
 
 - **The Claude Desktop extension no longer asks for a request timeout.** Each request uses the
