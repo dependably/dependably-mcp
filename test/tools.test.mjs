@@ -1051,8 +1051,9 @@ describe('setup tools', () => {
     // ecosystem that actually satisfies its rule rather than one generic `pkg`.
     const validPackage = {
       npm: 'pkg', pypi: 'pkg', nuget: 'pkg', maven: 'group:pkg', rpm: 'pkg', oci: 'pkg', golang: 'example.com/pkg', cargo: 'pkg',
+      apk: 'pkg', terraform: 'hashicorp/pkg', hex: 'pkg',
     };
-    for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo']) {
+    for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo', 'apk', 'terraform', 'hex']) {
       for (const version of ['1.0.0', undefined]) {
         const install = await call(base, 'get_install_command', { ecosystem: eco, package: validPackage[eco], version });
         ok(!install.isError, `${eco} install: ${install.content[0].text}`);
@@ -1067,6 +1068,98 @@ describe('setup tools', () => {
     const res = await call(base, 'get_publish_command', { ecosystem: 'golang', artifact_path: './artifact' });
     ok(!res.isError);
     ok(/tag/i.test(res.content[0].text), res.content[0].text);
+  });
+
+  for (const eco of ['apk', 'terraform']) {
+    it(`tells ${eco} publishers there is no hosted endpoint instead of inventing one`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: './artifact' });
+      ok(!res.isError);
+      ok(/proxy-only/.test(res.content[0].text), res.content[0].text);
+      ok(!res.content[0].text.includes('```'), 'a proxy-only ecosystem must not return a command fence');
+    });
+  }
+
+  it('publishes hex through the Hex API plane with the token left as a placeholder', async () => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
+    ok(!res.isError);
+    ok(
+      res.content[0].text.includes('HEX_API_URL=https://dep.example.com/hex/api HEX_API_KEY=<token> mix hex.publish\n'),
+      res.content[0].text,
+    );
+    ok(!res.content[0].text.includes('--yes'), 'the user should confirm the publish interactively');
+  });
+});
+
+describe('setup tools — apk, terraform and hex install shapes', () => {
+  // The version lands inside an HCL or Elixir double-quoted string, so the
+  // shell-metacharacter cases above do not cover it: quotes and each
+  // language's interpolation opener must be rejected too.
+  const versionBreakouts = [
+    ['terraform', 'hashicorp/aws', '5.0"\n  evil = "x'],
+    ['terraform', 'hashicorp/aws', '5.0${file("/etc/passwd")}'],
+    ['terraform', 'hashicorp/aws', '5.0%{if true}x%{endif}'],
+    ['hex', 'jason', '1.0#{System.cmd("id", [])}'],
+    ['hex', 'jason', '1.0", override: true, x: "'],
+  ];
+  for (const [eco, pkg, version] of versionBreakouts) {
+    it(`rejects ${eco} version ${JSON.stringify(version)} that would break out of its string`, async () => {
+      stubFetch();
+      const res = await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version });
+      ok(res.isError, res.content[0].text);
+      ok(!res.content[0].text.includes('```'), 'no command fence may be emitted for a rejected version');
+    });
+  }
+
+  it('pins apk with name=version and points at the /apk/ repository', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'apk', package: 'busybox', version: '1.36.1-r2' });
+    const text = res.content[0].text;
+    ok(!res.isError, text);
+    ok(text.includes('https://dep.example.com/apk/<release>/<repo>'), text);
+    ok(text.includes("apk add 'busybox=1.36.1-r2'"), text);
+  });
+
+  it('declares a terraform provider in HCL, with a mirror hint on the instance scheme', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', {
+      ecosystem: 'terraform',
+      package: 'registry.terraform.io/hashicorp/aws',
+      version: '5.70.0',
+    });
+    strictEqual(
+      res.content[0].text,
+      '```hcl\n' +
+        '# In ~/.terraformrc: provider_installation { network_mirror { url = "https://user:<token>@dep.example.com/terraform/" } }\n' +
+        '# Then declare the provider and run terraform init:\n' +
+        'terraform {\n  required_providers {\n    aws = {\n      source  = "registry.terraform.io/hashicorp/aws"\n      version = "5.70.0"\n    }\n  }\n}\n```',
+    );
+  });
+
+  it('omits the terraform version constraint when unpinned', async () => {
+    stubFetch();
+    const res = await call(base, 'get_install_command', { ecosystem: 'terraform', package: 'hashicorp/aws' });
+    ok(!res.isError);
+    ok(!res.content[0].text.includes('version ='), res.content[0].text);
+  });
+
+  it('warns that terraform refuses a plain-HTTP mirror', async () => {
+    stubFetch();
+    const res = await call({ ...base, baseUrl: 'http://dep.example.com' }, 'get_install_command', { ecosystem: 'terraform', package: 'hashicorp/aws' });
+    ok(res.content[0].text.includes('url = "http://user:<token>@dep.example.com/terraform/"'), res.content[0].text);
+    ok(/refuses an http:\/\/ network mirror/.test(res.content[0].text), res.content[0].text);
+  });
+
+  it('writes a hex dependency on the dependably repository, pinned and unpinned', async () => {
+    stubFetch();
+    const pinnedRes = await call(base, 'get_install_command', { ecosystem: 'hex', package: 'jason', version: '1.4.4' });
+    const text = pinnedRes.content[0].text;
+    ok(text.startsWith('```elixir\n'), text);
+    ok(text.includes('mix hex.repo add dependably https://dep.example.com/hex --public-key dependably-hex.pem --auth-key <token>'), text);
+    ok(text.includes('{:jason, "~> 1.4.4", repo: :dependably}'), text);
+    const unpinned = await call(base, 'get_install_command', { ecosystem: 'hex', package: 'jason' });
+    ok(unpinned.content[0].text.includes('{:jason, ">= 0.0.0", repo: :dependably}'), unpinned.content[0].text);
   });
 });
 
@@ -1243,6 +1336,21 @@ describe('setup tools — per-ecosystem package validation', () => {
     ['oci', '../evil', 'a .. path segment'],
     ['golang', 'evil.tld/../x', 'a .. path segment in a module path'],
     ['maven', 'org.slf4j/slf4j-api', 'a / where a Maven coordinate needs exactly one :'],
+    ['apk', 'https://evil.tld/x.apk', 'a bare URL instead of an apk name'],
+    ['apk', 'busybox=1.0', 'an embedded = pin, which belongs in version'],
+    ['apk', '-X', 'a leading - read as an apk flag'],
+    ['terraform', 'aws', 'a bare type with no namespace'],
+    ['terraform', 'https://evil.tld/hashicorp/aws', 'a scheme in the source address'],
+    ['terraform', 'hashicorp/aws"\n  evil = "x', 'a quote that would break out of the HCL string'],
+    ['terraform', 'a/b/c/d', 'more than three segments'],
+    ['terraform', 'evil.tld/../aws', 'a .. segment'],
+    ['terraform', 'evil..tld/acme/widget', 'an empty hostname label'],
+    ['terraform', 'acme/my_provider', 'an underscore, which Terraform addresses never carry'],
+    ['terraform', 'acme/-widget', 'a leading dash in the type'],
+    ['hex', 'jason, override: true', 'Mix options injected after the atom'],
+    ['hex', 'Jason', 'an upper-case name, which is not a plain atom'],
+    ['hex', '"jason"', 'a quoted atom'],
+    ['hex', '_jason', 'a leading underscore'],
   ];
 
   for (const [eco, pkg, why] of maliciousCases) {
@@ -1263,6 +1371,11 @@ describe('setup tools — per-ecosystem package validation', () => {
     ['cargo', 'serde_json', "cargo add 'serde_json@1.2.3' --registry dependably"],
     ['rpm', 'kernel-devel', "dnf install 'kernel-devel-1.2.3'"],
     ['oci', 'library/nginx', "docker pull dep.example.com/'library/nginx':'1.2.3'"],
+    ['apk', 'py3-setuptools', "apk add 'py3-setuptools=1.2.3'"],
+    ['apk', 'libstdc++', "apk add 'libstdc++=1.2.3'"],
+    ['terraform', 'hashicorp/google-beta', '    google-beta = {\n      source  = "hashicorp/google-beta"'],
+    ['terraform', 'localhost:8443/acme/widget', 'source  = "localhost:8443/acme/widget"'],
+    ['hex', 'phoenix_live_view', '{:phoenix_live_view, "~> 1.2.3", repo: :dependably}'],
   ];
 
   for (const [eco, pkg, expectedSubstring] of legitCases) {

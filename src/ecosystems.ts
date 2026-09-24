@@ -61,7 +61,19 @@ export const FALLBACK_LOOKUP_ECOSYSTEMS = ['npm', 'pypi', 'nuget', 'maven', 'gol
  * what the server serves. Adding a name here without a matching command arm
  * would return an empty fence.
  */
-export const FALLBACK_SETUP_ECOSYSTEMS = ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo'] as const;
+export const FALLBACK_SETUP_ECOSYSTEMS = [
+  'npm',
+  'pypi',
+  'nuget',
+  'maven',
+  'rpm',
+  'oci',
+  'golang',
+  'cargo',
+  'apk',
+  'terraform',
+  'hex',
+] as const;
 
 /** The three ecosystem vocabularies a running server offers, one per plane. */
 export type EcosystemPlanes = {

@@ -22,7 +22,7 @@ const LOCAL_READ_ANNOTATIONS = {
  * npm installs a bare URL or a `host:path` git shorthand instead of resolving
  * against `--registry`, pip and dnf do the same for a URL, and a `../` segment
  * reads as a local path. So `package` is validated per ecosystem below, not
- * against one pattern loose enough to fit all eight. `version` and
+ * against one pattern loose enough to fit them all. `version` and
  * `artifact_path` are not ecosystem-specific and keep one pattern each.
  * A leading `-` is rejected everywhere so a value can never be read as a flag
  * by the command it is interpolated into.
@@ -71,6 +71,26 @@ const NAME_RULES: Record<SetupEcosystem, NameRule> = {
     test: (n) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(n),
     message: 'Cargo crate names are letters, digits, _ - only.',
   },
+  apk: {
+    test: (n) => /^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(n),
+    message: 'apk package names are letters, digits, . _ + - only; no / or =, and the version comes from version.',
+  },
+  terraform: {
+    // A provider source address, [hostname/]namespace/type. It is interpolated
+    // into an HCL string and its last segment becomes an HCL attribute name, so
+    // nothing outside these characters may reach either position.
+    // Namespace and type follow Terraform's own part grammar: letters, digits
+    // and dashes, not starting or ending with a dash.
+    test: (n) =>
+      /^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]+)?\/)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/.test(n),
+    message: 'Terraform provider sources are [hostname/]namespace/type (e.g. registry.terraform.io/hashicorp/aws): letters, digits and - only, no scheme.',
+  },
+  hex: {
+    // The name becomes an Elixir atom literal (`{:name, …}`), so anything
+    // beyond a plain lowercase atom would let it add options to the dependency.
+    test: (n) => /^[a-z][a-z0-9_]*$/.test(n),
+    message: 'Hex package names are lowercase letters, digits and _ only, starting with a letter.',
+  },
 };
 
 /**
@@ -78,7 +98,7 @@ const NAME_RULES: Record<SetupEcosystem, NameRule> = {
  * {@link NAME_RULES}'s own keys rather than hand-listed again, so this set
  * cannot drift from the switches in {@link installCommand} and
  * {@link publishCommand}. `planes.setup` is intersected against this set: an
- * instance may advertise an ecosystem (e.g. `hex`) that no builder here knows,
+ * instance may advertise an ecosystem that no builder here knows,
  * and that ecosystem is withheld rather than offered with no command to give.
  */
 const BUILDER_ECOSYSTEMS = new Set<string>(Object.keys(NAME_RULES));
@@ -188,6 +208,11 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
   return tools;
 }
 
+/** Informational, not an error: a proxy-only ecosystem simply has no publish command to return. */
+function proxyOnly(text: string): ToolResult {
+  return { content: [{ type: 'text', text }] };
+}
+
 function stripScheme(url: string): string {
   return url.replace(/^https?:\/\//, '');
 }
@@ -212,8 +237,8 @@ function hostOnly(base: string): string {
  * Build the install command for one ecosystem.
  *
  * Lifted out of the tool handler so the handler is a single delegation. The
- * branching is inherent — eight ecosystems, each with its own flag spelling and
- * version syntax — and reads better as one table-like switch than as a map of
+ * branching is inherent — each ecosystem has its own flag spelling and version
+ * syntax — and reads better as one table-like switch than as a map of
  * closures that would hide the shape of each command.
  */
 /**
@@ -286,6 +311,34 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
         'bash',
         `# In ~/.cargo/config.toml:\n#   [registries.dependably]\n#   index = "sparse+${base}/cargo/"\ncargo add ${shq(pinned(pkg, '@', ver))} --registry dependably`,
       );
+    case 'apk':
+      // The repository line needs an Alpine release and repo (v3.22/main) that
+      // only the user knows, so it is described rather than written out.
+      return fenced(
+        'bash',
+        `# Add ${base}/apk/<release>/<repo> lines (e.g. v3.22/main) to /etc/apk/repositories,\n# with user:<token>@ in the URL, then:\napk update\napk add ${shq(pinned(pkg, '=', ver))}`,
+      );
+    case 'terraform': {
+      // Not a shell command: providers are declared in configuration and
+      // fetched through a network mirror set once in the CLI config.
+      const localName = pkg.split('/').pop();
+      const version = ver ? `\n      version = "${ver}"` : '';
+      const mirror = `${new URL(base).protocol}//user:<token>@${stripScheme(base)}/terraform/`;
+      const note = base.startsWith('http://')
+        ? '\n# Note: Terraform refuses an http:// network mirror; serve this instance over HTTPS'
+        : '';
+      return fenced(
+        'hcl',
+        `# In ~/.terraformrc: provider_installation { network_mirror { url = "${mirror}" } }${note}\n# Then declare the provider and run terraform init:\nterraform {\n  required_providers {\n    ${localName} = {\n      source  = "${pkg}"${version}\n    }\n  }\n}`,
+      );
+    }
+    case 'hex':
+      // The dependency names the repository, not a URL: the registry signs its
+      // index under the name "dependably" and Hex refuses any other.
+      return fenced(
+        'elixir',
+        `# Register the repository once:\n#   curl -sSf ${base}/hex/public_key -o dependably-hex.pem\n#   mix hex.repo add dependably ${base}/hex --public-key dependably-hex.pem --auth-key <token>\n# Then add to deps in mix.exs and run mix deps.get:\n{:${pkg}, "${ver ? `~> ${ver}` : '>= 0.0.0'}", repo: :dependably}`,
+      );
     default:
       throw new Error(`Unsupported ecosystem: ${ecosystem}`);
   }
@@ -330,19 +383,20 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       );
     }
     case 'golang':
-      // Informational, not an error: there is simply no publish command to return.
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.',
-          },
-        ],
-      };
+      return proxyOnly('Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.');
     case 'cargo':
       return fenced(
         'bash',
         `# Requires [registries.dependably] in ~/.cargo/config.toml.\n# Run from the crate directory (${p}):\ncargo publish --registry dependably`,
+      );
+    case 'apk':
+      return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');
+    case 'terraform':
+      return proxyOnly('Terraform is proxy-only — there is no hosted publish/upload endpoint. Providers are fetched from their upstream registry on first request.');
+    case 'hex':
+      return fenced(
+        'bash',
+        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n# Run from the package directory (${p}):\nHEX_API_URL=${base}/hex/api HEX_API_KEY=<token> mix hex.publish`,
       );
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
