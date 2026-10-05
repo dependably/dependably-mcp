@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`check_dependencies` no longer calls a vulnerable dependency clean because the registry never
+  served it.** The registry's vulnerability report lists only versions it has uploaded or
+  proxied, so `lodash@4.17.20`, which has two HIGH advisories, came back `clean: true` on an
+  instance that had only cached other lodash versions. Every dependency is now checked: npm in
+  one request through the instance's bulk advisory endpoint (the one `npm audit` uses), and other
+  ecosystems through `/api/v1/lookup`, up to 100 dependencies per call. A new `coverage` block
+  reports how many were checked live and lists any that could not be checked (`unverified`), and
+  `clean` is never true while that list is non-empty.
+- **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
+  record, and the summary counted both, roughly doubling the totals and inflating "unknown"
+  severity. Records that name each other, or the same CVE, as an alias are folded into one
+  advisory, which lists the folded ids in `aliases` and keeps the highest score and fix.
+
 ### Added
 
 - **`get_install_command` covers apk, Terraform and Hex.** The server has served all three for

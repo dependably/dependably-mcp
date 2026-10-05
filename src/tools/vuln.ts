@@ -8,6 +8,7 @@ import {
   buildFindings,
   fetchRemediations,
   fetchReport,
+  liveCoverage,
   matchPackages,
   summarize,
   summarizeRemediation,
@@ -52,7 +53,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
     {
       title: "Check a project's dependencies",
       description:
-        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Also answers \"is this clean now?\" after a fix: `clean` is true when nothing matched and the scan was not truncated. Requires read:packages capability.",
+        "Scope the org-wide vulnerability report to ONE project's dependency list and return only what affects it, each package annotated with the version to bump to. Prefer this over list_vulnerabilities whenever the question is about a specific project or lockfile — read the lockfile yourself and pass the resolved dependencies as `packages`. For an npm package-lock.json (v2/v3) that is every entry of its `packages` map: `{ name, version, dev }`. Every dependency is checked: the registry's report covers versions it has served, and the rest are checked against live OSV data through the instance (one bulk request for npm; up to 100 per-package lookups for other ecosystems). Also answers \"is this clean now?\" after a fix: `clean` is true only when nothing matched, the scan was not truncated, and no dependency is left in `unverified`. A dependency in `unverified` was NOT checked: say so, never call it clean. Requires read:packages capability.",
       annotations: READ_ANNOTATIONS,
       inputSchema: z.object({
         ecosystem: ecosystem.default('npm').describe('Ecosystem of the dependency list. Default npm.'),
@@ -79,7 +80,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
     async (args) =>
       run(async () => {
         const { items, total, truncated } = await fetchReport(client, { ecosystem: args.ecosystem });
-        const { hits, devOf } = matchPackages(items, args.packages, args.ecosystem);
+        const { hits: reportHits, devOf } = matchPackages(items, args.packages, args.ecosystem);
+        const live = await liveCoverage(client, args.ecosystem, args.packages, reportHits, planes.lookup);
+        const hits = [...reportHits, ...live.hits];
 
         const remediations = await fetchRemediations(
           client,
@@ -94,9 +97,19 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
           // read could contain the very match that would have made it dirty,
           // so a truncated scan's `clean` field is always false, never a
           // premature true.
-          clean: !truncated && findings.length === 0,
+          clean: !truncated && findings.length === 0 && live.unverified.length === 0,
           summary: summarize(findings, args.packages.length),
           reportSize: total,
+          coverage: {
+            liveChecked: live.checked,
+            unverified: live.unverified.length,
+            ...(live.unverified.length
+              ? {
+                  unverifiedPackages: live.unverified.slice(0, UNVERIFIED_LISTED),
+                  note: `${live.unverified.length} dependenc${live.unverified.length === 1 ? 'y was' : 'ies were'} not checked against any advisory source; \`clean\` cannot be true until they are.`,
+                }
+              : {}),
+          },
           ...(truncated
             ? {
                 truncated: true,
@@ -180,6 +193,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
 
   return tools;
 }
+
+/** How many unverified dependencies are named in the result; the count covers the rest. */
+const UNVERIFIED_LISTED = 50;
 
 /** True when every batched element carries an `error`, i.e. nothing in the batch succeeded. */
 function allFailed(results: readonly Record<string, unknown>[]): boolean {

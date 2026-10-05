@@ -1,4 +1,4 @@
-import { deepStrictEqual, ok, strictEqual } from 'node:assert';
+import { deepStrictEqual, match, ok, strictEqual } from 'node:assert';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -338,6 +338,7 @@ describe('check_dependencies', () => {
     return stubFetch((url) => {
       const u = new URL(url);
       if (u.pathname === '/api/v1/vuln-report') return u.searchParams.get('page') === '1' ? report : { items: [], total: 3 };
+      if (u.pathname === '/npm/-/npm/v1/security/advisories/bulk') return {};
       const id = u.pathname.split('/').pop();
       return { remediation: { fixedVersion: fixedBy[id], cweIds: ['CWE-1'], entries: [{ owaspId: 'A01:2025', skillId: 'fix-x' }] } };
     });
@@ -489,6 +490,185 @@ describe('check_dependencies', () => {
       }),
     );
     strictEqual(body.findings[0].bumpTo, '1.2.3-1');
+  });
+});
+
+describe('check_dependencies live coverage', () => {
+  const emptyReport = { items: [], total: 0 };
+
+  /** Like stubFetch, but a route may answer `{ status, body }` to send a non-200. */
+  function stubRoutes(routes) {
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      const u = new URL(String(url));
+      calls.push({ path: u.pathname, query: u.searchParams, method: init?.method ?? 'GET', body: init?.body });
+      const handler = routes[u.pathname] ?? routes['*'];
+      const out = handler ? handler(u, init) : {};
+      const status = out && typeof out === 'object' && 'status' in out ? out.status : 200;
+      const body = out && typeof out === 'object' && 'status' in out ? out.body : out;
+      return new Response(JSON.stringify(body ?? {}), { status, headers: { 'content-type': 'application/json' } });
+    };
+    return calls;
+  }
+
+  it('finds an advisory on an npm version the registry has never served (the lodash false clean)', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({
+        lodash: [{ id: 'GHSA-35jh-r3h4-6jhm', title: 'Command Injection in lodash', severity: 'high', vulnerable_versions: '4.17.20', cvss: { score: 7.2 } }],
+      }),
+      '*': () => ({ status: 404, body: { title: 'Not Found' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.findings[0].package, 'lodash');
+    strictEqual(body.findings[0].advisories[0].osvId, 'GHSA-35jh-r3h4-6jhm');
+    strictEqual(body.findings[0].advisories[0].severity, 'HIGH');
+    strictEqual(body.findings[0].advisories[0].cvss, 7.2);
+    strictEqual(body.coverage.liveChecked, 1);
+    strictEqual(body.coverage.unverified, 0);
+    const bulk = calls.find((c) => c.path === '/npm/-/npm/v1/security/advisories/bulk');
+    strictEqual(bulk.method, 'POST');
+    deepStrictEqual(JSON.parse(bulk.body), { lodash: ['4.17.20'] });
+  });
+
+  it('only attributes an npm advisory to the requested versions it names', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({
+        a: [{ id: 'GHSA-1', severity: 'moderate', vulnerable_versions: '1.0.0' }],
+        b: [{ id: 'GHSA-2', severity: 'info', vulnerable_versions: '*' }],
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        packages: [
+          { name: 'a', version: '1.0.0' },
+          { name: 'a', version: '2.0.0' },
+          { name: 'b', version: '3.0.0' },
+        ],
+      }),
+    );
+    deepStrictEqual(
+      body.findings.map((f) => `${f.package}@${f.installed}:${f.advisories.map((a) => `${a.osvId}/${a.severity}`).join(',')}`).sort(),
+      ['a@1.0.0:GHSA-1/MEDIUM', 'b@3.0.0:GHSA-2/UNKNOWN'],
+    );
+  });
+
+  it('is never clean when the npm advisory check cannot vouch for the tree', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ status: 503, body: { title: 'Service Unavailable' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'left-pad', version: '1.3.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.coverage.unverifiedPackages[0].name, 'left-pad');
+    match(body.coverage.unverifiedPackages[0].reason, /live npm advisory check failed: 503/);
+    match(body.coverage.note, /1 dependency was not checked/);
+  });
+
+  it('treats a non-object npm advisory answer (a proxy page, an array) as unverified, not clean', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => [] });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    match(body.coverage.unverifiedPackages[0].reason, /unexpected body/);
+  });
+
+  it('looks up, one by one, the non-npm dependencies the report has nothing on', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => ({ items: [{ packageName: 'django', version: '5.0.6', osvId: 'GHSA-d', severity: 'HIGH' }], total: 1 }),
+      '/api/v1/lookup': (u) => {
+        const name = u.searchParams.get('name');
+        if (name === 'requests') {
+          return { found: true, vulnerabilities: { available: true, scored: [{ id: 'GHSA-r', severity: 'MEDIUM', cvssScore: 5.3, epss: 0.01, isKev: false, summary: 'netrc leak' }], unscored: [] } };
+        }
+        if (name === 'ghost') return { found: false, vulnerabilities: { available: true, scored: [], unscored: [] } };
+        if (name === 'offline') return { found: true, vulnerabilities: { available: false, scored: [], unscored: [] } };
+        if (name === 'broken') return { status: 503, body: { title: 'upstream down' } };
+        return { found: true, vulnerabilities: { available: true, scored: [], unscored: [] } };
+      },
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'pypi',
+        packages: [
+          { name: 'django', version: '5.0.6' },
+          { name: 'requests', version: '2.32.3' },
+          { name: 'clean-pkg', version: '1.0' },
+          { name: 'ghost', version: '1.0' },
+          { name: 'offline', version: '1.0' },
+          { name: 'broken', version: '1.0' },
+        ],
+      }),
+    );
+    const looked = calls.filter((c) => c.path === '/api/v1/lookup').map((c) => c.query.get('name')).sort();
+    deepStrictEqual(looked, ['broken', 'clean-pkg', 'ghost', 'offline', 'requests'], 'django was in the report, so it is not looked up again');
+    deepStrictEqual(body.findings.map((f) => f.package).sort(), ['django', 'requests']);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 2);
+    deepStrictEqual(
+      body.coverage.unverifiedPackages.map((u) => u.name).sort(),
+      ['broken', 'ghost', 'offline'],
+    );
+  });
+
+  it('caps the per-package lookups and reports the rest as unverified', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const packages = Array.from({ length: 105 }, (_, i) => ({ name: `p${i}`, version: '1.0' }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages }));
+    strictEqual(calls.filter((c) => c.path === '/api/v1/lookup').length, 100);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 100);
+    strictEqual(body.coverage.unverified, 5);
+    match(body.coverage.unverifiedPackages[0].reason, /100-dependency live-check limit/);
+  });
+
+  it('leaves dependencies of an ecosystem with no live source unverified, never clean', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'rpm', packages: [{ name: 'bash', version: '5.2.26-3.fc40' }] }));
+    strictEqual(body.clean, false);
+    match(body.coverage.unverifiedPackages[0].reason, /no live advisory source for rpm/);
+  });
+
+  it('is clean only when every dependency was checked and nothing matched', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'cargo', packages: [{ name: 'serde', version: '1.0.200' }] }));
+    strictEqual(body.clean, true);
+    deepStrictEqual(body.coverage, { liveChecked: 1, unverified: 0 });
+  });
+
+  it('folds a PYSEC record into its GHSA alias, so one flaw counts once', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-f6f8', severity: 'HIGH', cvssScore: 8.7, epssScore: 0.2, summary: 'DoS' },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-2024-59', severity: 'UNKNOWN', cvssScore: null, epssScore: 0.28, summary: '' },
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-other', severity: 'LOW', summary: 'unrelated' },
+        ],
+        total: 3,
+      }),
+      '/api/v1/vulnerabilities/GHSA-f6f8': () => ({ aliases: ['CVE-2024-1', 'PYSEC-2024-59'], remediation: { fixedVersion: '5.0.7' } }),
+      '/api/v1/vulnerabilities/PYSEC-2024-59': () => ({ aliases: ['CVE-2024-1', 'GHSA-f6f8'], remediation: { fixedVersion: '5.0.8' } }),
+      '/api/v1/vulnerabilities/GHSA-other': () => ({ aliases: ['CVE-2024-2'], remediation: { fixedVersion: '5.0.7' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 2);
+    deepStrictEqual(body.summary.bySeverity, { critical: 0, high: 1, medium: 0, low: 1, unknown: 0 });
+    const kept = body.findings[0].advisories[0];
+    strictEqual(kept.osvId, 'GHSA-f6f8');
+    deepStrictEqual(kept.aliases, ['PYSEC-2024-59']);
+    strictEqual(kept.epss, 0.28, 'the folded record keeps the higher score');
+    strictEqual(kept.fixedVersion, '5.0.8', 'and the higher fix');
+    strictEqual(body.findings[0].advisories[1].aliases, undefined);
   });
 });
 

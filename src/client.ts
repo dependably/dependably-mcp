@@ -40,15 +40,25 @@ export class DependablyClient {
     return this.request('GET', path, query, opts?.timeoutMs);
   }
 
-  private async request(method: string, path: string, query?: Query, timeoutMs?: number): Promise<unknown> {
+  /**
+   * A JSON POST, for the one query endpoint that takes its question as a body
+   * (npm's bulk advisory lookup). It reads; it writes nothing on the instance.
+   */
+  post(path: string, body: unknown, opts?: { timeoutMs?: number }): Promise<unknown> {
+    return this.request('POST', path, undefined, opts?.timeoutMs, body);
+  }
+
+  private async request(method: string, path: string, query?: Query, timeoutMs?: number, body?: unknown): Promise<unknown> {
     const url = this.buildUrl(path, query);
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.cfg.token}`,
       Accept: 'application/json, application/problem+json',
     };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
     const init: RequestInit = {
       method,
       headers,
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       // The Dependably API never legitimately 3xx's a client; a redirect means
       // DEPENDABLY_BASE_URL points somewhere other than the instance itself
       // (e.g. an http:// URL bounced to https://, or a load balancer front
