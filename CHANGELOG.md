@@ -44,6 +44,11 @@ All notable changes to this project are documented here. The format follows
 - **Go install commands no longer fall back around the proxy.** `GOPROXY` dropped `,direct`, so a
   module the proxy refuses is not fetched straight from its origin. The `GONOSUMDB` advice is
   gone: it takes module paths, not a host, and the checksum database is already proxied.
+- **`get_vulnerability` is compact by default.** The raw OSV record lists every affected version
+  one by one (over 400 for one Django advisory), thousands of tokens that the ranges beside them
+  already express. Compact output gives each range as `introduced`/`fixed` versions plus a
+  `versionCount`, and lists references as URLs. Severity, CWE, remediation and threat-intel
+  fields are untouched. `verbosity: "full"` returns the raw record.
 
 ## [1.1.0] - 2026-09-23
 

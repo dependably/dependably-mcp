@@ -731,3 +731,55 @@ export async function liveCoverage(
   const fresh = live.hits.filter((h) => !seen.has(`${keyOf(h.packageName, h.version)}#${h.osvId}`));
   return { ...live, hits: fresh };
 }
+
+/**
+ * Shape an advisory detail (`GET /api/v1/vulnerabilities/{osvId}`) for reading.
+ *
+ * The raw OSV record lists every affected version as a string — over four
+ * hundred for one Django advisory — which costs thousands of tokens and says no
+ * more than the ranges beside it. Compact keeps the ranges as
+ * `introduced`/`fixed`/`lastAffected` pairs, the references as URLs, and every
+ * field that carries a judgement (severity, CWE, remediation, KEV, EPSS).
+ */
+export function compactVulnerability(detail: Record<string, unknown>): Record<string, unknown> {
+  const { affected, references, databaseSpecific, schemaVersion: _schema, credits: _credits, related: _related, ...rest } = detail;
+  const out: Record<string, unknown> = { ...rest };
+
+  if (Array.isArray(affected)) {
+    out.affected = (affected as Record<string, unknown>[]).map((a) => {
+      const pkg = (a?.package ?? {}) as Record<string, unknown>;
+      const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
+      return {
+        package: { ecosystem: pkg.ecosystem, name: pkg.name },
+        ranges: ranges.map((r) => ({ type: r?.type, ...collapseEvents(r?.events) })),
+        versionCount: Array.isArray(a?.versions) ? a.versions.length : 0,
+      };
+    });
+  }
+  if (Array.isArray(references)) {
+    out.references = (references as Record<string, unknown>[])
+      .map((r) => r?.url)
+      .filter((u): u is string => typeof u === 'string');
+  }
+  if (databaseSpecific && typeof databaseSpecific === 'object') {
+    const ds = databaseSpecific as Record<string, unknown>;
+    const kept = Object.fromEntries(
+      Object.entries({ severity: ds.severity, cwe_ids: ds.cwe_ids }).filter(([, v]) => v !== undefined),
+    );
+    if (Object.keys(kept).length) out.databaseSpecific = kept;
+  }
+  return out;
+}
+
+/** OSV range events (`[{introduced}, {fixed}]`, null-padded) folded into one introduced/fixed list. */
+function collapseEvents(events: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!Array.isArray(events)) return out;
+  for (const e of events as Record<string, unknown>[]) {
+    for (const key of ['introduced', 'fixed', 'lastAffected', 'limit']) {
+      const v = e?.[key];
+      if (typeof v === 'string' && v.length > 0) (out[key] ??= []).push(v);
+    }
+  }
+  return out;
+}

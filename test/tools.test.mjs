@@ -146,6 +146,43 @@ describe('read tools', () => {
     strictEqual(u.searchParams.get('q'), 'ab');
   });
 
+  it('get_vulnerability is compact by default: ranges, not every affected version', async () => {
+    const detail = {
+      id: 'GHSA-frmv-pr5f-9mcr',
+      schemaVersion: '1.9.0',
+      summary: 'Django SQL injection',
+      aliases: ['CVE-2025-64459', 'PYSEC-2025-108'],
+      references: [{ type: 'ADVISORY', url: 'https://nvd.nist.gov/vuln/detail/CVE-2025-64459' }],
+      severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N' }],
+      affected: [
+        {
+          package: { ecosystem: 'PyPI', name: 'django', purl: 'pkg:pypi/django' },
+          ranges: [{ type: 'ECOSYSTEM', repo: null, events: [{ introduced: '5.0a1', fixed: null }, { introduced: null, fixed: '5.1.14' }] }],
+          versions: Array.from({ length: 400 }, (_, i) => `5.0.${i}`),
+          databaseSpecific: { source: 'x' },
+        },
+      ],
+      databaseSpecific: { severity: 'CRITICAL', cwe_ids: ['CWE-89'], github_reviewed: true },
+      remediation: { fixedVersion: '5.1.14', upgradeSkillId: 'fix-vulnerable-dependency' },
+      threatIntel: { isKev: false, epssScore: 0.19 },
+    };
+    stubFetch(() => detail);
+    const compact = payload(await call(base, 'get_vulnerability', { osvId: 'GHSA-frmv-pr5f-9mcr' }));
+    deepStrictEqual(compact.affected, [
+      { package: { ecosystem: 'PyPI', name: 'django' }, ranges: [{ type: 'ECOSYSTEM', introduced: ['5.0a1'], fixed: ['5.1.14'] }], versionCount: 400 },
+    ]);
+    deepStrictEqual(compact.references, ['https://nvd.nist.gov/vuln/detail/CVE-2025-64459']);
+    deepStrictEqual(compact.databaseSpecific, { severity: 'CRITICAL', cwe_ids: ['CWE-89'] });
+    deepStrictEqual(compact.remediation, detail.remediation);
+    deepStrictEqual(compact.threatIntel, detail.threatIntel);
+    deepStrictEqual(compact.aliases, detail.aliases);
+    strictEqual(compact.schemaVersion, undefined);
+
+    stubFetch(() => detail);
+    const full = payload(await call(base, 'get_vulnerability', { osvId: 'GHSA-frmv-pr5f-9mcr', verbosity: 'full' }));
+    deepStrictEqual(full, detail);
+  });
+
   it('get_vulnerability passes the installed version through', async () => {
     const calls = stubFetch();
     await call(base, 'get_vulnerability', { osvId: 'GHSA-a/b', version: '1.2.3' });
