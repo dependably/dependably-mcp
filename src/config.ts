@@ -6,7 +6,7 @@
  * login: a PAT reaches every endpoint that opts into the `ApiToken` auth scheme —
  * since Dependably v0.3.0 that includes the read-only management surface
  * (packages, search, vulnerabilities, activity, license policy, lookup) —
- * plus the anonymous health and readiness probes. 15 read-only tools, every one
+ * plus the anonymous health and readiness probes. Every tool is read-only and
  * reachable with a Pull token (`read:packages`): nothing in the surface writes,
  * deletes, or reads a local file.
  *

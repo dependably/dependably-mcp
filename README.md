@@ -56,8 +56,8 @@ Install the extension bundle rather than editing JSON. Download
 beside it. Then double-click it, or drag it onto the Extensions pane in Settings.
 
 The install dialog asks for your Dependably URL and a personal access token, and stores the
-token in your operating system's keychain. Two optional fields cover the request timeout and a
-private certificate authority bundle.
+token in your operating system's keychain. One optional field takes a private certificate
+authority bundle, for an instance whose certificate a public CA did not issue.
 
 To keep a hand-written config instead, edit
 `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, or the equivalent on
@@ -73,8 +73,29 @@ Restart your MCP client, then ask it to run these three, in order:
    preset is granted and working.
 3. `get_license_policy` confirms the same token reaches org policy, not just inventory.
 
-Then ask a real question, such as *which of our packages have critical vulnerabilities?* Claude
-answers that one with `list_vulnerabilities`.
+Then ask a real question. A few to start with are under [Example prompts](#example-prompts).
+
+## Example prompts
+
+Each of these works with a Pull token. The tool Claude reaches for is in brackets.
+
+- *Which of our packages have critical vulnerabilities, and are any of them known to be exploited
+  (CISA KEV)?* (`list_vulnerabilities`)
+- *Here's my `package-lock.json`. Is anything in it vulnerable, and what should I bump each
+  package to?* (`check_dependencies`, then `get_remediation` for a fix on your release line.)
+  Claude reads the lockfile itself and passes the resolved versions; the server reads no files.
+- *Before I add `log4j-core` 2.14.1 to this service, would our policy allow it?*
+  (`lookup_package`, which checks the version against live advisory data and your org's policy
+  without pulling it into the registry)
+- *What's our policy for third-party packages?* (`get_policies`: licence rules, plus every
+  vulnerability, release-age, install-script and signature control, with whether each warns or
+  blocks)
+- *Which of our projects are failing policy right now, and what's wrong with the latest build of
+  the worst one?* (`list_projects`, then `get_project_version`)
+- *Explain GHSA-frmv-pr5f-9mcr and how to fix it in our Django 5.0 app.* (`get_vulnerability`,
+  then `get_remediation_skill` for the matching how-to-fix guide)
+- *Give me the command to install `requests` 2.32.4 through our registry.*
+  (`get_install_command`; the command comes back as text for you to run)
 
 ## Configure
 
@@ -103,8 +124,8 @@ Every tool is read-only with a user-generated token with **Pull** permissions.
 | `get_package` | One package: versions, SPDX licences, vulnerability links. |
 | `search_packages` | Quick name search across the registry. |
 | `list_vulnerabilities` | Org-wide report of every affected package. |
-| `get_vulnerability` | Full advisory detail, including remediation guidance. |
-| `check_dependencies` | Scopes that report to one project's dependency list and names the version to bump to. |
+| `get_vulnerability` | Advisory detail: affected ranges, severity, KEV and EPSS, and remediation guidance. |
+| `check_dependencies` | Checks one project's dependency list and names the version to bump to. Versions the registry has never served are checked against live advisory data, and anything that could not be checked is listed as unverified rather than reported clean. |
 | `get_remediation` | Fixed versions for a batch of advisories at once, without the prose. |
 | `list_projects` | Projects and folders, paginated and searchable by name. |
 | `get_project` | One project or folder: versions, ancestors, and a folder's children and subtree rollup. |

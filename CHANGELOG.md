@@ -53,6 +53,14 @@ All notable changes to this project are documented here. The format follows
   `get_policies` glossary say that `blockedReason` names a `controls` key, and that older servers
   spell it in PascalCase (`VulnScore` for `vuln_score`).
 
+### Documentation
+
+- **The README has example prompts**, one per kind of question the tools answer, each naming the
+  tool Claude uses.
+- **The README no longer mentions a request-timeout field in the Claude Desktop install dialog.**
+  That field was removed; `DEPENDABLY_TIMEOUT_MS` still applies where you set environment
+  variables yourself.
+
 ## [1.1.0] - 2026-09-23
 
 ### Added
