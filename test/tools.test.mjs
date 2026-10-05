@@ -1,4 +1,4 @@
-import { deepStrictEqual, ok, strictEqual } from 'node:assert';
+import { deepStrictEqual, match, ok, strictEqual } from 'node:assert';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -144,6 +144,43 @@ describe('read tools', () => {
     const u = new URL(calls[0].url);
     strictEqual(u.pathname, '/api/v1/search');
     strictEqual(u.searchParams.get('q'), 'ab');
+  });
+
+  it('get_vulnerability is compact by default: ranges, not every affected version', async () => {
+    const detail = {
+      id: 'GHSA-frmv-pr5f-9mcr',
+      schemaVersion: '1.9.0',
+      summary: 'Django SQL injection',
+      aliases: ['CVE-2025-64459', 'PYSEC-2025-108'],
+      references: [{ type: 'ADVISORY', url: 'https://nvd.nist.gov/vuln/detail/CVE-2025-64459' }],
+      severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N' }],
+      affected: [
+        {
+          package: { ecosystem: 'PyPI', name: 'django', purl: 'pkg:pypi/django' },
+          ranges: [{ type: 'ECOSYSTEM', repo: null, events: [{ introduced: '5.0a1', fixed: null }, { introduced: null, fixed: '5.1.14' }] }],
+          versions: Array.from({ length: 400 }, (_, i) => `5.0.${i}`),
+          databaseSpecific: { source: 'x' },
+        },
+      ],
+      databaseSpecific: { severity: 'CRITICAL', cwe_ids: ['CWE-89'], github_reviewed: true },
+      remediation: { fixedVersion: '5.1.14', upgradeSkillId: 'fix-vulnerable-dependency' },
+      threatIntel: { isKev: false, epssScore: 0.19 },
+    };
+    stubFetch(() => detail);
+    const compact = payload(await call(base, 'get_vulnerability', { osvId: 'GHSA-frmv-pr5f-9mcr' }));
+    deepStrictEqual(compact.affected, [
+      { package: { ecosystem: 'PyPI', name: 'django' }, ranges: [{ type: 'ECOSYSTEM', introduced: ['5.0a1'], fixed: ['5.1.14'] }], versionCount: 400 },
+    ]);
+    deepStrictEqual(compact.references, ['https://nvd.nist.gov/vuln/detail/CVE-2025-64459']);
+    deepStrictEqual(compact.databaseSpecific, { severity: 'CRITICAL', cwe_ids: ['CWE-89'] });
+    deepStrictEqual(compact.remediation, detail.remediation);
+    deepStrictEqual(compact.threatIntel, detail.threatIntel);
+    deepStrictEqual(compact.aliases, detail.aliases);
+    strictEqual(compact.schemaVersion, undefined);
+
+    stubFetch(() => detail);
+    const full = payload(await call(base, 'get_vulnerability', { osvId: 'GHSA-frmv-pr5f-9mcr', verbosity: 'full' }));
+    deepStrictEqual(full, detail);
   });
 
   it('get_vulnerability passes the installed version through', async () => {
@@ -338,6 +375,7 @@ describe('check_dependencies', () => {
     return stubFetch((url) => {
       const u = new URL(url);
       if (u.pathname === '/api/v1/vuln-report') return u.searchParams.get('page') === '1' ? report : { items: [], total: 3 };
+      if (u.pathname === '/npm/-/npm/v1/security/advisories/bulk') return {};
       const id = u.pathname.split('/').pop();
       return { remediation: { fixedVersion: fixedBy[id], cweIds: ['CWE-1'], entries: [{ owaspId: 'A01:2025', skillId: 'fix-x' }] } };
     });
@@ -489,6 +527,310 @@ describe('check_dependencies', () => {
       }),
     );
     strictEqual(body.findings[0].bumpTo, '1.2.3-1');
+  });
+});
+
+describe('check_dependencies live coverage', () => {
+  const emptyReport = { items: [], total: 0 };
+
+  /** Like stubFetch, but a route may answer `{ status, body }` to send a non-200. */
+  function stubRoutes(routes) {
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      const u = new URL(String(url));
+      calls.push({ path: u.pathname, query: u.searchParams, method: init?.method ?? 'GET', body: init?.body });
+      const handler = routes[u.pathname] ?? routes['*'];
+      const out = handler ? handler(u, init) : {};
+      const status = out && typeof out === 'object' && 'status' in out ? out.status : 200;
+      const body = out && typeof out === 'object' && 'status' in out ? out.body : out;
+      return new Response(JSON.stringify(body ?? {}), { status, headers: { 'content-type': 'application/json' } });
+    };
+    return calls;
+  }
+
+  it('finds an advisory on an npm version the registry has never served (the lodash false clean)', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({
+        // The server renders OSV intervals as an npm range, not the requested version.
+        lodash: [{ id: 'GHSA-35jh-r3h4-6jhm', title: 'Command Injection in lodash', severity: 'high', vulnerable_versions: '<4.17.21', cvss: { score: 7.2 } }],
+      }),
+      '*': () => ({ status: 404, body: { title: 'Not Found' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.findings[0].package, 'lodash');
+    strictEqual(body.findings[0].advisories[0].osvId, 'GHSA-35jh-r3h4-6jhm');
+    strictEqual(body.findings[0].advisories[0].severity, 'HIGH');
+    strictEqual(body.findings[0].advisories[0].cvss, 7.2);
+    strictEqual(body.coverage.liveChecked, 1);
+    strictEqual(body.coverage.unverified, 0);
+    const bulk = calls.find((c) => c.path === '/npm/-/npm/v1/security/advisories/bulk');
+    strictEqual(bulk.method, 'POST');
+    deepStrictEqual(JSON.parse(bulk.body), { lodash: ['4.17.20'] });
+  });
+
+  it('asks about one version per name per request, so a listed advisory applies to that version', async () => {
+    // The server lists an advisory under a name only if it affects a requested
+    // version of it; with two versions in one request the client could not tell
+    // which one. Each request therefore carries one version per name.
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': (u, init) => {
+        const asked = JSON.parse(init.body);
+        const out = {};
+        if (asked.a?.[0] === '1.0.0') out.a = [{ id: 'GHSA-1', severity: 'moderate', vulnerable_versions: '<1.5.0' }];
+        if (asked.b) out.b = [{ id: 'GHSA-2', severity: 'info', vulnerable_versions: '>=3.0.0 <3.1.0' }];
+        return out;
+      },
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        packages: [
+          { name: 'a', version: '1.0.0' },
+          { name: 'a', version: '2.0.0' },
+          { name: 'b', version: '3.0.0' },
+        ],
+      }),
+    );
+    deepStrictEqual(
+      calls.filter((c) => c.path === '/npm/-/npm/v1/security/advisories/bulk').map((c) => JSON.parse(c.body)),
+      [{ a: ['1.0.0'], b: ['3.0.0'] }, { a: ['2.0.0'] }],
+    );
+    deepStrictEqual(
+      body.findings.map((f) => `${f.package}@${f.installed}:${f.advisories.map((a) => `${a.osvId}/${a.severity}`).join(',')}`).sort(),
+      ['a@1.0.0:GHSA-1/MEDIUM', 'b@3.0.0:GHSA-2/UNKNOWN'],
+    );
+    strictEqual(body.clean, false);
+    deepStrictEqual(body.coverage, { liveChecked: 3, unverified: 0 });
+  });
+
+  it('leaves only the failed round unverified when one of several npm requests fails', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': (u, init) =>
+        JSON.parse(init.body).a?.[0] === '2.0.0' ? { status: 503, body: {} } : {},
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { packages: [{ name: 'a', version: '1.0.0' }, { name: 'a', version: '2.0.0' }] }),
+    );
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 1);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => `${u.name}@${u.version}`), ['a@2.0.0']);
+  });
+
+  it('is never clean when the npm advisory check cannot vouch for the tree', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ status: 503, body: { title: 'Service Unavailable' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'left-pad', version: '1.3.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.coverage.unverifiedPackages[0].name, 'left-pad');
+    match(body.coverage.unverifiedPackages[0].reason, /live npm advisory check failed: 503/);
+    match(body.coverage.note, /1 dependency was not checked/);
+  });
+
+  it('treats a non-object npm advisory answer (a proxy page, an array) as unverified, not clean', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => [] });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    match(body.coverage.unverifiedPackages[0].reason, /unexpected body/);
+  });
+
+  it('looks up, one by one, the non-npm dependencies the report has nothing on', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => ({ items: [{ packageName: 'django', version: '5.0.6', osvId: 'GHSA-d', severity: 'HIGH' }], total: 1 }),
+      '/api/v1/lookup': (u) => {
+        const name = u.searchParams.get('name');
+        if (name === 'requests') {
+          return { found: true, vulnerabilities: { available: true, scored: [{ id: 'GHSA-r', severity: 'MEDIUM', cvssScore: 5.3, epss: 0.01, isKev: false, summary: 'netrc leak' }], unscored: [] } };
+        }
+        if (name === 'ghost') return { found: false, vulnerabilities: { available: true, scored: [], unscored: [] } };
+        if (name === 'offline') return { found: true, vulnerabilities: { available: false, scored: [], unscored: [] } };
+        if (name === 'broken') return { status: 503, body: { title: 'upstream down' } };
+        return { found: true, vulnerabilities: { available: true, scored: [], unscored: [] } };
+      },
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'pypi',
+        packages: [
+          { name: 'django', version: '5.0.6' },
+          { name: 'requests', version: '2.32.3' },
+          { name: 'clean-pkg', version: '1.0' },
+          { name: 'ghost', version: '1.0' },
+          { name: 'offline', version: '1.0' },
+          { name: 'broken', version: '1.0' },
+        ],
+      }),
+    );
+    const looked = calls.filter((c) => c.path === '/api/v1/lookup').map((c) => c.query.get('name')).sort();
+    deepStrictEqual(looked, ['broken', 'clean-pkg', 'ghost', 'offline', 'requests'], 'django was in the report, so it is not looked up again');
+    deepStrictEqual(body.findings.map((f) => f.package).sort(), ['django', 'requests']);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 2);
+    deepStrictEqual(
+      body.coverage.unverifiedPackages.map((u) => u.name).sort(),
+      ['broken', 'ghost', 'offline'],
+    );
+  });
+
+  it('reports a malicious version from lookup as a critical finding, never clean', async () => {
+    // Lookup keeps MAL- ids out of scored/unscored and reports them under malware.
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        malware: { detected: true, advisoryIds: ['MAL-2024-1'] },
+        vulnerabilities: { available: true, scored: [], unscored: [] },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'evil', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.findings[0].advisories[0].osvId, 'MAL-2024-1');
+    strictEqual(body.findings[0].advisories[0].severity, 'CRITICAL');
+    match(body.findings[0].advisories[0].summary, /Malicious package/);
+  });
+
+  it('rejects a blank name or version, which no advisory source would check', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const res = await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '   ' }] });
+    ok(res.isError, res.content[0].text);
+  });
+
+  it('caps the per-package lookups and reports the rest as unverified', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const packages = Array.from({ length: 105 }, (_, i) => ({ name: `p${i}`, version: '1.0' }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages }));
+    strictEqual(calls.filter((c) => c.path === '/api/v1/lookup').length, 100);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 100);
+    strictEqual(body.coverage.unverified, 5);
+    match(body.coverage.unverifiedPackages[0].reason, /100-dependency live-check limit/);
+  });
+
+  it('leaves dependencies of an ecosystem with no live source unverified, never clean', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'rpm', packages: [{ name: 'bash', version: '5.2.26-3.fc40' }] }));
+    strictEqual(body.clean, false);
+    match(body.coverage.unverifiedPackages[0].reason, /no live advisory source for rpm/);
+  });
+
+  it('is clean only when every dependency was checked and nothing matched', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'cargo', packages: [{ name: 'serde', version: '1.0.200' }] }));
+    strictEqual(body.clean, true);
+    deepStrictEqual(body.coverage, { liveChecked: 1, unverified: 0 });
+  });
+
+  it('folds using the aliases a report row carries when the advisory detail is unavailable', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-f6f8', severity: 'HIGH', cvssScore: 8.7, summary: 'DoS', aliases: ['CVE-2024-1'] },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-2024-59', severity: 'HIGH', cvssScore: 8.7, summary: 'DoS', aliases: ['CVE-2024-1', 'GHSA-f6f8'] },
+        ],
+        total: 2,
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 1);
+    deepStrictEqual(body.findings[0].advisories[0].aliases, ['PYSEC-2024-59']);
+  });
+
+  it('does not fold two GHSAs when a follow-up advisory lists its predecessor as an alias', async () => {
+    // Real data: GHSA-r5fr-rjxr-66jc (2026, fixed 4.18.0) names GHSA-35jh-r3h4-6jhm
+    // and CVE-2021-23337 (fixed 4.17.21) among its aliases. They are two flaws.
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'lodash', version: '4.17.20', osvId: 'GHSA-35jh-r3h4-6jhm', severity: 'HIGH', cvssScore: 7.2, summary: 'Command Injection' },
+          { packageName: 'lodash', version: '4.17.20', osvId: 'GHSA-r5fr-rjxr-66jc', severity: 'HIGH', cvssScore: 8.1, summary: 'Code Injection via imports' },
+          { packageName: 'lodash', version: '4.17.20', osvId: 'PYSEC-0000-1', severity: 'UNKNOWN', summary: '' },
+        ],
+        total: 3,
+      }),
+      '/api/v1/vulnerabilities/GHSA-35jh-r3h4-6jhm': () => ({ aliases: ['CVE-2021-23337'], remediation: { fixedVersion: '4.17.21' } }),
+      '/api/v1/vulnerabilities/GHSA-r5fr-rjxr-66jc': () => ({ aliases: ['CVE-2021-23337', 'CVE-2026-4800', 'GHSA-35jh-r3h4-6jhm'], remediation: { fixedVersion: '4.18.0' } }),
+      '/api/v1/vulnerabilities/PYSEC-0000-1': () => ({ aliases: ['CVE-2026-4800'], remediation: { fixedVersion: '4.18.0' } }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    const ids = body.findings[0].advisories.map((a) => `${a.osvId}:${(a.aliases ?? []).join('+')}:${a.fixedVersion}`).sort();
+    deepStrictEqual(ids, ['GHSA-35jh-r3h4-6jhm::4.17.21', 'GHSA-r5fr-rjxr-66jc:PYSEC-0000-1:4.18.0']);
+    strictEqual(body.summary.advisories, 2);
+  });
+
+  it('attaches a PYSEC record to the GHSA it names, whatever order the advisories arrive in', async () => {
+    // GHSA-b is a follow-up naming GHSA-a and CVE-1; PYSEC-x names GHSA-a and CVE-1.
+    const rows = {
+      a: { packageName: 'django', version: '5.0.6', osvId: 'GHSA-a', severity: 'HIGH', summary: 'first' },
+      b: { packageName: 'django', version: '5.0.6', osvId: 'GHSA-b', severity: 'HIGH', summary: 'follow-up' },
+      x: { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-x', severity: 'UNKNOWN', summary: '' },
+    };
+    for (const order of [['a', 'x', 'b'], ['b', 'x', 'a'], ['x', 'b', 'a']]) {
+      stubRoutes({
+        '/api/v1/vuln-report': () => ({ items: order.map((k) => rows[k]), total: 3 }),
+        '/api/v1/vulnerabilities/GHSA-a': () => ({ aliases: ['CVE-1'] }),
+        '/api/v1/vulnerabilities/GHSA-b': () => ({ aliases: ['CVE-1', 'GHSA-a'] }),
+        '/api/v1/vulnerabilities/PYSEC-x': () => ({ aliases: ['CVE-1', 'GHSA-a'] }),
+      });
+      const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+      const byId = Object.fromEntries(body.findings[0].advisories.map((a) => [a.osvId, a.aliases ?? []]));
+      deepStrictEqual(byId, { 'GHSA-a': ['PYSEC-x'], 'GHSA-b': [] }, order.join(','));
+    }
+  });
+
+  it('ignores an empty alias, which would otherwise link unrelated records', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-p', severity: 'HIGH', summary: 'one', aliases: [''] },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-q', severity: 'LOW', summary: 'two', aliases: [''] },
+        ],
+        total: 2,
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 2);
+  });
+
+  it('folds a PYSEC record into its GHSA alias, so one flaw counts once', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-f6f8', severity: 'HIGH', cvssScore: 8.7, epssScore: 0.2, summary: 'DoS' },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-2024-59', severity: 'UNKNOWN', cvssScore: null, epssScore: 0.28, summary: '' },
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-other', severity: 'LOW', summary: 'unrelated' },
+        ],
+        total: 3,
+      }),
+      '/api/v1/vulnerabilities/GHSA-f6f8': () => ({ aliases: ['CVE-2024-1', 'PYSEC-2024-59'], remediation: { fixedVersion: '5.0.7' } }),
+      '/api/v1/vulnerabilities/PYSEC-2024-59': () => ({ aliases: ['CVE-2024-1', 'GHSA-f6f8'], remediation: { fixedVersion: '5.0.8' } }),
+      '/api/v1/vulnerabilities/GHSA-other': () => ({ aliases: ['CVE-2024-2'], remediation: { fixedVersion: '5.0.7' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 2);
+    deepStrictEqual(body.summary.bySeverity, { critical: 0, high: 1, medium: 0, low: 1, unknown: 0 });
+    const kept = body.findings[0].advisories[0];
+    strictEqual(kept.osvId, 'GHSA-f6f8');
+    deepStrictEqual(kept.aliases, ['PYSEC-2024-59']);
+    strictEqual(kept.epss, 0.28, 'the folded record keeps the higher score');
+    strictEqual(kept.fixedVersion, '5.0.8', 'and the higher fix');
+    strictEqual(body.findings[0].advisories[1].aliases, undefined);
   });
 });
 
@@ -1080,14 +1422,16 @@ describe('setup tools', () => {
     });
   }
 
-  it('publishes hex through the Hex API plane with the token left as a placeholder', async () => {
+  it('publishes hex through the Hex API plane, reading the key without putting it in history', async () => {
     stubFetch();
     const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
     ok(!res.isError);
+    ok(res.content[0].text.includes('read -rs HEX_API_KEY && export HEX_API_KEY'), res.content[0].text);
     ok(
-      res.content[0].text.includes('HEX_API_URL=https://dep.example.com/hex/api HEX_API_KEY=<token> mix hex.publish\n'),
+      res.content[0].text.includes("cd './my_lib' && HEX_API_URL=https://dep.example.com/hex/api mix hex.publish\n"),
       res.content[0].text,
     );
+    ok(!res.content[0].text.includes('HEX_API_KEY=<token>'), 'no token typed into the command line');
     ok(!res.content[0].text.includes('--yes'), 'the user should confirm the publish interactively');
   });
 });
@@ -1280,11 +1624,62 @@ describe('setup tools — credential prerequisites', () => {
     ok(res.content[0].text.includes('# docker login dep.example.com first'), res.content[0].text);
   });
 
-  it('tells golang installers to configure netrc and GONOSUMDB, and adds ,direct to GOPROXY', async () => {
+  it('tells golang installers to configure netrc, and never falls back around the proxy', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(res.content[0].text.includes('# Add dep.example.com credentials to ~/.netrc and set GONOSUMDB=dep.example.com first'), res.content[0].text);
-    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go,direct go get'), res.content[0].text);
+    ok(res.content[0].text.includes('(machine dep.example.com login user password <token>)'), res.content[0].text);
+    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go go get'), res.content[0].text);
+    ok(!res.content[0].text.includes(',direct'), 'a ,direct fallback would fetch refused modules around the proxy');
+    ok(!res.content[0].text.includes('GONOSUMDB'), 'GONOSUMDB takes module paths, not a host; the sumdb is proxied');
+  });
+});
+
+describe('setup tools — publish commands keep tokens out of history and name real inputs', () => {
+  const text = async (ecosystem, artifact_path) => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem, artifact_path });
+    ok(!res.isError, res.content[0].text);
+    return res.content[0].text;
+  };
+
+  it('never types a token into a command line', async () => {
+    for (const eco of ['pypi', 'nuget', 'rpm', 'hex', 'maven', 'npm', 'cargo', 'oci']) {
+      const t = await text(eco, eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin');
+      const commandLines = t.split('\n').filter((l) => !l.startsWith('#') && !l.startsWith('```'));
+      for (const line of commandLines) ok(!line.includes('<token>'), `${eco}: ${line}`);
+    }
+  });
+
+  it('pypi reads the password into TWINE_PASSWORD', async () => {
+    const t = await text('pypi', './dist/pkg-1.0.0.tar.gz');
+    ok(t.includes('read -rs TWINE_PASSWORD && export TWINE_PASSWORD'), t);
+    ok(t.includes("TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz'"), t);
+  });
+
+  it('rpm lets curl prompt for the password', async () => {
+    const t = await text('rpm', './out.rpm');
+    ok(t.includes("curl -u user --upload-file './out.rpm' https://dep.example.com/rpm/upload"), t);
+  });
+
+  it('oci loads the image tarball rather than tagging a file path', async () => {
+    const t = await text('oci', './image.tar');
+    ok(t.includes("docker load -i './image.tar'"), t);
+    ok(!t.includes("docker tag './image.tar'"), t);
+  });
+
+  it('maven uploads the named file with deploy:deploy-file', async () => {
+    const t = await text('maven', './target/app-1.0.jar');
+    ok(t.includes("mvn deploy:deploy-file -Dfile='./target/app-1.0.jar' -Durl=https://dep.example.com/maven/ -DrepositoryId=dependably"), t);
+  });
+
+  it('cargo publishes from the crate directory, given the directory or its Cargo.toml', async () => {
+    ok((await text('cargo', './my-crate')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    ok((await text('cargo', './my-crate/')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    ok((await text('cargo', './my-crate/Cargo.toml')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    const crate = await text('cargo', 'target/package/foo-1.0.0.crate');
+    ok(crate.includes('not a packaged .crate') && !crate.includes('--manifest-path'), crate);
+    ok((await text('cargo', 'Cargo.toml')).includes("--manifest-path './Cargo.toml'"));
+    ok((await text('cargo', '/Cargo.toml')).includes("--manifest-path '/Cargo.toml'"));
   });
 });
 
@@ -1314,9 +1709,9 @@ describe('setup tools — path-prefixed base URL', () => {
     ok(!ociPublish.content[0].text.includes('docker login host.example.com/dependably'), ociPublish.content[0].text);
 
     const golang = await call(prefixed, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(golang.content[0].text.includes('# Add host.example.com credentials to ~/.netrc and set GONOSUMDB=host.example.com first'), golang.content[0].text);
+    ok(golang.content[0].text.includes('(machine host.example.com login user password <token>)'), golang.content[0].text);
     // GOPROXY is a URL, not a bare host, so it keeps the path prefix.
-    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go,direct'), golang.content[0].text);
+    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go go get'), golang.content[0].text);
 
     const pypi = await call(prefixed, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
     ok(pypi.content[0].text.includes('# Put your token in ~/.netrc for host.example.com (machine host.example.com login user password <token>) first'), pypi.content[0].text);

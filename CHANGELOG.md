@@ -6,6 +6,47 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`check_dependencies` no longer calls a vulnerable dependency clean because the registry never
+  served it.** The registry's vulnerability report lists only versions it has uploaded or
+  proxied, so `lodash@4.17.20`, which has two HIGH advisories, came back `clean: true` on an
+  instance that had only cached other lodash versions. Every dependency is now checked: npm
+  through the instance's bulk advisory endpoint (the one `npm audit` uses), one request per
+  version when a lockfile holds several versions of a package, and other ecosystems through
+  `/api/v1/lookup`, up to 100 dependencies per call. A version that lookup reports as malicious
+  is a critical finding. A new `coverage` block
+  reports how many were checked live and lists any that could not be checked (`unverified`), and
+  `clean` is never true while that list is non-empty.
+- **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
+  record, and the summary counted both, roughly doubling the totals and inflating "unknown"
+  severity. Records from different databases that name each other, or the same CVE, as an
+  alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
+  highest score and fix. Two records from the same database are never folded: an incomplete-fix
+  follow-up lists its predecessor as an alias, but it is a separate flaw with its own fix.
+
+- **Publish commands no longer put the token on the command line**, where it lands in shell
+  history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,
+  RPM lets `curl` prompt for it, and Maven and Cargo keep it in their own config files.
+- **`get_publish_command` uses the path it is given.** OCI loads the image tarball with
+  `docker load` before tagging, instead of passing the file path to `docker tag`. Maven uploads
+  the named file with `deploy:deploy-file`. Cargo publishes with `--manifest-path` pointing at
+  the crate's directory, and says to run it from source when given a packaged `.crate`.
+- **Go install commands no longer fall back around the proxy.** `GOPROXY` dropped `,direct`, so a
+  module the proxy refuses is not fetched straight from its origin. The `GONOSUMDB` advice is
+  gone: it takes module paths, not a host, and the checksum database is already proxied.
+- **A lookup's `blockedReason` now maps to its policy control.** `lookup_package` and the
+  `get_policies` glossary say that `blockedReason` names a `controls` key, and that older servers
+  spell it in PascalCase (`VulnScore` for `vuln_score`).
+
+### Changed
+
+- **`get_vulnerability` is compact by default.** The raw OSV record lists every affected version
+  one by one (over 400 for one Django advisory), thousands of tokens that the ranges beside them
+  already express. Compact output gives each range as `introduced`/`fixed` versions plus a
+  `versionCount`, and lists references as URLs. Severity, CWE, remediation and threat-intel
+  fields are untouched. `verbosity: "full"` returns the raw record.
+
 ### Added
 
 - **`get_install_command` covers apk, Terraform and Hex.** The server has served all three for
@@ -19,6 +60,14 @@ All notable changes to this project are documented here. The format follows
 - **`get_publish_command` covers Hex** with `mix hex.publish` against the Hex API. For apk and
   Terraform, which are proxy-only, it says there is no publish endpoint instead of returning a
   command.
+
+### Documentation
+
+- **The README has example prompts**, one per kind of question the tools answer, each naming the
+  tool Claude uses.
+- **The README no longer mentions a request-timeout field in the Claude Desktop install dialog.**
+  That field was removed; `DEPENDABLY_TIMEOUT_MS` still applies where you set environment
+  variables yourself.
 
 ## [1.1.0] - 2026-09-23
 

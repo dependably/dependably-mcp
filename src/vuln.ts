@@ -44,6 +44,8 @@ export type Advisory = {
   cwes?: string[];
   owasp?: string[];
   skills?: string[];
+  /** Other ids for this same flaw (a PYSEC record of a GHSA, the CVE), folded into this entry. */
+  aliases?: string[];
 };
 
 export type Finding = {
@@ -215,6 +217,8 @@ export type RemediationLookup = {
   skills: string[];
   severity?: string;
   summary?: string;
+  /** The advisory's OSV `aliases`, used to fold duplicate records of one flaw. */
+  aliases?: string[];
 };
 
 /**
@@ -270,6 +274,9 @@ export function summarizeRemediation(detail: Record<string, unknown> | null): Re
     // tools is a filter that silently misses findings.
     severity: typeof dbSpecific.severity === 'string' ? normalizeSeverity(dbSpecific.severity) : undefined,
     summary: typeof detail?.summary === 'string' ? detail.summary : undefined,
+    aliases: Array.isArray(detail?.aliases)
+      ? (detail.aliases as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+      : [],
   };
 }
 
@@ -332,6 +339,7 @@ export function buildFindings(
   ecosystem?: string,
 ): Finding[] {
   const byPackage = new Map<string, Finding>();
+  const aliasesById = new Map<string, readonly string[]>();
 
   for (const hit of hits) {
     const key = `${foldName(ecosystem, hit.packageName)}@${canonicalVersion(ecosystem, hit.version)}`;
@@ -342,16 +350,146 @@ export function buildFindings(
       bumpTo: null,
       advisories: [],
     };
-    finding.advisories.push(toAdvisory(hit, remediations.get(`${hit.osvId}@@${hit.version}`)));
+    const rem = remediations.get(`${hit.osvId}@@${hit.version}`);
+    // Newer servers list each report row's OSV aliases; the advisory detail
+    // carries them too, but its lookup can 404 for an advisory the org's
+    // registry does not record.
+    const reported = Array.isArray(hit.aliases)
+      ? hit.aliases.filter((v): v is string => typeof v === 'string' && v.length > 0)
+      : [];
+    const aliases = [...new Set([...(aliasesById.get(hit.osvId) ?? []), ...reported, ...(rem?.aliases ?? [])])];
+    if (aliases.length) aliasesById.set(hit.osvId, aliases);
+    finding.advisories.push(toAdvisory(hit, rem));
     byPackage.set(key, finding);
   }
 
   for (const finding of byPackage.values()) {
+    finding.advisories = collapseAliases(
+      finding.advisories,
+      (osvId) => aliasesById.get(osvId) ?? [],
+      ecosystem,
+    );
     finding.advisories.sort(bySeverityThenScore);
     finding.bumpTo = bumpTarget(finding.installed, finding.advisories, ecosystem);
   }
 
   return [...byPackage.values()].sort(byWorstAdvisory);
+}
+
+/**
+ * Fold the records of one flaw into one advisory.
+ *
+ * OSV publishes the same PyPI flaw as a GHSA and as a PYSEC record, and the
+ * report lists both, so counting rows counted the flaw twice — and the PYSEC
+ * copy usually carries no severity, so it also inflated "unknown". Two
+ * advisories are the same flaw when one names the other, or both name the same
+ * id (typically the CVE), in their OSV `aliases`.
+ *
+ * Only records from different databases fold together. A database does not
+ * publish one flaw twice, but an incomplete-fix follow-up does list its
+ * predecessor as an alias (lodash's GHSA-r5fr-rjxr-66jc names
+ * GHSA-35jh-r3h4-6jhm and CVE-2021-23337), and folding those would report two
+ * flaws, with different fixes, as one.
+ *
+ * The kept entry is the most informative record (highest severity, then one
+ * with a summary, then a GHSA); the rest are listed in its `aliases`, and the
+ * scores and fix are the most severe and highest of the group so no folded
+ * record's facts are lost.
+ */
+export function collapseAliases(
+  advisories: readonly Advisory[],
+  aliasesOf: (osvId: string) => readonly string[],
+  ecosystem?: string,
+): Advisory[] {
+  // Union-find over the advisory ids only. Two advisories are joined when one
+  // names the other, or both name a shared id (a CVE), and the two groups hold
+  // no advisory from the same database.
+  const ids = [...new Set(advisories.map((a) => a.osvId))];
+  const parent = new Map<string, string>(ids.map((id) => [id, id]));
+  const databases = new Map<string, Set<string>>(ids.map((id) => [id, new Set([databaseOf(id)])]));
+  const find = (x: string): string => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    parent.set(x, root);
+    return root;
+  };
+  const union = (a: string, b: string): void => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) return;
+    const da = databases.get(ra)!;
+    const db = databases.get(rb)!;
+    if ([...da].some((d) => db.has(d))) return;
+    parent.set(ra, rb);
+    databases.set(rb, new Set([...da, ...db]));
+  };
+
+  const named = new Map<string, Set<string>>();
+  for (const a of advisories) {
+    const names = new Set([a.osvId, ...(a.aliases ?? []), ...aliasesOf(a.osvId)]);
+    named.set(a.osvId, new Set([...(named.get(a.osvId) ?? []), ...names]));
+  }
+  // Direct mentions are joined before shared ids, so a PYSEC record that names
+  // one GHSA attaches to that GHSA whatever order the advisories arrive in,
+  // rather than to whichever GHSA sharing its CVE happened to come first.
+  const pairs = (linked: (ni: Set<string>, nj: Set<string>, i: string, j: string) => boolean): void => {
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        if (linked(named.get(ids[i])!, named.get(ids[j])!, ids[i], ids[j])) union(ids[i], ids[j]);
+      }
+    }
+  };
+  pairs((ni, nj, i, j) => ni.has(j) || nj.has(i));
+  pairs((ni, nj, i) => [...ni].some((n) => n !== i && nj.has(n)));
+
+  const groups = new Map<string, Advisory[]>();
+  for (const a of advisories) {
+    const root = find(a.osvId);
+    const group = groups.get(root) ?? [];
+    // The same id reached twice (registry report and live check) is one record.
+    if (!group.some((g) => g.osvId === a.osvId)) group.push(a);
+    groups.set(root, group);
+  }
+
+  return [...groups.values()].map((group) => (group.length === 1 ? group[0] : mergeGroup(group, ecosystem)));
+}
+
+/** The database an advisory id comes from: its prefix (GHSA, PYSEC, CVE, MAL, …). */
+function databaseOf(id: string): string {
+  return id.split('-')[0].toUpperCase();
+}
+
+function informativeness(a: Advisory): number {
+  return severityRank(a.severity) * 4 + (a.summary ? 2 : 0) + (a.osvId.startsWith('GHSA-') ? 1 : 0);
+}
+
+function mergeGroup(group: readonly Advisory[], ecosystem?: string): Advisory {
+  const [primary, ...rest] = [...group].sort((x, y) => informativeness(y) - informativeness(x));
+  const max = (values: Array<number | null>): number | null => {
+    const known = values.filter((v): v is number => typeof v === 'number');
+    return known.length ? Math.max(...known) : null;
+  };
+  const union = (pick: (a: Advisory) => string[] | undefined): string[] | undefined => {
+    const all = [...new Set(group.flatMap((a) => pick(a) ?? []))];
+    return all.length ? all : undefined;
+  };
+  const fixes = group.map((a) => a.fixedVersion).filter((v): v is string => !!v);
+  const merged: Advisory = {
+    ...primary,
+    cvss: max(group.map((a) => a.cvss)),
+    epss: max(group.map((a) => a.epss)),
+    kev: group.some((a) => a.kev),
+    summary: primary.summary || rest.find((a) => a.summary)?.summary || '',
+    fixedVersion: maxVersion(fixes, ecosystem) ?? null,
+    aliases: [...new Set(rest.map((a) => a.osvId).concat(primary.aliases ?? []))].sort(),
+  };
+  const cwes = union((a) => a.cwes);
+  const owasp = union((a) => a.owasp);
+  const skills = union((a) => a.skills);
+  if (cwes) merged.cwes = cwes; else delete merged.cwes;
+  if (owasp) merged.owasp = owasp; else delete merged.owasp;
+  if (skills) merged.skills = skills; else delete merged.skills;
+  return merged;
 }
 
 type SeverityCounts = { critical: number; high: number; medium: number; low: number; unknown: number };
@@ -441,6 +579,282 @@ export function parseNpmLockfile(text: string): InputPackage[] {
     const name = entry.name ?? path.split('node_modules/').pop();
     if (!name || !entry.version) continue;
     out.push({ name, version: entry.version, dev: entry.dev === true });
+  }
+  return out;
+}
+
+/** A dependency no source could vouch for, so the scan cannot call it clean. */
+export type Unverified = { name: string; version: string; reason: string };
+
+export type LiveCheck = { hits: ReportItem[]; unverified: Unverified[]; checked: number };
+
+/** Most dependencies a non-npm scan checks one by one against `/api/v1/lookup`. */
+export const MAX_LIVE_LOOKUPS = 100;
+
+/** npm's advisory severity vocabulary, mapped onto the report's. */
+const NPM_SEVERITY: Record<string, string> = {
+  critical: 'CRITICAL',
+  high: 'HIGH',
+  moderate: 'MEDIUM',
+  low: 'LOW',
+  info: 'UNKNOWN',
+};
+
+/** The first sentence of an error, so one unreachable advisory source does not flood the result. */
+function shortReason(e: unknown): string {
+  const message = e instanceof Error ? e.message : String(e);
+  return message.split(/(?<=\.)\s/)[0].slice(0, 200);
+}
+
+function uniquePackages(packages: readonly InputPackage[], ecosystem: string): InputPackage[] {
+  const seen = new Map<string, InputPackage>();
+  for (const p of packages) {
+    const key = `${foldName(ecosystem, p.name)}@${canonicalVersion(ecosystem, p.version)}`;
+    if (!seen.has(key)) seen.set(key, p);
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Check every npm dependency against live OSV data through the instance's npm
+ * bulk-advisory endpoint (the one `npm audit` calls). Unlike the registry
+ * report, this covers versions the registry has never served.
+ *
+ * The endpoint lists an advisory under a name only when it affects one of the
+ * versions requested for that name, and its `vulnerable_versions` is usually a
+ * semver range rather than the requested version. So each request carries one
+ * version per name: everything listed under a name then applies to exactly that
+ * version, with no range matching on this side. A lockfile holding several
+ * versions of one package costs one extra request per extra version.
+ *
+ * The endpoint answers 503 rather than a partial list when it cannot vouch for
+ * the whole tree, so a failed round leaves that round's dependencies unverified.
+ */
+export async function liveCheckNpm(client: DependablyClient, packages: readonly InputPackage[]): Promise<LiveCheck> {
+  const byName = new Map<string, string[]>();
+  for (const p of packages) {
+    const versions = byName.get(p.name) ?? [];
+    if (!versions.includes(p.version)) versions.push(p.version);
+    byName.set(p.name, versions);
+  }
+  const rounds: Array<Map<string, string>> = [];
+  for (const [name, versions] of byName) {
+    versions.forEach((version, i) => {
+      (rounds[i] ??= new Map()).set(name, version);
+    });
+  }
+
+  const hits: ReportItem[] = [];
+  const unverified: Unverified[] = [];
+  let checked = 0;
+  for (const round of rounds) {
+    const failed = (reason: string) => {
+      for (const [name, version] of round) unverified.push({ name, version, reason });
+    };
+    let res: unknown;
+    try {
+      res = await client.post(
+        '/npm/-/npm/v1/security/advisories/bulk',
+        Object.fromEntries([...round].map(([name, version]) => [name, [version]])),
+      );
+    } catch (e) {
+      failed(`live npm advisory check failed: ${shortReason(e)}`);
+      continue;
+    }
+    if (res === null || typeof res !== 'object' || Array.isArray(res)) {
+      failed('live npm advisory check returned an unexpected body');
+      continue;
+    }
+    checked += round.size;
+    for (const [name, advisories] of Object.entries(res as Record<string, unknown>)) {
+      const version = round.get(name);
+      if (version === undefined || !Array.isArray(advisories)) continue;
+      for (const raw of advisories as Record<string, unknown>[]) {
+        if (typeof raw?.id !== 'string') continue;
+        const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
+        hits.push({
+          packageName: name,
+          version,
+          osvId: raw.id,
+          severity: NPM_SEVERITY[String(raw.severity)] ?? 'UNKNOWN',
+          cvssScore: typeof cvss === 'number' ? cvss : null,
+          summary: typeof raw.title === 'string' ? raw.title : '',
+        });
+      }
+    }
+  }
+  return { hits, unverified, checked };
+}
+
+type LookupAdvisory = { id?: unknown; severity?: unknown; cvssScore?: unknown; epss?: unknown; isKev?: unknown; summary?: unknown };
+
+/**
+ * Check dependencies one at a time against `/api/v1/lookup`, which resolves a
+ * version against live OSV data without ingesting anything. Bounded: past
+ * `cap` dependencies, the rest are reported unverified rather than making the
+ * call run for minutes.
+ */
+export async function liveCheckByLookup(
+  client: DependablyClient,
+  ecosystem: string,
+  packages: readonly InputPackage[],
+  cap = MAX_LIVE_LOOKUPS,
+): Promise<LiveCheck> {
+  const toCheck = packages.slice(0, cap);
+  const unverified: Unverified[] = packages.slice(cap).map((p) => ({
+    name: p.name,
+    version: p.version,
+    reason: `over the ${cap}-dependency live-check limit for one call; check the rest in a second call`,
+  }));
+  const hits: ReportItem[] = [];
+  let checked = 0;
+
+  const results = await mapLimit(toCheck, 8, async (p) => {
+    try {
+      return { p, res: (await client.get('/api/v1/lookup', { ecosystem, name: p.name, version: p.version })) as Record<string, unknown> | null };
+    } catch (e) {
+      return { p, error: shortReason(e) };
+    }
+  });
+
+  for (const r of results) {
+    if ('error' in r) {
+      unverified.push({ name: r.p.name, version: r.p.version, reason: `live lookup failed: ${r.error}` });
+      continue;
+    }
+    const vulns = (r.res?.vulnerabilities ?? null) as { scored?: unknown; unscored?: unknown; available?: unknown } | null;
+    if (r.res?.found === false) {
+      unverified.push({ name: r.p.name, version: r.p.version, reason: 'not found upstream' });
+      continue;
+    }
+    if (!vulns || vulns.available === false) {
+      unverified.push({ name: r.p.name, version: r.p.version, reason: 'the advisory source was unavailable' });
+      continue;
+    }
+    checked++;
+    // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
+    // under malware.advisoryIds, never in scored or unscored.
+    const malware = (r.res?.malware ?? null) as { advisoryIds?: unknown } | null;
+    for (const id of Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []) {
+      if (typeof id !== 'string') continue;
+      hits.push({
+        packageName: r.p.name,
+        version: r.p.version,
+        osvId: id,
+        severity: 'CRITICAL',
+        cvssScore: null,
+        summary: 'Malicious package: an OpenSSF malicious-packages advisory names this version.',
+      });
+    }
+    const all = [
+      ...(Array.isArray(vulns.scored) ? vulns.scored : []),
+      ...(Array.isArray(vulns.unscored) ? vulns.unscored : []),
+    ] as LookupAdvisory[];
+    for (const a of all) {
+      if (typeof a?.id !== 'string') continue;
+      hits.push({
+        packageName: r.p.name,
+        version: r.p.version,
+        osvId: a.id,
+        severity: typeof a.severity === 'string' ? a.severity : 'UNKNOWN',
+        cvssScore: typeof a.cvssScore === 'number' ? a.cvssScore : null,
+        epssScore: typeof a.epss === 'number' ? a.epss : null,
+        isKev: a.isKev === true,
+        summary: typeof a.summary === 'string' ? a.summary : '',
+      });
+    }
+  }
+  return { hits, unverified, checked };
+}
+
+/**
+ * Cover what the registry report cannot see.
+ *
+ * The report lists only versions the registry has uploaded or proxied, so a
+ * dependency it has never served is simply absent from it, and joining against
+ * the report alone answered "clean" for a vulnerable version. npm is checked in
+ * full through the bulk endpoint; other ecosystems check, one by one, each
+ * dependency the report had nothing on; ecosystems with no live source are
+ * unverified. Returns live hits not already in `reportHits`.
+ */
+export async function liveCoverage(
+  client: DependablyClient,
+  ecosystem: string,
+  packages: readonly InputPackage[],
+  reportHits: readonly ReportItem[],
+  lookupEcosystems: readonly string[],
+): Promise<LiveCheck> {
+  const unique = uniquePackages(packages, ecosystem);
+  const keyOf = (name: string, version: string) => `${foldName(ecosystem, name)}@${canonicalVersion(ecosystem, version)}`;
+  const reported = new Set(reportHits.map((h) => keyOf(h.packageName, h.version)));
+
+  let live: LiveCheck;
+  if (ecosystem === 'npm') {
+    live = await liveCheckNpm(client, unique);
+  } else if (lookupEcosystems.includes(ecosystem)) {
+    live = await liveCheckByLookup(client, ecosystem, unique.filter((p) => !reported.has(keyOf(p.name, p.version))));
+  } else {
+    const reason = `no live advisory source for ${ecosystem}; only versions this registry has served are covered`;
+    live = {
+      hits: [],
+      unverified: unique.filter((p) => !reported.has(keyOf(p.name, p.version))).map((p) => ({ name: p.name, version: p.version, reason })),
+      checked: 0,
+    };
+  }
+
+  const seen = new Set(reportHits.map((h) => `${keyOf(h.packageName, h.version)}#${h.osvId}`));
+  const fresh = live.hits.filter((h) => !seen.has(`${keyOf(h.packageName, h.version)}#${h.osvId}`));
+  return { ...live, hits: fresh };
+}
+
+/**
+ * Shape an advisory detail (`GET /api/v1/vulnerabilities/{osvId}`) for reading.
+ *
+ * The raw OSV record lists every affected version as a string — over four
+ * hundred for one Django advisory — which costs thousands of tokens and says no
+ * more than the ranges beside it. Compact keeps the ranges as
+ * `introduced`/`fixed`/`lastAffected` pairs, the references as URLs, and every
+ * field that carries a judgement (severity, CWE, remediation, KEV, EPSS).
+ */
+export function compactVulnerability(detail: Record<string, unknown>): Record<string, unknown> {
+  const { affected, references, databaseSpecific, schemaVersion: _schema, credits: _credits, related: _related, ...rest } = detail;
+  const out: Record<string, unknown> = { ...rest };
+
+  if (Array.isArray(affected)) {
+    out.affected = (affected as Record<string, unknown>[]).map((a) => {
+      const pkg = (a?.package ?? {}) as Record<string, unknown>;
+      const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
+      return {
+        package: { ecosystem: pkg.ecosystem, name: pkg.name },
+        ranges: ranges.map((r) => ({ type: r?.type, ...collapseEvents(r?.events) })),
+        versionCount: Array.isArray(a?.versions) ? a.versions.length : 0,
+      };
+    });
+  }
+  if (Array.isArray(references)) {
+    out.references = (references as Record<string, unknown>[])
+      .map((r) => r?.url)
+      .filter((u): u is string => typeof u === 'string');
+  }
+  if (databaseSpecific && typeof databaseSpecific === 'object') {
+    const ds = databaseSpecific as Record<string, unknown>;
+    const kept = Object.fromEntries(
+      Object.entries({ severity: ds.severity, cwe_ids: ds.cwe_ids }).filter(([, v]) => v !== undefined),
+    );
+    if (Object.keys(kept).length) out.databaseSpecific = kept;
+  }
+  return out;
+}
+
+/** OSV range events (`[{introduced}, {fixed}]`, null-padded) folded into one introduced/fixed list. */
+function collapseEvents(events: unknown): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  if (!Array.isArray(events)) return out;
+  for (const e of events as Record<string, unknown>[]) {
+    for (const key of ['introduced', 'fixed', 'lastAffected', 'limit']) {
+      const v = e?.[key];
+      if (typeof v === 'string' && v.length > 0) (out[key] ??= []).push(v);
+    }
   }
   return out;
 }
