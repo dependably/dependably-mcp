@@ -49,6 +49,9 @@ All notable changes to this project are documented here. The format follows
   already express. Compact output gives each range as `introduced`/`fixed` versions plus a
   `versionCount`, and lists references as URLs. Severity, CWE, remediation and threat-intel
   fields are untouched. `verbosity: "full"` returns the raw record.
+- **A lookup's `blockedReason` now maps to its policy control.** `lookup_package` and the
+  `get_policies` glossary say that `blockedReason` names a `controls` key, and that older servers
+  spell it in PascalCase (`VulnScore` for `vuln_score`).
 
 ## [1.1.0] - 2026-09-23
 
