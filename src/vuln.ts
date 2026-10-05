@@ -351,7 +351,12 @@ export function buildFindings(
       advisories: [],
     };
     const rem = remediations.get(`${hit.osvId}@@${hit.version}`);
-    if (rem?.aliases?.length) aliasesById.set(hit.osvId, rem.aliases);
+    // Newer servers list each report row's OSV aliases; the advisory detail
+    // carries them too, but its lookup can 404 for an advisory the org's
+    // registry does not record.
+    const reported = Array.isArray(hit.aliases) ? hit.aliases.filter((v): v is string => typeof v === 'string') : [];
+    const aliases = [...new Set([...(aliasesById.get(hit.osvId) ?? []), ...reported, ...(rem?.aliases ?? [])])];
+    if (aliases.length) aliasesById.set(hit.osvId, aliases);
     finding.advisories.push(toAdvisory(hit, rem));
     byPackage.set(key, finding);
   }

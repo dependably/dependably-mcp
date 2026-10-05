@@ -734,6 +734,22 @@ describe('check_dependencies live coverage', () => {
     deepStrictEqual(body.coverage, { liveChecked: 1, unverified: 0 });
   });
 
+  it('folds using the aliases a report row carries when the advisory detail is unavailable', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-f6f8', severity: 'HIGH', cvssScore: 8.7, summary: 'DoS', aliases: ['CVE-2024-1'] },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-2024-59', severity: 'HIGH', cvssScore: 8.7, summary: 'DoS', aliases: ['CVE-2024-1', 'GHSA-f6f8'] },
+        ],
+        total: 2,
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 1);
+    deepStrictEqual(body.findings[0].advisories[0].aliases, ['PYSEC-2024-59']);
+  });
+
   it('does not fold two GHSAs when a follow-up advisory lists its predecessor as an alias', async () => {
     // Real data: GHSA-r5fr-rjxr-66jc (2026, fixed 4.18.0) names GHSA-35jh-r3h4-6jhm
     // and CVE-2021-23337 (fixed 4.17.21) among its aliases. They are two flaws.
