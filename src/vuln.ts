@@ -354,7 +354,9 @@ export function buildFindings(
     // Newer servers list each report row's OSV aliases; the advisory detail
     // carries them too, but its lookup can 404 for an advisory the org's
     // registry does not record.
-    const reported = Array.isArray(hit.aliases) ? hit.aliases.filter((v): v is string => typeof v === 'string') : [];
+    const reported = Array.isArray(hit.aliases)
+      ? hit.aliases.filter((v): v is string => typeof v === 'string' && v.length > 0)
+      : [];
     const aliases = [...new Set([...(aliasesById.get(hit.osvId) ?? []), ...reported, ...(rem?.aliases ?? [])])];
     if (aliases.length) aliasesById.set(hit.osvId, aliases);
     finding.advisories.push(toAdvisory(hit, rem));
@@ -427,13 +429,18 @@ export function collapseAliases(
     const names = new Set([a.osvId, ...(a.aliases ?? []), ...aliasesOf(a.osvId)]);
     named.set(a.osvId, new Set([...(named.get(a.osvId) ?? []), ...names]));
   }
-  for (let i = 0; i < ids.length; i++) {
-    for (let j = i + 1; j < ids.length; j++) {
-      const ni = named.get(ids[i])!;
-      const nj = named.get(ids[j])!;
-      if (ni.has(ids[j]) || nj.has(ids[i]) || [...ni].some((n) => n !== ids[i] && nj.has(n))) union(ids[i], ids[j]);
+  // Direct mentions are joined before shared ids, so a PYSEC record that names
+  // one GHSA attaches to that GHSA whatever order the advisories arrive in,
+  // rather than to whichever GHSA sharing its CVE happened to come first.
+  const pairs = (linked: (ni: Set<string>, nj: Set<string>, i: string, j: string) => boolean): void => {
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        if (linked(named.get(ids[i])!, named.get(ids[j])!, ids[i], ids[j])) union(ids[i], ids[j]);
+      }
     }
-  }
+  };
+  pairs((ni, nj, i, j) => ni.has(j) || nj.has(i));
+  pairs((ni, nj, i) => [...ni].some((n) => n !== i && nj.has(n)));
 
   const groups = new Map<string, Advisory[]>();
   for (const a of advisories) {

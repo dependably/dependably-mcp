@@ -773,6 +773,41 @@ describe('check_dependencies live coverage', () => {
     strictEqual(body.summary.advisories, 2);
   });
 
+  it('attaches a PYSEC record to the GHSA it names, whatever order the advisories arrive in', async () => {
+    // GHSA-b is a follow-up naming GHSA-a and CVE-1; PYSEC-x names GHSA-a and CVE-1.
+    const rows = {
+      a: { packageName: 'django', version: '5.0.6', osvId: 'GHSA-a', severity: 'HIGH', summary: 'first' },
+      b: { packageName: 'django', version: '5.0.6', osvId: 'GHSA-b', severity: 'HIGH', summary: 'follow-up' },
+      x: { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-x', severity: 'UNKNOWN', summary: '' },
+    };
+    for (const order of [['a', 'x', 'b'], ['b', 'x', 'a'], ['x', 'b', 'a']]) {
+      stubRoutes({
+        '/api/v1/vuln-report': () => ({ items: order.map((k) => rows[k]), total: 3 }),
+        '/api/v1/vulnerabilities/GHSA-a': () => ({ aliases: ['CVE-1'] }),
+        '/api/v1/vulnerabilities/GHSA-b': () => ({ aliases: ['CVE-1', 'GHSA-a'] }),
+        '/api/v1/vulnerabilities/PYSEC-x': () => ({ aliases: ['CVE-1', 'GHSA-a'] }),
+      });
+      const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+      const byId = Object.fromEntries(body.findings[0].advisories.map((a) => [a.osvId, a.aliases ?? []]));
+      deepStrictEqual(byId, { 'GHSA-a': ['PYSEC-x'], 'GHSA-b': [] }, order.join(','));
+    }
+  });
+
+  it('ignores an empty alias, which would otherwise link unrelated records', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'django', version: '5.0.6', osvId: 'GHSA-p', severity: 'HIGH', summary: 'one', aliases: [''] },
+          { packageName: 'django', version: '5.0.6', osvId: 'PYSEC-q', severity: 'LOW', summary: 'two', aliases: [''] },
+        ],
+        total: 2,
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '5.0.6' }] }));
+    strictEqual(body.summary.advisories, 2);
+  });
+
   it('folds a PYSEC record into its GHSA alias, so one flaw counts once', async () => {
     stubRoutes({
       '/api/v1/vuln-report': () => ({
