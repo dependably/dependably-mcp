@@ -230,8 +230,9 @@ function directoryOf(path: string): string {
   const trimmed = path.replace(/\/+$/, '') || '/';
   const last = trimmed.split('/').pop() ?? '';
   if (!last.includes('.') || last === '.' || last === '..') return trimmed;
-  const parent = trimmed.slice(0, trimmed.length - last.length).replace(/\/+$/, '');
-  return parent || '.';
+  const parent = trimmed.slice(0, trimmed.length - last.length);
+  if (parent === '') return '.';
+  return parent.replace(/\/+$/, '') || '/';
 }
 
 function stripScheme(url: string): string {
@@ -420,7 +421,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       if (artifactPath.endsWith('.crate')) {
         return fenced('bash', `${prereq}\n# cargo publishes from source, not a packaged .crate: run this in the crate's own directory.\ncargo publish --registry dependably`);
       }
-      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(`${directoryOf(artifactPath)}/Cargo.toml`)}`);
+      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(`${directoryOf(artifactPath).replace(/\/$/, '')}/Cargo.toml`)}`);
     }
     case 'apk':
       return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');

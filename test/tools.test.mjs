@@ -552,7 +552,8 @@ describe('check_dependencies live coverage', () => {
     const calls = stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
       '/npm/-/npm/v1/security/advisories/bulk': () => ({
-        lodash: [{ id: 'GHSA-35jh-r3h4-6jhm', title: 'Command Injection in lodash', severity: 'high', vulnerable_versions: '4.17.20', cvss: { score: 7.2 } }],
+        // The server renders OSV intervals as an npm range, not the requested version.
+        lodash: [{ id: 'GHSA-35jh-r3h4-6jhm', title: 'Command Injection in lodash', severity: 'high', vulnerable_versions: '<4.17.21', cvss: { score: 7.2 } }],
       }),
       '*': () => ({ status: 404, body: { title: 'Not Found' } }),
     });
@@ -569,13 +570,19 @@ describe('check_dependencies live coverage', () => {
     deepStrictEqual(JSON.parse(bulk.body), { lodash: ['4.17.20'] });
   });
 
-  it('only attributes an npm advisory to the requested versions it names', async () => {
-    stubRoutes({
+  it('asks about one version per name per request, so a listed advisory applies to that version', async () => {
+    // The server lists an advisory under a name only if it affects a requested
+    // version of it; with two versions in one request the client could not tell
+    // which one. Each request therefore carries one version per name.
+    const calls = stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
-      '/npm/-/npm/v1/security/advisories/bulk': () => ({
-        a: [{ id: 'GHSA-1', severity: 'moderate', vulnerable_versions: '1.0.0' }],
-        b: [{ id: 'GHSA-2', severity: 'info', vulnerable_versions: '*' }],
-      }),
+      '/npm/-/npm/v1/security/advisories/bulk': (u, init) => {
+        const asked = JSON.parse(init.body);
+        const out = {};
+        if (asked.a?.[0] === '1.0.0') out.a = [{ id: 'GHSA-1', severity: 'moderate', vulnerable_versions: '<1.5.0' }];
+        if (asked.b) out.b = [{ id: 'GHSA-2', severity: 'info', vulnerable_versions: '>=3.0.0 <3.1.0' }];
+        return out;
+      },
       '*': () => ({ status: 404, body: {} }),
     });
     const body = payload(
@@ -588,9 +595,29 @@ describe('check_dependencies live coverage', () => {
       }),
     );
     deepStrictEqual(
+      calls.filter((c) => c.path === '/npm/-/npm/v1/security/advisories/bulk').map((c) => JSON.parse(c.body)),
+      [{ a: ['1.0.0'], b: ['3.0.0'] }, { a: ['2.0.0'] }],
+    );
+    deepStrictEqual(
       body.findings.map((f) => `${f.package}@${f.installed}:${f.advisories.map((a) => `${a.osvId}/${a.severity}`).join(',')}`).sort(),
       ['a@1.0.0:GHSA-1/MEDIUM', 'b@3.0.0:GHSA-2/UNKNOWN'],
     );
+    strictEqual(body.clean, false);
+    deepStrictEqual(body.coverage, { liveChecked: 3, unverified: 0 });
+  });
+
+  it('leaves only the failed round unverified when one of several npm requests fails', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': (u, init) =>
+        JSON.parse(init.body).a?.[0] === '2.0.0' ? { status: 503, body: {} } : {},
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { packages: [{ name: 'a', version: '1.0.0' }, { name: 'a', version: '2.0.0' }] }),
+    );
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 1);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => `${u.name}@${u.version}`), ['a@2.0.0']);
   });
 
   it('is never clean when the npm advisory check cannot vouch for the tree', async () => {
@@ -650,6 +677,24 @@ describe('check_dependencies live coverage', () => {
       body.coverage.unverifiedPackages.map((u) => u.name).sort(),
       ['broken', 'ghost', 'offline'],
     );
+  });
+
+  it('reports a malicious version from lookup as a critical finding, never clean', async () => {
+    // Lookup keeps MAL- ids out of scored/unscored and reports them under malware.
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        malware: { detected: true, advisoryIds: ['MAL-2024-1'] },
+        vulnerabilities: { available: true, scored: [], unscored: [] },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'evil', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.findings[0].advisories[0].osvId, 'MAL-2024-1');
+    strictEqual(body.findings[0].advisories[0].severity, 'CRITICAL');
+    match(body.findings[0].advisories[0].summary, /Malicious package/);
   });
 
   it('caps the per-package lookups and reports the rest as unverified', async () => {
@@ -1554,6 +1599,7 @@ describe('setup tools — publish commands keep tokens out of history and name r
     const crate = await text('cargo', 'target/package/foo-1.0.0.crate');
     ok(crate.includes('not a packaged .crate') && !crate.includes('--manifest-path'), crate);
     ok((await text('cargo', 'Cargo.toml')).includes("--manifest-path './Cargo.toml'"));
+    ok((await text('cargo', '/Cargo.toml')).includes("--manifest-path '/Cargo.toml'"));
   });
 });
 

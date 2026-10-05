@@ -573,44 +573,62 @@ function uniquePackages(packages: readonly InputPackage[], ecosystem: string): I
 }
 
 /**
- * Check every npm dependency against live OSV data in one request, through the
- * instance's npm bulk-advisory endpoint (the one `npm audit` calls). Unlike the
- * registry report, this covers versions the registry has never served. The
- * endpoint answers 503 rather than a partial list when it cannot vouch for the
- * whole tree, so any failure leaves every dependency unverified.
+ * Check every npm dependency against live OSV data through the instance's npm
+ * bulk-advisory endpoint (the one `npm audit` calls). Unlike the registry
+ * report, this covers versions the registry has never served.
+ *
+ * The endpoint lists an advisory under a name only when it affects one of the
+ * versions requested for that name, and its `vulnerable_versions` is usually a
+ * semver range rather than the requested version. So each request carries one
+ * version per name: everything listed under a name then applies to exactly that
+ * version, with no range matching on this side. A lockfile holding several
+ * versions of one package costs one extra request per extra version.
+ *
+ * The endpoint answers 503 rather than a partial list when it cannot vouch for
+ * the whole tree, so a failed round leaves that round's dependencies unverified.
  */
 export async function liveCheckNpm(client: DependablyClient, packages: readonly InputPackage[]): Promise<LiveCheck> {
-  const requested = new Map<string, Set<string>>();
+  const byName = new Map<string, string[]>();
   for (const p of packages) {
-    const versions = requested.get(p.name) ?? new Set<string>();
-    versions.add(p.version);
-    requested.set(p.name, versions);
+    const versions = byName.get(p.name) ?? [];
+    if (!versions.includes(p.version)) versions.push(p.version);
+    byName.set(p.name, versions);
   }
-  const body = Object.fromEntries([...requested].map(([name, versions]) => [name, [...versions]]));
-
-  let res: unknown;
-  try {
-    res = await client.post('/npm/-/npm/v1/security/advisories/bulk', body);
-  } catch (e) {
-    const reason = `live npm advisory check failed: ${shortReason(e)}`;
-    return { hits: [], unverified: packages.map((p) => ({ name: p.name, version: p.version, reason })), checked: 0 };
-  }
-  if (res === null || typeof res !== 'object' || Array.isArray(res)) {
-    const reason = 'live npm advisory check returned an unexpected body';
-    return { hits: [], unverified: packages.map((p) => ({ name: p.name, version: p.version, reason })), checked: 0 };
+  const rounds: Array<Map<string, string>> = [];
+  for (const [name, versions] of byName) {
+    versions.forEach((version, i) => {
+      (rounds[i] ??= new Map()).set(name, version);
+    });
   }
 
   const hits: ReportItem[] = [];
-  for (const [name, advisories] of Object.entries(res as Record<string, unknown>)) {
-    const versions = requested.get(name);
-    if (!versions || !Array.isArray(advisories)) continue;
-    for (const raw of advisories as Record<string, unknown>[]) {
-      if (typeof raw?.id !== 'string') continue;
-      const range = typeof raw.vulnerable_versions === 'string' ? raw.vulnerable_versions : '*';
-      const affected = range === '*' ? null : new Set(range.split('||').map((v) => v.trim()));
-      const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
-      for (const version of versions) {
-        if (affected && !affected.has(version)) continue;
+  const unverified: Unverified[] = [];
+  let checked = 0;
+  for (const round of rounds) {
+    const failed = (reason: string) => {
+      for (const [name, version] of round) unverified.push({ name, version, reason });
+    };
+    let res: unknown;
+    try {
+      res = await client.post(
+        '/npm/-/npm/v1/security/advisories/bulk',
+        Object.fromEntries([...round].map(([name, version]) => [name, [version]])),
+      );
+    } catch (e) {
+      failed(`live npm advisory check failed: ${shortReason(e)}`);
+      continue;
+    }
+    if (res === null || typeof res !== 'object' || Array.isArray(res)) {
+      failed('live npm advisory check returned an unexpected body');
+      continue;
+    }
+    checked += round.size;
+    for (const [name, advisories] of Object.entries(res as Record<string, unknown>)) {
+      const version = round.get(name);
+      if (version === undefined || !Array.isArray(advisories)) continue;
+      for (const raw of advisories as Record<string, unknown>[]) {
+        if (typeof raw?.id !== 'string') continue;
+        const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
         hits.push({
           packageName: name,
           version,
@@ -622,7 +640,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
       }
     }
   }
-  return { hits, unverified: [], checked: packages.length };
+  return { hits, unverified, checked };
 }
 
 type LookupAdvisory = { id?: unknown; severity?: unknown; cvssScore?: unknown; epss?: unknown; isKev?: unknown; summary?: unknown };
@@ -671,6 +689,20 @@ export async function liveCheckByLookup(
       continue;
     }
     checked++;
+    // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
+    // under malware.advisoryIds, never in scored or unscored.
+    const malware = (r.res?.malware ?? null) as { advisoryIds?: unknown } | null;
+    for (const id of Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []) {
+      if (typeof id !== 'string') continue;
+      hits.push({
+        packageName: r.p.name,
+        version: r.p.version,
+        osvId: id,
+        severity: 'CRITICAL',
+        cvssScore: null,
+        summary: 'Malicious package: an OpenSSF malicious-packages advisory names this version.',
+      });
+    }
     const all = [
       ...(Array.isArray(vulns.scored) ? vulns.scored : []),
       ...(Array.isArray(vulns.unscored) ? vulns.unscored : []),

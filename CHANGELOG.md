@@ -11,9 +11,11 @@ All notable changes to this project are documented here. The format follows
 - **`check_dependencies` no longer calls a vulnerable dependency clean because the registry never
   served it.** The registry's vulnerability report lists only versions it has uploaded or
   proxied, so `lodash@4.17.20`, which has two HIGH advisories, came back `clean: true` on an
-  instance that had only cached other lodash versions. Every dependency is now checked: npm in
-  one request through the instance's bulk advisory endpoint (the one `npm audit` uses), and other
-  ecosystems through `/api/v1/lookup`, up to 100 dependencies per call. A new `coverage` block
+  instance that had only cached other lodash versions. Every dependency is now checked: npm
+  through the instance's bulk advisory endpoint (the one `npm audit` uses), one request per
+  version when a lockfile holds several versions of a package, and other ecosystems through
+  `/api/v1/lookup`, up to 100 dependencies per call. A version that lookup reports as malicious
+  is a critical finding. A new `coverage` block
   reports how many were checked live and lists any that could not be checked (`unverified`), and
   `clean` is never true while that list is non-empty.
 - **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
