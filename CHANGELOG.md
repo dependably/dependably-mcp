@@ -34,6 +34,16 @@ All notable changes to this project are documented here. The format follows
 - **`get_publish_command` covers Hex** with `mix hex.publish` against the Hex API. For apk and
   Terraform, which are proxy-only, it says there is no publish endpoint instead of returning a
   command.
+- **Publish commands no longer put the token on the command line**, where it lands in shell
+  history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,
+  RPM lets `curl` prompt for it, and Maven and Cargo keep it in their own config files.
+- **`get_publish_command` uses the path it is given.** OCI loads the image tarball with
+  `docker load` before tagging, instead of passing the file path to `docker tag`. Maven uploads
+  the named file with `deploy:deploy-file`. Cargo publishes with `--manifest-path` pointing at
+  the crate's directory, and says to run it from source when given a packaged `.crate`.
+- **Go install commands no longer fall back around the proxy.** `GOPROXY` dropped `,direct`, so a
+  module the proxy refuses is not fetched straight from its origin. The `GONOSUMDB` advice is
+  gone: it takes module paths, not a host, and the checksum database is already proxied.
 
 ## [1.1.0] - 2026-09-23
 

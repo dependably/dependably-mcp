@@ -134,7 +134,7 @@ const versionField = z
 const artifactPath = z
   .string()
   .regex(ARTIFACT_PATH_PATTERN, ARTIFACT_PATH_MESSAGE)
-  .describe('Path to one built artefact file (e.g. ./dist/package.tgz, ./bin/Release/My.Pkg.1.0.0.nupkg). Shell globs are not accepted; name the file.');
+  .describe('Path to one built artefact file (e.g. ./dist/package.tgz, ./bin/Release/My.Pkg.1.0.0.nupkg, an image tarball from docker save). For cargo and hex, which publish from source, the package directory. Shell globs are not accepted; name the file.');
 
 /**
  * Single-quote a value so it cannot be read as more than one shell word, even
@@ -195,7 +195,7 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
     'get_publish_command',
     {
       title: 'Publish command',
-      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. The placeholder <token> must be replaced by the user with a valid Dependably token.',
+      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs), prompted for, or kept in a config file the comments name.',
       annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: z.object({
         ecosystem,
@@ -211,6 +211,27 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
 /** Informational, not an error: a proxy-only ecosystem simply has no publish command to return. */
 function proxyOnly(text: string): ToolResult {
   return { content: [{ type: 'text', text }] };
+}
+
+/**
+ * A line that reads a secret into an exported variable without echoing it or
+ * leaving it in shell history, which a token typed into the command line would.
+ */
+function readSecret(variable: string): string {
+  return `read -rs ${variable} && export ${variable}   # paste your token; it is not echoed or saved to history`;
+}
+
+/**
+ * The directory a source-built ecosystem publishes from. The path may name the
+ * directory itself or a file in it (Cargo.toml, mix.exs); a path whose last
+ * segment has an extension is taken to be a file.
+ */
+function directoryOf(path: string): string {
+  const trimmed = path.replace(/\/+$/, '') || '/';
+  const last = trimmed.split('/').pop() ?? '';
+  if (!last.includes('.') || last === '.' || last === '..') return trimmed;
+  const parent = trimmed.slice(0, trimmed.length - last.length).replace(/\/+$/, '');
+  return parent || '.';
 }
 
 function stripScheme(url: string): string {
@@ -300,10 +321,13 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       );
     }
     case 'golang': {
+      // No `,direct` fallback: Go falls through to the origin on a 404 or 410,
+      // which would fetch around the proxy and its policy. The checksum
+      // database is proxied under /go/sumdb/, so GONOSUMDB is not needed.
       const host = hostOnly(base);
       return fenced(
         'bash',
-        `# Add ${host} credentials to ~/.netrc and set GONOSUMDB=${host} first\nGOPROXY=${base}/go,direct go get ${shq(pkg)}@${ver ? shq(ver) : 'latest'}`,
+        `# Add credentials to ~/.netrc first (machine ${host} login user password <token>), then, inside your module:\nGOPROXY=${base}/go go get ${shq(pkg)}@${ver ? shq(ver) : 'latest'}`,
       );
     }
     case 'cargo':
@@ -351,6 +375,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
  */
 function publishCommand(base: string, ecosystem: string, artifactPath: string): ToolResult {
   const p = shq(artifactPath);
+  const dir = shq(directoryOf(artifactPath));
   switch (ecosystem) {
     case 'npm':
       return fenced(
@@ -360,35 +385,43 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
     case 'pypi':
       return fenced(
         'bash',
-        `twine upload --repository-url ${base}/pypi/legacy/ -u user -p <token> ${p}`,
+        `${readSecret('TWINE_PASSWORD')}\nTWINE_USERNAME=user twine upload --repository-url ${base}/pypi/legacy/ ${p}`,
       );
     case 'nuget':
       return fenced(
         'bash',
-        `dotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key <token>`,
+        `${readSecret('NUGET_API_KEY')}\ndotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key "$NUGET_API_KEY"`,
       );
     case 'maven':
       return fenced(
         'bash',
-        `# Configure ${base}/maven/ as a distributionManagement repo in pom.xml,\n# add server credentials (user / <token>) to settings.xml, then:\nmvn deploy`,
+        `# Add <server><id>dependably</id> with user / <token> to ~/.m2/settings.xml, then upload the file\n# (or run mvn deploy with ${base}/maven/ as the distributionManagement repository):\nmvn deploy:deploy-file -Dfile=${p} -Durl=${base}/maven/ -DrepositoryId=dependably -DgroupId=<groupId> -DartifactId=<artifactId> -Dversion=<version>`,
       );
     case 'rpm':
-      return fenced('bash', `curl -u <user>:<token> --upload-file ${p} ${base}/rpm/upload`);
+      // `-u user` with no password makes curl prompt for it.
+      return fenced('bash', `# curl prompts for the password: paste your token\ncurl -u user --upload-file ${p} ${base}/rpm/upload`);
     case 'oci': {
+      // The artefact is an image tarball (docker save); a path is not an image
+      // reference, so it is loaded first and the loaded name is tagged.
       const loginHost = hostOnly(base);
       const refHost = stripScheme(base);
       return fenced(
         'bash',
-        `docker login ${loginHost}\ndocker tag ${p} ${refHost}/<image>:<tag>\ndocker push ${refHost}/<image>:<tag>`,
+        `docker login ${loginHost}\ndocker load -i ${p}   # prints "Loaded image: <name>:<tag>"\ndocker tag <name>:<tag> ${refHost}/<image>:<tag>\ndocker push ${refHost}/<image>:<tag>`,
       );
     }
     case 'golang':
       return proxyOnly('Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.');
-    case 'cargo':
-      return fenced(
-        'bash',
-        `# Requires [registries.dependably] in ~/.cargo/config.toml.\n# Run from the crate directory (${p}):\ncargo publish --registry dependably`,
-      );
+    case 'cargo': {
+      // cargo publishes from source: the path names the crate's directory or
+      // its Cargo.toml. A packaged .crate does not sit beside its source, so
+      // no manifest path can be derived from one.
+      const prereq = '# Requires [registries.dependably] in ~/.cargo/config.toml, and cargo login --registry dependably.';
+      if (artifactPath.endsWith('.crate')) {
+        return fenced('bash', `${prereq}\n# cargo publishes from source, not a packaged .crate: run this in the crate's own directory.\ncargo publish --registry dependably`);
+      }
+      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(`${directoryOf(artifactPath)}/Cargo.toml`)}`);
+    }
     case 'apk':
       return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');
     case 'terraform':
@@ -396,7 +429,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
     case 'hex':
       return fenced(
         'bash',
-        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n# Run from the package directory (${p}):\nHEX_API_URL=${base}/hex/api HEX_API_KEY=<token> mix hex.publish`,
+        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${readSecret('HEX_API_KEY')}\ncd ${dir} && HEX_API_URL=${base}/hex/api mix hex.publish`,
       );
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);

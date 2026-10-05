@@ -1260,14 +1260,16 @@ describe('setup tools', () => {
     });
   }
 
-  it('publishes hex through the Hex API plane with the token left as a placeholder', async () => {
+  it('publishes hex through the Hex API plane, reading the key without putting it in history', async () => {
     stubFetch();
     const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
     ok(!res.isError);
+    ok(res.content[0].text.includes('read -rs HEX_API_KEY && export HEX_API_KEY'), res.content[0].text);
     ok(
-      res.content[0].text.includes('HEX_API_URL=https://dep.example.com/hex/api HEX_API_KEY=<token> mix hex.publish\n'),
+      res.content[0].text.includes("cd './my_lib' && HEX_API_URL=https://dep.example.com/hex/api mix hex.publish\n"),
       res.content[0].text,
     );
+    ok(!res.content[0].text.includes('HEX_API_KEY=<token>'), 'no token typed into the command line');
     ok(!res.content[0].text.includes('--yes'), 'the user should confirm the publish interactively');
   });
 });
@@ -1460,11 +1462,61 @@ describe('setup tools — credential prerequisites', () => {
     ok(res.content[0].text.includes('# docker login dep.example.com first'), res.content[0].text);
   });
 
-  it('tells golang installers to configure netrc and GONOSUMDB, and adds ,direct to GOPROXY', async () => {
+  it('tells golang installers to configure netrc, and never falls back around the proxy', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(res.content[0].text.includes('# Add dep.example.com credentials to ~/.netrc and set GONOSUMDB=dep.example.com first'), res.content[0].text);
-    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go,direct go get'), res.content[0].text);
+    ok(res.content[0].text.includes('(machine dep.example.com login user password <token>)'), res.content[0].text);
+    ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go go get'), res.content[0].text);
+    ok(!res.content[0].text.includes(',direct'), 'a ,direct fallback would fetch refused modules around the proxy');
+    ok(!res.content[0].text.includes('GONOSUMDB'), 'GONOSUMDB takes module paths, not a host; the sumdb is proxied');
+  });
+});
+
+describe('setup tools — publish commands keep tokens out of history and name real inputs', () => {
+  const text = async (ecosystem, artifact_path) => {
+    stubFetch();
+    const res = await call(base, 'get_publish_command', { ecosystem, artifact_path });
+    ok(!res.isError, res.content[0].text);
+    return res.content[0].text;
+  };
+
+  it('never types a token into a command line', async () => {
+    for (const eco of ['pypi', 'nuget', 'rpm', 'hex', 'maven', 'npm', 'cargo', 'oci']) {
+      const t = await text(eco, eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin');
+      const commandLines = t.split('\n').filter((l) => !l.startsWith('#') && !l.startsWith('```'));
+      for (const line of commandLines) ok(!line.includes('<token>'), `${eco}: ${line}`);
+    }
+  });
+
+  it('pypi reads the password into TWINE_PASSWORD', async () => {
+    const t = await text('pypi', './dist/pkg-1.0.0.tar.gz');
+    ok(t.includes('read -rs TWINE_PASSWORD && export TWINE_PASSWORD'), t);
+    ok(t.includes("TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz'"), t);
+  });
+
+  it('rpm lets curl prompt for the password', async () => {
+    const t = await text('rpm', './out.rpm');
+    ok(t.includes("curl -u user --upload-file './out.rpm' https://dep.example.com/rpm/upload"), t);
+  });
+
+  it('oci loads the image tarball rather than tagging a file path', async () => {
+    const t = await text('oci', './image.tar');
+    ok(t.includes("docker load -i './image.tar'"), t);
+    ok(!t.includes("docker tag './image.tar'"), t);
+  });
+
+  it('maven uploads the named file with deploy:deploy-file', async () => {
+    const t = await text('maven', './target/app-1.0.jar');
+    ok(t.includes("mvn deploy:deploy-file -Dfile='./target/app-1.0.jar' -Durl=https://dep.example.com/maven/ -DrepositoryId=dependably"), t);
+  });
+
+  it('cargo publishes from the crate directory, given the directory or its Cargo.toml', async () => {
+    ok((await text('cargo', './my-crate')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    ok((await text('cargo', './my-crate/')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    ok((await text('cargo', './my-crate/Cargo.toml')).includes("--manifest-path './my-crate/Cargo.toml'"));
+    const crate = await text('cargo', 'target/package/foo-1.0.0.crate');
+    ok(crate.includes('not a packaged .crate') && !crate.includes('--manifest-path'), crate);
+    ok((await text('cargo', 'Cargo.toml')).includes("--manifest-path './Cargo.toml'"));
   });
 });
 
@@ -1494,9 +1546,9 @@ describe('setup tools — path-prefixed base URL', () => {
     ok(!ociPublish.content[0].text.includes('docker login host.example.com/dependably'), ociPublish.content[0].text);
 
     const golang = await call(prefixed, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(golang.content[0].text.includes('# Add host.example.com credentials to ~/.netrc and set GONOSUMDB=host.example.com first'), golang.content[0].text);
+    ok(golang.content[0].text.includes('(machine host.example.com login user password <token>)'), golang.content[0].text);
     // GOPROXY is a URL, not a bare host, so it keeps the path prefix.
-    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go,direct'), golang.content[0].text);
+    ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go go get'), golang.content[0].text);
 
     const pypi = await call(prefixed, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
     ok(pypi.content[0].text.includes('# Put your token in ~/.netrc for host.example.com (machine host.example.com login user password <token>) first'), pypi.content[0].text);
