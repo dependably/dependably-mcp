@@ -20,8 +20,10 @@ All notable changes to this project are documented here. The format follows
   `clean` is never true while that list is non-empty.
 - **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
   record, and the summary counted both, roughly doubling the totals and inflating "unknown"
-  severity. Records that name each other, or the same CVE, as an alias are folded into one
-  advisory, which lists the folded ids in `aliases` and keeps the highest score and fix.
+  severity. Records from different databases that name each other, or the same CVE, as an
+  alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
+  highest score and fix. Two records from the same database are never folded: an incomplete-fix
+  follow-up lists its predecessor as an alias, but it is a separate flaw with its own fix.
 
 - **Publish commands no longer put the token on the command line**, where it lands in shell
   history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,

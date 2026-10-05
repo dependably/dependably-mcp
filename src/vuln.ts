@@ -376,32 +376,58 @@ export function buildFindings(
  * report lists both, so counting rows counted the flaw twice — and the PYSEC
  * copy usually carries no severity, so it also inflated "unknown". Two
  * advisories are the same flaw when one names the other, or both name the same
- * id (typically the CVE), in their OSV `aliases`. The kept entry is the most
- * informative record (highest severity, then one with a summary, then a GHSA);
- * the rest are listed in its `aliases`, and the scores and fix are the most
- * severe and highest of the group so no folded record's facts are lost.
+ * id (typically the CVE), in their OSV `aliases`.
+ *
+ * Only records from different databases fold together. A database does not
+ * publish one flaw twice, but an incomplete-fix follow-up does list its
+ * predecessor as an alias (lodash's GHSA-r5fr-rjxr-66jc names
+ * GHSA-35jh-r3h4-6jhm and CVE-2021-23337), and folding those would report two
+ * flaws, with different fixes, as one.
+ *
+ * The kept entry is the most informative record (highest severity, then one
+ * with a summary, then a GHSA); the rest are listed in its `aliases`, and the
+ * scores and fix are the most severe and highest of the group so no folded
+ * record's facts are lost.
  */
 export function collapseAliases(
   advisories: readonly Advisory[],
   aliasesOf: (osvId: string) => readonly string[],
   ecosystem?: string,
 ): Advisory[] {
-  const parent = new Map<string, string>();
+  // Union-find over the advisory ids only. Two advisories are joined when one
+  // names the other, or both name a shared id (a CVE), and the two groups hold
+  // no advisory from the same database.
+  const ids = [...new Set(advisories.map((a) => a.osvId))];
+  const parent = new Map<string, string>(ids.map((id) => [id, id]));
+  const databases = new Map<string, Set<string>>(ids.map((id) => [id, new Set([databaseOf(id)])]));
   const find = (x: string): string => {
     let root = x;
-    while (parent.has(root) && parent.get(root) !== root) root = parent.get(root)!;
+    while (parent.get(root) !== root) root = parent.get(root)!;
     parent.set(x, root);
     return root;
   };
   const union = (a: string, b: string): void => {
     const ra = find(a);
     const rb = find(b);
-    if (ra !== rb) parent.set(ra, rb);
+    if (ra === rb) return;
+    const da = databases.get(ra)!;
+    const db = databases.get(rb)!;
+    if ([...da].some((d) => db.has(d))) return;
+    parent.set(ra, rb);
+    databases.set(rb, new Set([...da, ...db]));
   };
 
+  const named = new Map<string, Set<string>>();
   for (const a of advisories) {
-    parent.set(a.osvId, find(a.osvId));
-    for (const alias of [...(a.aliases ?? []), ...aliasesOf(a.osvId)]) union(a.osvId, alias);
+    const names = new Set([a.osvId, ...(a.aliases ?? []), ...aliasesOf(a.osvId)]);
+    named.set(a.osvId, new Set([...(named.get(a.osvId) ?? []), ...names]));
+  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const ni = named.get(ids[i])!;
+      const nj = named.get(ids[j])!;
+      if (ni.has(ids[j]) || nj.has(ids[i]) || [...ni].some((n) => n !== ids[i] && nj.has(n))) union(ids[i], ids[j]);
+    }
   }
 
   const groups = new Map<string, Advisory[]>();
@@ -414,6 +440,11 @@ export function collapseAliases(
   }
 
   return [...groups.values()].map((group) => (group.length === 1 ? group[0] : mergeGroup(group, ecosystem)));
+}
+
+/** The database an advisory id comes from: its prefix (GHSA, PYSEC, CVE, MAL, …). */
+function databaseOf(id: string): string {
+  return id.split('-')[0].toUpperCase();
 }
 
 function informativeness(a: Advisory): number {

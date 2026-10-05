@@ -697,6 +697,12 @@ describe('check_dependencies live coverage', () => {
     match(body.findings[0].advisories[0].summary, /Malicious package/);
   });
 
+  it('rejects a blank name or version, which no advisory source would check', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const res = await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '   ' }] });
+    ok(res.isError, res.content[0].text);
+  });
+
   it('caps the per-package lookups and reports the rest as unverified', async () => {
     const calls = stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
@@ -726,6 +732,29 @@ describe('check_dependencies live coverage', () => {
     const body = payload(await call(base, 'check_dependencies', { ecosystem: 'cargo', packages: [{ name: 'serde', version: '1.0.200' }] }));
     strictEqual(body.clean, true);
     deepStrictEqual(body.coverage, { liveChecked: 1, unverified: 0 });
+  });
+
+  it('does not fold two GHSAs when a follow-up advisory lists its predecessor as an alias', async () => {
+    // Real data: GHSA-r5fr-rjxr-66jc (2026, fixed 4.18.0) names GHSA-35jh-r3h4-6jhm
+    // and CVE-2021-23337 (fixed 4.17.21) among its aliases. They are two flaws.
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'lodash', version: '4.17.20', osvId: 'GHSA-35jh-r3h4-6jhm', severity: 'HIGH', cvssScore: 7.2, summary: 'Command Injection' },
+          { packageName: 'lodash', version: '4.17.20', osvId: 'GHSA-r5fr-rjxr-66jc', severity: 'HIGH', cvssScore: 8.1, summary: 'Code Injection via imports' },
+          { packageName: 'lodash', version: '4.17.20', osvId: 'PYSEC-0000-1', severity: 'UNKNOWN', summary: '' },
+        ],
+        total: 3,
+      }),
+      '/api/v1/vulnerabilities/GHSA-35jh-r3h4-6jhm': () => ({ aliases: ['CVE-2021-23337'], remediation: { fixedVersion: '4.17.21' } }),
+      '/api/v1/vulnerabilities/GHSA-r5fr-rjxr-66jc': () => ({ aliases: ['CVE-2021-23337', 'CVE-2026-4800', 'GHSA-35jh-r3h4-6jhm'], remediation: { fixedVersion: '4.18.0' } }),
+      '/api/v1/vulnerabilities/PYSEC-0000-1': () => ({ aliases: ['CVE-2026-4800'], remediation: { fixedVersion: '4.18.0' } }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
+    });
+    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    const ids = body.findings[0].advisories.map((a) => `${a.osvId}:${(a.aliases ?? []).join('+')}:${a.fixedVersion}`).sort();
+    deepStrictEqual(ids, ['GHSA-35jh-r3h4-6jhm::4.17.21', 'GHSA-r5fr-rjxr-66jc:PYSEC-0000-1:4.18.0']);
+    strictEqual(body.summary.advisories, 2);
   });
 
   it('folds a PYSEC record into its GHSA alias, so one flaw counts once', async () => {

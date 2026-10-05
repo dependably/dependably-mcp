@@ -60,8 +60,8 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         packages: z
           .array(
             z.object({
-              name: z.string().min(1).describe('Package name, e.g. "hono" or "@scope/pkg".'),
-              version: z.string().min(1).describe('Exact installed version.'),
+              name: z.string().trim().min(1).describe('Package name, e.g. "hono" or "@scope/pkg".'),
+              version: z.string().trim().min(1).describe('Exact installed version.'),
               dev: z
                 .boolean()
                 .optional()
