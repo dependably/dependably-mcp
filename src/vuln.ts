@@ -681,19 +681,19 @@ const GO_EXACT_VERSION = /^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+incompatible
 const INT32_MAX = 2_147_483_647;
 
 /**
- * Range operators, wildcards, dist-tags, source specs, Maven/NuGet bracket
- * ranges and Gradle dynamic versions: none names one release. When the
- * instance is air-gapped, lookup accepts any explicit version without
- * resolving it upstream, so these must be caught here rather than come back
- * "found, no advisories".
- */
-/**
  * rpm and apk versions use `~` (sorts before a release) and `^` (a snapshot),
  * so only whitespace, comparison operators, list separators and URL or
  * source-spec prefixes mark a non-version there.
  */
 const NOT_A_DISTRO_VERSION = /[\s<>=|,]|:\/\/|^(git|file|link):/i;
 
+/**
+ * Range operators, wildcards, dist-tags, source specs, Maven/NuGet bracket
+ * ranges and Gradle dynamic versions: none names one release. When the
+ * instance is air-gapped, lookup accepts any explicit version without
+ * resolving it upstream, so these must be caught here rather than come back
+ * "found, no advisories".
+ */
 const NOT_A_VERSION =
   /[\s^~*<>=|,[\]()]|\.\+$|^\+$|^(latest|next|release|x)$|^latest\.|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
 
