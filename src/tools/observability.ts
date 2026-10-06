@@ -2,7 +2,8 @@ import type { McpServer, RegisteredTool } from '@modelcontextprotocol/sdk/server
 import { z } from 'zod';
 
 import type { DependablyClient } from '../client.js';
-import { json, run } from '../format.js';
+import { DependablyApiError } from '../client.js';
+import { json, run, withSummary } from '../format.js';
 
 const READ_ANNOTATIONS = {
   readOnlyHint: true,
@@ -30,11 +31,27 @@ export function registerObservabilityTools(server: McpServer, client: Dependably
     'readiness_check',
     {
       title: 'Readiness check',
-      description: 'Readiness probe (GET /ready). Returns { status: "ready"|"degraded", checks, errors }. 503 with details when a subsystem (DB, blob store, etc.) is failing — use this first when investigating an incident.',
+      description: 'Readiness probe (GET /ready). Returns { status, strict, checks, required, degraded }: status is "ready" (every dependency up), "degraded" (a non-required dependency is down but the instance still serves), "unready" (a required dependency is down) or "draining" (shutting down); `checks` maps each dependency to its state and `degraded` names the failing ones. Use this first when investigating an incident. Needs no token.',
       annotations: READ_ANNOTATIONS,
       inputSchema: z.object({}).strict(),
     },
-    async () => run(async () => json(await client.get('/ready'))),
+    async () =>
+      run(async () => {
+        try {
+          return json(await client.get('/ready'));
+        } catch (e) {
+          // /ready answers 503 with the same body when a required dependency is
+          // down or the instance is draining; that body is the answer, not an error.
+          if (!(e instanceof DependablyApiError) || e.status !== 503 || !e.body) throw e;
+          let body: unknown;
+          try {
+            body = JSON.parse(e.body);
+          } catch {
+            throw e;
+          }
+          return withSummary('The instance answered 503: it is not ready to serve.', body);
+        }
+      }),
   ));
 
   return tools;

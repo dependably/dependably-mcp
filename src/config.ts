@@ -77,8 +77,19 @@ function parseBaseUrl(raw: string): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`DEPENDABLY_BASE_URL must be http(s): ${raw}`);
   }
-  return `${parsed.protocol}//${parsed.host}${trimTrailingSlashes(parsed.pathname)}`;
+  const path = trimTrailingSlashes(parsed.pathname);
+  // The base URL, host and path alike, is pasted into the install and publish
+  // commands the setup tools emit for the user to run, so a character a shell
+  // would interpret is refused here rather than quoted at every call site.
+  // An IPv6 literal's brackets delimit the address; they are not shell input.
+  const hostname = parsed.hostname.replace(/^\[(.*)\]$/, '$1');
+  if (SHELL_SIGNIFICANT.test(hostname) || SHELL_SIGNIFICANT.test(path)) {
+    throw new Error(`DEPENDABLY_BASE_URL must not contain shell metacharacters: ${raw}`);
+  }
+  return `${parsed.protocol}//${parsed.host}${path}`;
 }
+
+const SHELL_SIGNIFICANT = /[;$()'"`!&|*?<>{}[\]\\\s]/;
 
 function trimTrailingSlashes(path: string): string {
   let end = path.length;

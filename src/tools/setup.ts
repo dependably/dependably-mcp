@@ -119,9 +119,9 @@ const VERSION_MESSAGE = 'Version may only contain letters, digits, and . _ + - !
  * `/Users/me/My Builds/out.rpm` still work; only shell metacharacters,
  * newlines, glob characters and a leading `-` are rejected.
  */
-const ARTIFACT_PATH_PATTERN = /^(?!-)[^;|&$`<>()\n*?[\]{}]+$/;
+const ARTIFACT_PATH_PATTERN = /^(?!-)[^;|&$`<>()\n*?[\]{}\x00-\x1f\x7f]+$/;
 const ARTIFACT_PATH_MESSAGE =
-  'Artefact path must not contain shell metacharacters (; | & $ ` < > ( ) or newlines), shell glob characters (* ? [ ] { }), or start with -. Spaces are fine, but name one file — globs are not expanded.';
+  'Artefact path must not contain shell metacharacters (; | & $ ` < > ( ) or newlines), control characters, shell glob characters (* ? [ ] { }), or start with -. Spaces are fine, but name one file — globs are not expanded.';
 
 /** `""`/whitespace-only means "unpinned", the same as omitting the field entirely. */
 const versionField = z
@@ -245,11 +245,21 @@ function hasPathPrefix(base: string): boolean {
 }
 
 /**
+ * The hostname alone, for pip's `.netrc` `machine` entry: requests looks netrc
+ * up by hostname without the port, so `host:8443` would never match and
+ * authentication would silently fail. Go is the opposite (it matches
+ * `host:port`), so its netrc line uses {@link hostOnly}.
+ */
+function netrcHost(base: string): string {
+  return new URL(base).hostname;
+}
+
+/**
  * The bare `host[:port]`, with no scheme and no path prefix. Some destinations
- * — `docker login`, a `.netrc` `machine` entry, `GONOSUMDB` — parse their
- * argument as a hostname, not a URL; handing them a path-prefixed base (as
- * `stripScheme` would) makes them target the wrong thing. Places that expect
- * an actual URL (`GOPROXY`, `--index-url`, `--registry`) keep the full base.
+ * — `docker login`, Go's `.netrc` `machine` entry — parse their argument as a
+ * host, not a URL; handing them a path-prefixed base (as `stripScheme` would)
+ * makes them target the wrong thing. Places that expect an actual URL
+ * (`GOPROXY`, `--index-url`, `--registry`) keep the full base.
  */
 function hostOnly(base: string): string {
   return new URL(base).host;
@@ -286,7 +296,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
     case 'npm':
       return fenced('bash', `npm install --registry=${base}/npm/ ${shq(pinned(pkg, '@', ver))}`);
     case 'pypi': {
-      const host = hostOnly(base);
+      const host = netrcHost(base);
       return fenced(
         'bash',
         `# Put your token in ~/.netrc for ${host} (machine ${host} login user password <token>) first\npip install --index-url ${base}/simple/ ${shq(pinned(pkg, '==', ver))}`,
@@ -325,6 +335,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       // No `,direct` fallback: Go falls through to the origin on a 404 or 410,
       // which would fetch around the proxy and its policy. The checksum
       // database is proxied under /go/sumdb/, so GONOSUMDB is not needed.
+      // Go matches a netrc machine on host:port, so the port stays.
       const host = hostOnly(base);
       return fenced(
         'bash',
