@@ -21,33 +21,41 @@ All notable changes to this project are documented here. The format follows
 - **A range, tag or source spec is unverified, not clean.** The server matches advisories
   against one exact version and answers anything it cannot parse (`^4.17.20`, `latest`,
   `git+https://…`, `file:…`) with no advisories, which read as clean. Such a version is now
-  listed under `coverage.unverified` with the reason, and an npm advisory returned without an id
-  leaves its dependency unverified rather than being skipped.
+  listed under `coverage.unverified` with the reason. Each ecosystem has its own rule: npm,
+  Cargo, Hex and Terraform need a full `x.y.z`; Go needs a `v`-prefixed module version, so a
+  branch or commit is unverified; Maven and NuGet bracket ranges, Gradle dynamic versions,
+  `LATEST`, `RELEASE` and PEP 440 specifiers are unverified everywhere. An npm advisory returned
+  without an id leaves its dependency unverified rather than being skipped.
 - **`check_dependencies` requires `ecosystem`.** It defaulted to npm, so a pip list passed
   without one matched nothing and came back clean. A blank name or version is rejected, and
   `summary.packagesChecked` now counts distinct dependencies an advisory source covered, not the
   raw input length.
 - **Fixed-version lookups are bounded.** A large tree made one advisory-detail request per
   finding. Lookups now stop at the 200 most severe advisories; the rest report no
-  `fixedVersion`, and a `remediationNote` says how many and points to `get_remediation`.
+  `fixedVersion`, a `remediationNote` says how many and points to `get_remediation`, and a finding
+  whose `bumpTo` may miss a skipped fix carries `bumpToPartial: true`.
 - **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
   record, and the summary counted both, roughly doubling the totals and inflating "unknown"
   severity. Records from different databases that name each other, or the same CVE, as an
   alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
-  highest score and fix. Records that name each other are folded before records that only share
-  a CVE, so the result does not depend on the order the report lists them in. Two records from
-  the same database are never folded, and an incomplete-fix follow-up, which lists its
-  predecessor's CVE beside its own, is tied to another record only through its own ids.
+  highest score and fix. Two records fold only when the link is unambiguous, each being the
+  other's sole candidate in the other's database, and records that name each other are matched
+  before records that only share a CVE, so the result does not depend on the order the report
+  lists them in. Two records from the same database are never folded. An incomplete-fix
+  follow-up, which lists its predecessor's CVE beside its own, is tied to another record only
+  through its own ids, and through no shared id at all when its predecessor is not in the
+  result; counting one flaw twice is the safe direction.
 - **`readiness_check` returns the readiness body on a 503.** `/ready` answers 503 with the
   failing dependencies when the instance is not ready, and the tool reported only a generic
   server error. It now returns that body. The description and README name the real fields
   (`status`, `strict`, `checks`, `required`, `degraded`) and all four statuses.
-- **`.netrc` instructions name the hostname without the port.** pip and Go match netrc entries on
-  the hostname, so an instance on a non-default port never authenticated.
+- **pip's `.netrc` instructions name the hostname without the port.** pip matches netrc entries
+  on the hostname, so an instance on a non-default port never authenticated. Go matches on
+  `host:port`, so its line keeps the port.
 - **An artefact path with control characters is refused**, so a carriage return cannot make the
-  displayed command differ from what a shell would run. A base URL whose path holds shell
-  metacharacters is refused at startup, since it is pasted into every command the setup tools
-  emit.
+  displayed command differ from what a shell would run. A base URL whose host or path holds
+  shell metacharacters is refused at startup, since it is pasted into every command the setup
+  tools emit.
 
 - **Publish commands no longer put the token on the command line**, where it lands in shell
   history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,

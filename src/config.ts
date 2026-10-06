@@ -78,11 +78,11 @@ function parseBaseUrl(raw: string): string {
     throw new Error(`DEPENDABLY_BASE_URL must be http(s): ${raw}`);
   }
   const path = trimTrailingSlashes(parsed.pathname);
-  // The base URL is pasted into the install and publish commands the setup
-  // tools emit for the user to run, so a path segment a shell would interpret
-  // is refused here rather than quoted at every call site.
-  if (SHELL_SIGNIFICANT.test(path)) {
-    throw new Error(`DEPENDABLY_BASE_URL must not contain shell metacharacters in its path: ${raw}`);
+  // The base URL, host and path alike, is pasted into the install and publish
+  // commands the setup tools emit for the user to run, so a character a shell
+  // would interpret is refused here rather than quoted at every call site.
+  if (SHELL_SIGNIFICANT.test(parsed.host) || SHELL_SIGNIFICANT.test(path)) {
+    throw new Error(`DEPENDABLY_BASE_URL must not contain shell metacharacters: ${raw}`);
   }
   return `${parsed.protocol}//${parsed.host}${path}`;
 }

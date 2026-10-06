@@ -245,21 +245,22 @@ function hasPathPrefix(base: string): boolean {
 }
 
 /**
- * The bare `host[:port]`, with no scheme and no path prefix. Some destinations
- * — `docker login`, a `.netrc` `machine` entry, `GONOSUMDB` — parse their
- * argument as a hostname, not a URL; handing them a path-prefixed base (as
- * `stripScheme` would) makes them target the wrong thing. Places that expect
- * an actual URL (`GOPROXY`, `--index-url`, `--registry`) keep the full base.
- */
-/**
- * The hostname alone, for a `.netrc` `machine` entry: pip (requests) and Go
- * match netrc on the hostname without the port, so `host:8443` would never
- * match and authentication would silently fail.
+ * The hostname alone, for pip's `.netrc` `machine` entry: requests looks netrc
+ * up by hostname without the port, so `host:8443` would never match and
+ * authentication would silently fail. Go is the opposite (it matches
+ * `host:port`), so its netrc line uses {@link hostOnly}.
  */
 function netrcHost(base: string): string {
   return new URL(base).hostname;
 }
 
+/**
+ * The bare `host[:port]`, with no scheme and no path prefix. Some destinations
+ * — `docker login`, Go's `.netrc` `machine` entry — parse their argument as a
+ * host, not a URL; handing them a path-prefixed base (as `stripScheme` would)
+ * makes them target the wrong thing. Places that expect an actual URL
+ * (`GOPROXY`, `--index-url`, `--registry`) keep the full base.
+ */
 function hostOnly(base: string): string {
   return new URL(base).host;
 }
@@ -334,7 +335,8 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       // No `,direct` fallback: Go falls through to the origin on a 404 or 410,
       // which would fetch around the proxy and its policy. The checksum
       // database is proxied under /go/sumdb/, so GONOSUMDB is not needed.
-      const host = netrcHost(base);
+      // Go matches a netrc machine on host:port, so the port stays.
+      const host = hostOnly(base);
       return fenced(
         'bash',
         `# Add credentials to ~/.netrc first (machine ${host} login user password <token>), then, inside your module:\nGOPROXY=${base}/go go get ${shq(pkg)}@${ver ? shq(ver) : 'latest'}`,

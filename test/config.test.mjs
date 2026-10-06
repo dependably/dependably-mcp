@@ -143,6 +143,12 @@ describe('loadConfig base URL path', () => {
     });
   }
 
+  for (const url of ['https://a$(id).com', 'https://a;b.com/x', 'https://x`id`.com', "https://a'b.com"]) {
+    it(`refuses a shell metacharacter in the host: ${url}`, () => {
+      throws(() => withEnv({ ...minimal, DEPENDABLY_BASE_URL: url }, loadConfig), /must not contain shell metacharacters/);
+    });
+  }
+
   it('leaves a character the URL parser already percent-encodes harmless', () => {
     const cfg = withEnv({ ...minimal, DEPENDABLY_BASE_URL: 'https://dep.example.com/a`id`' }, loadConfig);
     strictEqual(cfg.baseUrl, 'https://dep.example.com/a%60id%60');

@@ -53,6 +53,8 @@ export type Finding = {
   installed: string;
   dev: boolean;
   bumpTo: string | null;
+  /** True when some advisory's fixed version was not looked up (the lookup cap), so bumpTo may be too low. */
+  bumpToPartial?: boolean;
   advisories: Advisory[];
 };
 
@@ -466,7 +468,17 @@ export function collapseAliases(
       }
     }
   };
-  pairs((ni, nj, i, j) => ni.has(j) || nj.has(i));
+  // Each pass ties two records only when the link is unambiguous: each is the
+  // other's sole candidate in the other's database. Union-find over every
+  // candidate would let input order decide which twin a third record joined.
+  const mentions = (i: string, j: string): boolean => named.get(i)!.has(j) || named.get(j)!.has(i);
+  const sole = (link: (i: string, j: string) => boolean) => (i: string, j: string): boolean => {
+    if (!link(i, j)) return false;
+    const ci = ids.filter((k) => k !== i && databaseOf(k) === databaseOf(j) && link(i, k));
+    const cj = ids.filter((k) => k !== j && databaseOf(k) === databaseOf(i) && link(j, k));
+    return ci.length === 1 && cj.length === 1;
+  };
+  pairs((_ni, _nj, i, j) => sole(mentions)(i, j));
   // A record naming another advisory of its own database is an incomplete-fix
   // follow-up, and it lists its predecessor's ids (the old CVE) beside its own.
   // Only the ids it does not inherit can tie it to another record; when a
@@ -485,11 +497,12 @@ export function collapseAliases(
       shareable.set(id, new Set([...names].filter((n) => !inherited.has(n))));
     }
   }
-  pairs((_ni, _nj, i, j) => {
+  const shares = (i: string, j: string): boolean => {
     const si = shareable.get(i);
     const sj = shareable.get(j);
     return !!si && !!sj && [...si].some((n) => n !== i && n !== j && sj.has(n));
-  });
+  };
+  pairs((_ni, _nj, i, j) => sole(shares)(i, j));
 
   const groups = new Map<string, Advisory[]>();
   for (const a of advisories) {
@@ -656,15 +669,45 @@ function shortReason(e: unknown): string {
 }
 
 /** npm's exact-version shape, the one the server's npm version parser accepts. */
-const NPM_EXACT_VERSION = /^[vV]?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+const NPM_EXACT_VERSION = /^[vV]?(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 
-/** Range operators, wildcards, dist-tags and source specs no ecosystem's version can contain. */
-const NOT_A_VERSION = /[\s^~*<>=|,]|^(latest|next|\*|x)$|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
+/** Cargo, Hex and Terraform lockfiles pin a full SemVer `x.y.z`; a shorter form is a requirement. */
+const SEMVER_EXACT_VERSION = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+
+/** A Go module version: `v` + SemVer, which covers pseudo-versions and `+incompatible`. A branch or commit is not one. */
+const GO_EXACT_VERSION = /^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(\+incompatible)?$/;
+
+/** The server parses each numeric part as a 32-bit int; a larger one is unparseable there. */
+const INT32_MAX = 2_147_483_647;
+
+/**
+ * Range operators, wildcards, dist-tags, source specs, Maven/NuGet bracket
+ * ranges and Gradle dynamic versions: none names one release. When the
+ * instance is air-gapped, lookup accepts any explicit version without
+ * resolving it upstream, so these must be caught here rather than come back
+ * "found, no advisories".
+ */
+const NOT_A_VERSION =
+  /[\s^~*<>=|,[\]()]|\.\+$|^\+$|^(latest|next|release|x)$|^latest\.|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
+
+function numericPartsFit(match: RegExpExecArray | null): boolean {
+  return !!match && [match[1], match[2], match[3]].every((n) => n.length <= 10 && Number(n) <= INT32_MAX);
+}
 
 /** True when `version` names one release that an advisory source can match exactly. */
 export function isExactVersion(ecosystem: string, version: string): boolean {
-  if (ecosystem === 'npm') return NPM_EXACT_VERSION.test(version);
-  return !NOT_A_VERSION.test(version);
+  switch (ecosystem) {
+    case 'npm':
+      return numericPartsFit(NPM_EXACT_VERSION.exec(version));
+    case 'cargo':
+    case 'hex':
+    case 'terraform':
+      return numericPartsFit(SEMVER_EXACT_VERSION.exec(version));
+    case 'golang':
+      return numericPartsFit(GO_EXACT_VERSION.exec(version));
+    default:
+      return !NOT_A_VERSION.test(version);
+  }
 }
 
 export function uniquePackages(packages: readonly InputPackage[], ecosystem: string): InputPackage[] {

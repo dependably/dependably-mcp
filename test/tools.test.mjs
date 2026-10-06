@@ -592,6 +592,73 @@ describe('check_dependencies live coverage', () => {
     deepStrictEqual(calls.filter((c) => c.path === '/api/v1/lookup').map((c) => c.query.get('name')), ['requests']);
   });
 
+  it('requires an exact version per ecosystem: a Go branch, a bracket range, a Gradle dynamic version or a Cargo requirement is unverified', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      // An air-gapped lookup accepts any explicit version and finds nothing.
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const cases = {
+      golang: { bad: ['master', 'abcdef1', 'v1', 'upgrade'], good: ['v1.10.0', 'v0.0.0-20230101000000-abcdef123456', 'v2.0.0+incompatible'] },
+      maven: { bad: ['[1.0]', '[1.0,2.0)', '1.+', 'latest.release', 'RELEASE', 'LATEST'], good: ['1.0-SNAPSHOT', '2.14.1'] },
+      nuget: { bad: ['[1.0.0]', '(1.0,2.0]'], good: ['1.0.0-beta.1', '13.0.3'] },
+      cargo: { bad: ['1.0', '1', '^1.0.0'], good: ['1.0.200', '0.4.0-alpha.1'] },
+      pypi: { bad: ['>=5.0', '~=1.4', '==1.0', '1.*'], good: ['1.0.post1', '2!1.0', '1.0+local'] },
+    };
+    for (const [ecosystem, { bad, good }] of Object.entries(cases)) {
+      const packages = [...bad, ...good].map((version, i) => ({ name: `p${i}`, version }));
+      const body = payload(await call(base, 'check_dependencies', { ecosystem, packages }));
+      deepStrictEqual(
+        body.coverage.unverifiedPackages.map((u) => u.version).sort(),
+        [...bad].sort(),
+        `${ecosystem}: ${JSON.stringify(body.coverage)}`,
+      );
+    }
+  });
+
+  it('treats an npm version whose numeric part overflows the server parser as unverified', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => ({}) });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '2147483648.0.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+  });
+
+  it('folds the same way whatever order the advisories arrive in, even when a twin repeats a predecessor CVE', async () => {
+    const rows = [
+      { osvId: 'GHSA-aaaa', aliases: ['CVE-1'] },
+      { osvId: 'PYSEC-a', aliases: ['CVE-1'] },
+      { osvId: 'GHSA-bbbb', aliases: ['GHSA-aaaa', 'CVE-1', 'CVE-2'] },
+      { osvId: 'PYSEC-b', aliases: ['CVE-1', 'CVE-2'] },
+    ];
+    const permutations = (xs) => (xs.length <= 1 ? [xs] : xs.flatMap((x, i) => permutations([...xs.slice(0, i), ...xs.slice(i + 1)]).map((p) => [x, ...p])));
+    const results = new Set();
+    for (const order of permutations(rows)) {
+      stubRoutes({
+        '/api/v1/vuln-report': () => ({
+          items: order.map((r) => ({ packageName: 'p', version: '1.0', osvId: r.osvId, severity: 'HIGH', summary: r.osvId, aliases: r.aliases })),
+          total: order.length,
+        }),
+        '*': () => ({ status: 404, body: {} }),
+      });
+      const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'p', version: '1.0' }] }));
+      results.add(JSON.stringify(body.findings[0].advisories.map((a) => [a.osvId, a.aliases ?? []]).sort()));
+    }
+    strictEqual(results.size, 1, [...results].join('\n'));
+    // GHSA-bbbb is a follow-up of GHSA-aaaa: never folded with GHSA-aaaa's twin.
+    ok(!JSON.parse([...results][0]).some(([id, al]) => id === 'GHSA-aaaa' && al.includes('PYSEC-b')));
+  });
+
+  it('flags a finding whose bumpTo may miss a capped advisory', async () => {
+    const items = Array.from({ length: 201 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-${i}`, severity: i === 0 ? 'LOW' : 'HIGH', cvssScore: i === 0 ? 1 : 8 }));
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
+      '*': () => ({ remediation: { fixedVersion: '2.0.0' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }] }));
+    strictEqual(body.findings[0].bumpToPartial, true);
+  });
+
   it('marks a dependency unverified when an advisory for it comes back without an id', async () => {
     stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
@@ -1804,13 +1871,17 @@ describe('readiness_check on a 503', () => {
 describe('setup tools — netrc and artefact path hygiene', () => {
   const ported = { baseUrl: 'https://dep.example.com:8443', token: 'tok', timeoutMs: 5000 };
 
-  it('names the hostname without the port in netrc, since pip and Go match netrc on hostname', async () => {
+  it('names the hostname without the port in pip\'s netrc line, since requests matches on hostname', async () => {
     stubFetch();
-    for (const [ecosystem, pkg] of [['pypi', 'requests'], ['golang', 'github.com/foo/bar']]) {
-      const t = (await call(ported, 'get_install_command', { ecosystem, package: pkg, version: '1.0.0' })).content[0].text;
-      ok(t.includes('machine dep.example.com login'), t);
-      ok(!t.includes('machine dep.example.com:8443'), t);
-    }
+    const t = (await call(ported, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
+    ok(t.includes('machine dep.example.com login'), t);
+    ok(!t.includes('machine dep.example.com:8443'), t);
+  });
+
+  it('keeps the port in Go\'s netrc line, since Go matches netrc on host:port', async () => {
+    stubFetch();
+    const t = (await call(ported, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.0.0' })).content[0].text;
+    ok(t.includes('machine dep.example.com:8443 login'), t);
   });
 
   it('refuses control characters in an artefact path', async () => {

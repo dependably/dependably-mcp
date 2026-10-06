@@ -89,6 +89,13 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         const { pairs, skipped } = remediationPairs(hits);
         const remediations = await fetchRemediations(client, pairs);
         const findings = buildFindings(hits, devOf, remediations, args.ecosystem);
+        if (skipped) {
+          // Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix.
+          const looked = new Set(pairs.map((p) => `${p.osvId}@@${p.version}`));
+          for (const f of findings) {
+            if (f.advisories.some((a) => !looked.has(`${a.osvId}@@${f.installed}`))) f.bumpToPartial = true;
+          }
+        }
         if (!args.includeAdvisoryDetail) stripAdvisoryDetail(findings);
 
         return json({
