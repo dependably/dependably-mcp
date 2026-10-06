@@ -210,6 +210,33 @@ export async function mapLimit<T, R>(
   return out;
 }
 
+/** Most advisory-detail lookups one check_dependencies call makes for fixed versions. */
+export const MAX_REMEDIATION_LOOKUPS = 200;
+
+/**
+ * The (advisory, version) pairs to resolve, most severe first, capped. Past the
+ * cap a finding keeps its advisory but reports no fixed version, which the
+ * summary counts under `withoutFixedVersion`; the cap keeps a large tree from
+ * turning one tool call into thousands of requests.
+ */
+export function remediationPairs(
+  hits: readonly ReportItem[],
+  cap = MAX_REMEDIATION_LOOKUPS,
+): { pairs: Array<{ osvId: string; version: string }>; skipped: number } {
+  const distinct = new Map<string, ReportItem>();
+  for (const h of hits) {
+    const key = `${h.osvId}@@${h.version}`;
+    if (!distinct.has(key)) distinct.set(key, h);
+  }
+  const ordered = [...distinct.values()].sort(
+    (a, b) => severityRank(b.severity) - severityRank(a.severity) || (b.cvssScore ?? 0) - (a.cvssScore ?? 0),
+  );
+  return {
+    pairs: ordered.slice(0, cap).map((h) => ({ osvId: h.osvId, version: h.version })),
+    skipped: Math.max(0, ordered.length - cap),
+  };
+}
+
 export type RemediationLookup = {
   fixedVersion: string | null;
   cwes: string[];
@@ -440,7 +467,29 @@ export function collapseAliases(
     }
   };
   pairs((ni, nj, i, j) => ni.has(j) || nj.has(i));
-  pairs((ni, nj, i) => [...ni].some((n) => n !== i && nj.has(n)));
+  // A record naming another advisory of its own database is an incomplete-fix
+  // follow-up, and it lists its predecessor's ids (the old CVE) beside its own.
+  // Only the ids it does not inherit can tie it to another record; when a
+  // predecessor is not in this set its ids are unknown, so a shared id ties
+  // the follow-up to nothing. Counting one flaw twice is the safe direction.
+  const shareable = new Map<string, Set<string> | null>();
+  for (const id of ids) {
+    const names = named.get(id)!;
+    const predecessors = [...names].filter((n) => n !== id && databaseOf(n) === databaseOf(id) && databaseOf(n) !== 'CVE');
+    if (predecessors.length === 0) {
+      shareable.set(id, names);
+    } else if (predecessors.some((p) => !named.has(p))) {
+      shareable.set(id, null);
+    } else {
+      const inherited = new Set(predecessors.flatMap((p) => [...named.get(p)!]));
+      shareable.set(id, new Set([...names].filter((n) => !inherited.has(n))));
+    }
+  }
+  pairs((_ni, _nj, i, j) => {
+    const si = shareable.get(i);
+    const sj = shareable.get(j);
+    return !!si && !!sj && [...si].some((n) => n !== i && n !== j && sj.has(n));
+  });
 
   const groups = new Map<string, Advisory[]>();
   for (const a of advisories) {
@@ -606,7 +655,19 @@ function shortReason(e: unknown): string {
   return message.split(/(?<=\.)\s/)[0].slice(0, 200);
 }
 
-function uniquePackages(packages: readonly InputPackage[], ecosystem: string): InputPackage[] {
+/** npm's exact-version shape, the one the server's npm version parser accepts. */
+const NPM_EXACT_VERSION = /^[vV]?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+
+/** Range operators, wildcards, dist-tags and source specs no ecosystem's version can contain. */
+const NOT_A_VERSION = /[\s^~*<>=|,]|^(latest|next|\*|x)$|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
+
+/** True when `version` names one release that an advisory source can match exactly. */
+export function isExactVersion(ecosystem: string, version: string): boolean {
+  if (ecosystem === 'npm') return NPM_EXACT_VERSION.test(version);
+  return !NOT_A_VERSION.test(version);
+}
+
+export function uniquePackages(packages: readonly InputPackage[], ecosystem: string): InputPackage[] {
   const seen = new Map<string, InputPackage>();
   for (const p of packages) {
     const key = `${foldName(ecosystem, p.name)}@${canonicalVersion(ecosystem, p.version)}`;
@@ -665,12 +726,16 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
       failed('live npm advisory check returned an unexpected body');
       continue;
     }
-    checked += round.size;
+    const idless = new Set<string>();
     for (const [name, advisories] of Object.entries(res as Record<string, unknown>)) {
       const version = round.get(name);
       if (version === undefined || !Array.isArray(advisories)) continue;
       for (const raw of advisories as Record<string, unknown>[]) {
-        if (typeof raw?.id !== 'string') continue;
+        if (typeof raw?.id !== 'string') {
+          if (!idless.has(name)) unverified.push({ name, version, reason: 'live npm advisory check returned an advisory without an id' });
+          idless.add(name);
+          continue;
+        }
         const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
         hits.push({
           packageName: name,
@@ -682,6 +747,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
         });
       }
     }
+    checked += round.size - idless.size;
   }
   return { hits, unverified, checked };
 }
@@ -784,7 +850,17 @@ export async function liveCoverage(
   reportHits: readonly ReportItem[],
   lookupEcosystems: readonly string[],
 ): Promise<LiveCheck> {
-  const unique = uniquePackages(packages, ecosystem);
+  const all = uniquePackages(packages, ecosystem);
+  // A range, tag or git/file/alias spec cannot be checked: the server matches
+  // advisories against one exact version, and answers a string it cannot parse
+  // with "no advisories", which would read as clean.
+  const inexact = all.filter((p) => !isExactVersion(ecosystem, p.version));
+  const unique = all.filter((p) => isExactVersion(ecosystem, p.version));
+  const inexactUnverified: Unverified[] = inexact.map((p) => ({
+    name: p.name,
+    version: p.version,
+    reason: 'not an exact version (a range, tag, or git/file/alias spec); pass the resolved version from the lockfile',
+  }));
   const keyOf = (name: string, version: string) => `${foldName(ecosystem, name)}@${canonicalVersion(ecosystem, version)}`;
   const reported = new Set(reportHits.map((h) => keyOf(h.packageName, h.version)));
 
@@ -804,7 +880,7 @@ export async function liveCoverage(
 
   const seen = new Set(reportHits.map((h) => `${keyOf(h.packageName, h.version)}#${h.osvId}`));
   const fresh = live.hits.filter((h) => !seen.has(`${keyOf(h.packageName, h.version)}#${h.osvId}`));
-  return { ...live, hits: fresh };
+  return { ...live, hits: fresh, unverified: [...inexactUnverified, ...live.unverified] };
 }
 
 /**

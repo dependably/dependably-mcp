@@ -413,13 +413,13 @@ describe('check_dependencies', () => {
   it('omits cwe/owasp/skill detail unless asked', async () => {
     stubReportAndAdvisories();
     const withoutDetail = payload(
-      await call(base, 'check_dependencies', { packages: [{ name: 'hono', version: '4.12.27' }] }),
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'hono', version: '4.12.27' }] }),
     );
     ok(!('cwes' in withoutDetail.findings[0].advisories[0]));
 
     stubReportAndAdvisories();
     const withDetail = payload(
-      await call(base, 'check_dependencies', {
+      await call(base, 'check_dependencies', { ecosystem: 'npm',
         packages: [{ name: 'hono', version: '4.12.27' }],
         includeAdvisoryDetail: true,
       }),
@@ -431,7 +431,7 @@ describe('check_dependencies', () => {
   it('carries the dev marker into the runtime/dev split', async () => {
     stubReportAndAdvisories();
     const body = payload(
-      await call(base, 'check_dependencies', {
+      await call(base, 'check_dependencies', { ecosystem: 'npm',
         packages: [{ name: 'hono', version: '4.12.27', dev: true }],
       }),
     );
@@ -440,11 +440,12 @@ describe('check_dependencies', () => {
     strictEqual(body.findings[0].dev, true);
   });
 
-  it('defaults the ecosystem to npm', async () => {
-    const calls = stubReportAndAdvisories();
-    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '1' }] }));
-    strictEqual(body.ecosystem, 'npm');
-    strictEqual(new URL(calls[0].url).searchParams.get('ecosystem'), 'npm');
+  it('requires the ecosystem, so a pip list is never silently checked as npm', async () => {
+    stubReportAndAdvisories();
+    const res = await call(base, 'check_dependencies', { packages: [{ name: 'django', version: '5.0.6' }] });
+    ok(res.isError, res.content[0].text);
+    const tools = await withServer(base, (c) => c.listTools());
+    ok(tools.tools.find((x) => x.name === 'check_dependencies').inputSchema.required.includes('ecosystem'));
   });
 
   it('exposes no argument that could name a local file', async () => {
@@ -478,7 +479,7 @@ describe('check_dependencies', () => {
       return { remediation: {} };
     });
     const body = payload(
-      await call(base, 'check_dependencies', { packages: [{ name: 'hono', version: '4.12.27' }] }),
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'hono', version: '4.12.27' }] }),
     );
     strictEqual(body.truncated, true);
     strictEqual(body.clean, false, 'a truncated scan must never claim clean');
@@ -548,6 +549,84 @@ describe('check_dependencies live coverage', () => {
     return calls;
   }
 
+  it('reports a range, tag or source spec as unverified rather than checking it as a version', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      // The server answers an unparseable version with "no advisories".
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
+    });
+    const specs = ['^4.17.20', '~4.17.0', '4.17', '4.17.x', 'latest', '=4.17.20', 'npm:lodash@4.17.20', 'git+https://x/y#4.17.20', 'file:../lodash', '>=4 <5'];
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: specs.map((version) => ({ name: 'lodash', version })) }),
+    );
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, specs.length);
+    strictEqual(body.coverage.liveChecked, 0);
+    strictEqual(body.summary.packagesChecked, 0);
+    ok(body.coverage.unverifiedPackages.every((u) => /not an exact version/.test(u.reason)));
+    strictEqual(calls.filter((c) => c.path === '/npm/-/npm/v1/security/advisories/bulk').length, 0);
+  });
+
+  it('accepts exact npm versions with a v prefix, prerelease or build metadata', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => ({}) });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'npm',
+        packages: ['4.17.20', 'v4.17.20', '1.0.0-rc.1', '1.0.0+build.5'].map((version, i) => ({ name: `p${i}`, version })),
+      }),
+    );
+    strictEqual(body.clean, true);
+    deepStrictEqual(body.coverage, { liveChecked: 4, unverified: 0 });
+  });
+
+  it('reports a range as unverified on the lookup path too', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ found: true, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '>=5.0' }, { name: 'requests', version: '2.32.4' }] }),
+    );
+    strictEqual(body.clean, false);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => u.name), ['django']);
+    deepStrictEqual(calls.filter((c) => c.path === '/api/v1/lookup').map((c) => c.query.get('name')), ['requests']);
+  });
+
+  it('marks a dependency unverified when an advisory for it comes back without an id', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ a: [{ severity: 'high' }] }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'a', version: '1.0.0' }, { name: 'b', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => u.name), ['a']);
+    strictEqual(body.coverage.liveChecked, 1);
+  });
+
+  it('caps fixed-version lookups at the most severe advisories and says so', async () => {
+    const items = Array.from({ length: 205 }, (_, i) => ({
+      packageName: 'p', version: '1.0.0', osvId: `GHSA-${i}`, severity: i < 5 ? 'LOW' : 'HIGH', cvssScore: i < 5 ? 1 : 8,
+    }));
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
+      '*': () => ({ remediation: { fixedVersion: '2.0.0' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }] }));
+    strictEqual(calls.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 200);
+    match(body.remediationNote, /200 most severe advisories; 5 more/);
+    const low = body.findings[0].advisories.filter((a) => a.severity === 'LOW');
+    ok(low.every((a) => a.fixedVersion === null), 'the 5 least severe were the ones skipped');
+  });
+
+  it('counts each distinct dependency once in packagesChecked', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => ({}) });
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'a', version: '1.0.0' }, { name: 'a', version: '1.0.0' }, { name: 'b', version: '^1' }] }),
+    );
+    strictEqual(body.summary.packagesChecked, 1);
+  });
+
   it('finds an advisory on an npm version the registry has never served (the lodash false clean)', async () => {
     const calls = stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
@@ -557,7 +636,7 @@ describe('check_dependencies live coverage', () => {
       }),
       '*': () => ({ status: 404, body: { title: 'Not Found' } }),
     });
-    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'lodash', version: '4.17.20' }] }));
     strictEqual(body.clean, false);
     strictEqual(body.findings[0].package, 'lodash');
     strictEqual(body.findings[0].advisories[0].osvId, 'GHSA-35jh-r3h4-6jhm');
@@ -586,7 +665,7 @@ describe('check_dependencies live coverage', () => {
       '*': () => ({ status: 404, body: {} }),
     });
     const body = payload(
-      await call(base, 'check_dependencies', {
+      await call(base, 'check_dependencies', { ecosystem: 'npm',
         packages: [
           { name: 'a', version: '1.0.0' },
           { name: 'a', version: '2.0.0' },
@@ -613,7 +692,7 @@ describe('check_dependencies live coverage', () => {
         JSON.parse(init.body).a?.[0] === '2.0.0' ? { status: 503, body: {} } : {},
     });
     const body = payload(
-      await call(base, 'check_dependencies', { packages: [{ name: 'a', version: '1.0.0' }, { name: 'a', version: '2.0.0' }] }),
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'a', version: '1.0.0' }, { name: 'a', version: '2.0.0' }] }),
     );
     strictEqual(body.clean, false);
     strictEqual(body.coverage.liveChecked, 1);
@@ -625,7 +704,7 @@ describe('check_dependencies live coverage', () => {
       '/api/v1/vuln-report': () => emptyReport,
       '/npm/-/npm/v1/security/advisories/bulk': () => ({ status: 503, body: { title: 'Service Unavailable' } }),
     });
-    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'left-pad', version: '1.3.0' }] }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'left-pad', version: '1.3.0' }] }));
     strictEqual(body.clean, false);
     strictEqual(body.coverage.unverified, 1);
     strictEqual(body.coverage.unverifiedPackages[0].name, 'left-pad');
@@ -635,7 +714,7 @@ describe('check_dependencies live coverage', () => {
 
   it('treats a non-object npm advisory answer (a proxy page, an array) as unverified, not clean', async () => {
     stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/npm/-/npm/v1/security/advisories/bulk': () => [] });
-    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '1.0.0' }] }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'x', version: '1.0.0' }] }));
     strictEqual(body.clean, false);
     match(body.coverage.unverifiedPackages[0].reason, /unexpected body/);
   });
@@ -699,7 +778,7 @@ describe('check_dependencies live coverage', () => {
 
   it('rejects a blank name or version, which no advisory source would check', async () => {
     stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
-    const res = await call(base, 'check_dependencies', { packages: [{ name: 'x', version: '   ' }] });
+    const res = await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'x', version: '   ' }] });
     ok(res.isError, res.content[0].text);
   });
 
@@ -767,7 +846,7 @@ describe('check_dependencies live coverage', () => {
       '/api/v1/vulnerabilities/PYSEC-0000-1': () => ({ aliases: ['CVE-2026-4800'], remediation: { fixedVersion: '4.18.0' } }),
       '/npm/-/npm/v1/security/advisories/bulk': () => ({}),
     });
-    const body = payload(await call(base, 'check_dependencies', { packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'lodash', version: '4.17.20' }] }));
     const ids = body.findings[0].advisories.map((a) => `${a.osvId}:${(a.aliases ?? []).join('+')}:${a.fixedVersion}`).sort();
     deepStrictEqual(ids, ['GHSA-35jh-r3h4-6jhm::4.17.21', 'GHSA-r5fr-rjxr-66jc:PYSEC-0000-1:4.18.0']);
     strictEqual(body.summary.advisories, 2);
@@ -791,6 +870,24 @@ describe('check_dependencies live coverage', () => {
       const byId = Object.fromEntries(body.findings[0].advisories.map((a) => [a.osvId, a.aliases ?? []]));
       deepStrictEqual(byId, { 'GHSA-a': ['PYSEC-x'], 'GHSA-b': [] }, order.join(','));
     }
+  });
+
+  it('never folds a follow-up into an unrelated record through its predecessor\'s CVE', async () => {
+    // GHSA-b is a follow-up naming GHSA-a (absent) and the old CVE-1; PYSEC-x names only CVE-1.
+    // PYSEC-x may be GHSA-a's twin, not GHSA-b's, so they must stay two advisories.
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({
+        items: [
+          { packageName: 'p', version: '1.0', osvId: 'GHSA-b', severity: 'HIGH', summary: 'follow-up' },
+          { packageName: 'p', version: '1.0', osvId: 'PYSEC-x', severity: 'UNKNOWN', summary: '' },
+        ],
+        total: 2,
+      }),
+      '/api/v1/vulnerabilities/GHSA-b': () => ({ aliases: ['CVE-1', 'GHSA-a'] }),
+      '/api/v1/vulnerabilities/PYSEC-x': () => ({ aliases: ['CVE-1'] }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'p', version: '1.0' }] }));
+    strictEqual(body.summary.advisories, 2);
   });
 
   it('ignores an empty alias, which would otherwise link unrelated records', async () => {
@@ -1680,6 +1777,48 @@ describe('setup tools — publish commands keep tokens out of history and name r
     ok(crate.includes('not a packaged .crate') && !crate.includes('--manifest-path'), crate);
     ok((await text('cargo', 'Cargo.toml')).includes("--manifest-path './Cargo.toml'"));
     ok((await text('cargo', '/Cargo.toml')).includes("--manifest-path '/Cargo.toml'"));
+  });
+});
+
+describe('readiness_check on a 503', () => {
+  it('returns the readiness body as the answer, not a generic server error', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ status: 'unready', strict: false, checks: { db: 'fail', blob_store: 'ok' }, required: ['db'], degraded: ['db'] }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    const res = await call(base, 'readiness_check');
+    ok(!res.isError, res.content[0].text);
+    match(res.content[0].text, /answered 503: it is not ready/);
+    match(res.content[0].text, /"status":"unready"/);
+    match(res.content[0].text, /"degraded":\["db"\]/);
+  });
+
+  it('still reports a 503 without a readable body as an error', async () => {
+    globalThis.fetch = async () => new Response('<html>bad gateway</html>', { status: 503, headers: { 'content-type': 'text/html' } });
+    const res = await call(base, 'readiness_check');
+    ok(res.isError);
+  });
+});
+
+describe('setup tools — netrc and artefact path hygiene', () => {
+  const ported = { baseUrl: 'https://dep.example.com:8443', token: 'tok', timeoutMs: 5000 };
+
+  it('names the hostname without the port in netrc, since pip and Go match netrc on hostname', async () => {
+    stubFetch();
+    for (const [ecosystem, pkg] of [['pypi', 'requests'], ['golang', 'github.com/foo/bar']]) {
+      const t = (await call(ported, 'get_install_command', { ecosystem, package: pkg, version: '1.0.0' })).content[0].text;
+      ok(t.includes('machine dep.example.com login'), t);
+      ok(!t.includes('machine dep.example.com:8443'), t);
+    }
+  });
+
+  it('refuses control characters in an artefact path', async () => {
+    stubFetch();
+    for (const bad of ['./a\rb.tgz', './a\tb.tgz', './a\x1bb.tgz', './a\x7fb.tgz', './a\x00b.tgz']) {
+      const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: bad });
+      ok(res.isError, JSON.stringify(bad));
+    }
   });
 });
 

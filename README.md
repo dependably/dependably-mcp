@@ -2,8 +2,8 @@
 
 An MCP server that lets Claude Desktop, Claude Code, Cursor, or anything else that speaks the
 Model Context Protocol query your [Dependably](https://github.com/dependably/dependably-community)
-instance: package inventory, vulnerability reports, licence policy, audit events and incident
-triage.
+instance: package inventory, vulnerability reports, package and licence policy, projects, and
+incident triage.
 
 Dependably is a private artefact repository, self-hosted or as a hosted SaaS instance. This server
 is read-only and runs over stdio through a single personal access token: no tool writes to your
@@ -68,7 +68,8 @@ your OS, using the same shape as the Claude Code example above.
 Restart your MCP client, then ask it to run these three, in order:
 
 1. `readiness_check` needs no capability, so it answers as soon as the URL is right and the
-   instance is reachable. It returns `{ status: "ready" | "degraded", checks, errors }`.
+   instance is reachable. It returns `{ status, strict, checks, required, degraded }`, where
+   `status` is `ready`, `degraded`, `unready` or `draining`.
 2. `list_packages` is the first call that uses your token. A result here confirms the Pull
    preset is granted and working.
 3. `get_license_policy` confirms the same token reaches org policy, not just inventory.
@@ -92,8 +93,10 @@ Each of these works with a Pull token. The tool Claude reaches for is in bracket
   blocks)
 - *Which of our projects are failing policy right now, and what's wrong with the latest build of
   the worst one?* (`list_projects`, then `get_project_version`)
-- *Explain GHSA-frmv-pr5f-9mcr and how to fix it in our Django 5.0 app.* (`get_vulnerability`,
-  then `get_remediation_skill` for the matching how-to-fix guide)
+- *Explain the most severe advisory affecting our Django packages, and how to fix it.*
+  (`list_vulnerabilities`, then `get_vulnerability` and `get_remediation_skill` for the matching
+  how-to-fix guide. `get_vulnerability` answers for advisories that touch a package in your
+  registry.)
 - *Give me the command to install `requests` 2.32.4 through our registry.*
   (`get_install_command`; the command comes back as text for you to run)
 
@@ -125,7 +128,7 @@ Every tool is read-only with a user-generated token with **Pull** permissions.
 | `search_packages` | Quick name search across the registry. |
 | `list_vulnerabilities` | Org-wide report of every affected package. |
 | `get_vulnerability` | Advisory detail: affected ranges, severity, KEV and EPSS, and remediation guidance. |
-| `check_dependencies` | Checks one project's dependency list and names the version to bump to. Versions the registry has never served are checked against live advisory data, and anything that could not be checked is listed as unverified rather than reported clean. |
+| `check_dependencies` | Checks one project's resolved dependency list and names the version to bump to. Versions the registry has never served are checked against live advisory data. Anything that could not be checked, including a range or tag instead of an exact version, is listed as unverified rather than reported clean. |
 | `get_remediation` | Fixed versions for a batch of advisories at once, without the prose. |
 | `list_projects` | Projects and folders, paginated and searchable by name. |
 | `get_project` | One project or folder: versions, ancestors, and a folder's children and subtree rollup. |

@@ -317,7 +317,7 @@ const REQUIRED = {
   search_packages: ['q'],
   get_vulnerability: ['osvId'],
   lookup_package: ['ecosystem', 'name'],
-  check_dependencies: ['packages'],
+  check_dependencies: ['ecosystem', 'packages'],
   get_remediation: ['advisories'],
   get_remediation_skill: ['skillIds'],
   get_install_command: ['ecosystem', 'package'],

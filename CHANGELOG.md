@@ -11,19 +11,43 @@ All notable changes to this project are documented here. The format follows
 - **`check_dependencies` no longer calls a vulnerable dependency clean because the registry never
   served it.** The registry's vulnerability report lists only versions it has uploaded or
   proxied, so `lodash@4.17.20`, which has two HIGH advisories, came back `clean: true` on an
-  instance that had only cached other lodash versions. Every dependency is now checked: npm
-  through the instance's bulk advisory endpoint (the one `npm audit` uses), one request per
-  version when a lockfile holds several versions of a package, and other ecosystems through
-  `/api/v1/lookup`, up to 100 dependencies per call. A version that lookup reports as malicious
-  is a critical finding. A new `coverage` block
-  reports how many were checked live and lists any that could not be checked (`unverified`), and
-  `clean` is never true while that list is non-empty.
+  instance that had only cached other lodash versions. Every exact version is now checked
+  against live advisory data: npm through the instance's bulk advisory endpoint (the one
+  `npm audit` uses), one request per version when a lockfile holds several versions of a
+  package, and other ecosystems through `/api/v1/lookup`, up to 100 dependencies per call. A
+  version that lookup reports as malicious is a critical finding. A new `coverage` block reports
+  how many were checked live and lists any that could not be checked (`unverified`), and `clean`
+  is never true while that list is non-empty.
+- **A range, tag or source spec is unverified, not clean.** The server matches advisories
+  against one exact version and answers anything it cannot parse (`^4.17.20`, `latest`,
+  `git+https://…`, `file:…`) with no advisories, which read as clean. Such a version is now
+  listed under `coverage.unverified` with the reason, and an npm advisory returned without an id
+  leaves its dependency unverified rather than being skipped.
+- **`check_dependencies` requires `ecosystem`.** It defaulted to npm, so a pip list passed
+  without one matched nothing and came back clean. A blank name or version is rejected, and
+  `summary.packagesChecked` now counts distinct dependencies an advisory source covered, not the
+  raw input length.
+- **Fixed-version lookups are bounded.** A large tree made one advisory-detail request per
+  finding. Lookups now stop at the 200 most severe advisories; the rest report no
+  `fixedVersion`, and a `remediationNote` says how many and points to `get_remediation`.
 - **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
   record, and the summary counted both, roughly doubling the totals and inflating "unknown"
   severity. Records from different databases that name each other, or the same CVE, as an
   alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
-  highest score and fix. Two records from the same database are never folded: an incomplete-fix
-  follow-up lists its predecessor as an alias, but it is a separate flaw with its own fix.
+  highest score and fix. Records that name each other are folded before records that only share
+  a CVE, so the result does not depend on the order the report lists them in. Two records from
+  the same database are never folded, and an incomplete-fix follow-up, which lists its
+  predecessor's CVE beside its own, is tied to another record only through its own ids.
+- **`readiness_check` returns the readiness body on a 503.** `/ready` answers 503 with the
+  failing dependencies when the instance is not ready, and the tool reported only a generic
+  server error. It now returns that body. The description and README name the real fields
+  (`status`, `strict`, `checks`, `required`, `degraded`) and all four statuses.
+- **`.netrc` instructions name the hostname without the port.** pip and Go match netrc entries on
+  the hostname, so an instance on a non-default port never authenticated.
+- **An artefact path with control characters is refused**, so a carriage return cannot make the
+  displayed command differ from what a shell would run. A base URL whose path holds shell
+  metacharacters is refused at startup, since it is pasted into every command the setup tools
+  emit.
 
 - **Publish commands no longer put the token on the command line**, where it lands in shell
   history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,
@@ -62,6 +86,11 @@ All notable changes to this project are documented here. The format follows
   command.
 
 ### Documentation
+
+- **The README no longer lists audit events,** which no tool reads, and its advisory example no
+  longer names one advisory that only some instances record. Tool descriptions that return
+  upstream or advisory text now say it is third-party data, not instructions, and the
+  `get_package` description says "licences".
 
 - **The README has example prompts**, one per kind of question the tools answer, each naming the
   tool Claude uses.

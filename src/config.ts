@@ -77,8 +77,17 @@ function parseBaseUrl(raw: string): string {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error(`DEPENDABLY_BASE_URL must be http(s): ${raw}`);
   }
-  return `${parsed.protocol}//${parsed.host}${trimTrailingSlashes(parsed.pathname)}`;
+  const path = trimTrailingSlashes(parsed.pathname);
+  // The base URL is pasted into the install and publish commands the setup
+  // tools emit for the user to run, so a path segment a shell would interpret
+  // is refused here rather than quoted at every call site.
+  if (SHELL_SIGNIFICANT.test(path)) {
+    throw new Error(`DEPENDABLY_BASE_URL must not contain shell metacharacters in its path: ${raw}`);
+  }
+  return `${parsed.protocol}//${parsed.host}${path}`;
 }
+
+const SHELL_SIGNIFICANT = /[;$()'"`!&|*?<>{}[\]\\\s]/;
 
 function trimTrailingSlashes(path: string): string {
   let end = path.length;
