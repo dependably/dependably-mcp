@@ -154,6 +154,13 @@ describe('loadConfig base URL path', () => {
     strictEqual(cfg.baseUrl, 'https://dep.example.com/a%60id%60');
   });
 
+  for (const url of ['http://[::1]:8080', 'https://[fd00::5]/dependably']) {
+    it(`accepts an IPv6 literal host: ${url}`, () => {
+      const cfg = withEnv({ ...minimal, DEPENDABLY_BASE_URL: url }, loadConfig);
+      ok(cfg.baseUrl.startsWith(url.replace(/\/$/, '')), cfg.baseUrl);
+    });
+  }
+
   it('accepts an ordinary path prefix and a port', () => {
     const cfg = withEnv({ ...minimal, DEPENDABLY_BASE_URL: 'https://dep.example.com:8443/dependably/' }, loadConfig);
     strictEqual(cfg.baseUrl, 'https://dep.example.com:8443/dependably');

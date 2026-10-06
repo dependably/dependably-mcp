@@ -687,6 +687,13 @@ const INT32_MAX = 2_147_483_647;
  * resolving it upstream, so these must be caught here rather than come back
  * "found, no advisories".
  */
+/**
+ * rpm and apk versions use `~` (sorts before a release) and `^` (a snapshot),
+ * so only whitespace, comparison operators, list separators and URL or
+ * source-spec prefixes mark a non-version there.
+ */
+const NOT_A_DISTRO_VERSION = /[\s<>=|,]|:\/\/|^(git|file|link):/i;
+
 const NOT_A_VERSION =
   /[\s^~*<>=|,[\]()]|\.\+$|^\+$|^(latest|next|release|x)$|^latest\.|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
 
@@ -705,6 +712,9 @@ export function isExactVersion(ecosystem: string, version: string): boolean {
       return numericPartsFit(SEMVER_EXACT_VERSION.exec(version));
     case 'golang':
       return numericPartsFit(GO_EXACT_VERSION.exec(version));
+    case 'rpm':
+    case 'apk':
+      return !NOT_A_DISTRO_VERSION.test(version);
     default:
       return !NOT_A_VERSION.test(version);
   }

@@ -604,12 +604,16 @@ describe('check_dependencies live coverage', () => {
       nuget: { bad: ['[1.0.0]', '(1.0,2.0]'], good: ['1.0.0-beta.1', '13.0.3'] },
       cargo: { bad: ['1.0', '1', '^1.0.0'], good: ['1.0.200', '0.4.0-alpha.1'] },
       pypi: { bad: ['>=5.0', '~=1.4', '==1.0', '1.*'], good: ['1.0.post1', '2!1.0', '1.0+local'] },
+      rpm: { bad: ['>= 2.0', 'file:./x.rpm'], good: ['2.0~rc1', '1.0^20230101git0abc', '1:2.3-4.el9', '5.2.26-3.fc40'] },
+      apk: { bad: ['>1.2'], good: ['1.2.3-r0', '1.2.3_p1-r2', '1.2.3~rc1-r0'] },
     };
     for (const [ecosystem, { bad, good }] of Object.entries(cases)) {
       const packages = [...bad, ...good].map((version, i) => ({ name: `p${i}`, version }));
       const body = payload(await call(base, 'check_dependencies', { ecosystem, packages }));
+      // rpm and apk have no live source, so their exact versions are unverified for that
+      // reason; only the "not an exact version" entries are the inexact ones.
       deepStrictEqual(
-        body.coverage.unverifiedPackages.map((u) => u.version).sort(),
+        body.coverage.unverifiedPackages.filter((u) => /not an exact version/.test(u.reason)).map((u) => u.version).sort(),
         [...bad].sort(),
         `${ecosystem}: ${JSON.stringify(body.coverage)}`,
       );

@@ -23,7 +23,7 @@ All notable changes to this project are documented here. The format follows
   `git+https://…`, `file:…`) with no advisories, which read as clean. Such a version is now
   listed under `coverage.unverified` with the reason. Each ecosystem has its own rule: npm,
   Cargo, Hex and Terraform need a full `x.y.z`; Go needs a `v`-prefixed module version, so a
-  branch or commit is unverified; Maven and NuGet bracket ranges, Gradle dynamic versions,
+  branch or commit is unverified; rpm and apk keep `~` and `^`, which their versions use; Maven and NuGet bracket ranges, Gradle dynamic versions,
   `LATEST`, `RELEASE` and PEP 440 specifiers are unverified everywhere. An npm advisory returned
   without an id leaves its dependency unverified rather than being skipped.
 - **`check_dependencies` requires `ecosystem`.** It defaulted to npm, so a pip list passed
@@ -40,8 +40,8 @@ All notable changes to this project are documented here. The format follows
   alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
   highest score and fix. Two records fold only when the link is unambiguous, each being the
   other's sole candidate in the other's database, and records that name each other are matched
-  before records that only share a CVE, so the result does not depend on the order the report
-  lists them in. Two records from the same database are never folded. An incomplete-fix
+  before records that only share a CVE, so for two databases (PyPI's GHSA and PYSEC) the result
+  does not depend on the order the report lists them in. An ambiguous link folds nothing. Two records from the same database are never folded. An incomplete-fix
   follow-up, which lists its predecessor's CVE beside its own, is tied to another record only
   through its own ids, and through no shared id at all when its predecessor is not in the
   result; counting one flaw twice is the safe direction.
