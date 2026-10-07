@@ -10,7 +10,7 @@ filesystem, and runs no commands.
 
 ## Requirements
 
-- Node 22 or later.
+- Node 22 or later, for Claude Code. Claude Desktop runs the extension on its own built-in Node.
 - Dependably 0.12.2 or later. On 0.10.0 to 0.12.1 every tool works, but `get_policies` returns
   only the licence rules.
 - A personal access token with the **Pull** preset, created in your instance under Tokens. Pull is
@@ -62,7 +62,8 @@ certificate comes from a private certificate authority.
 Restart your client and ask Claude to run:
 
 1. `readiness_check`. It needs no token, so an answer confirms the URL and that the instance is
-   reachable. `ready` or `degraded` means it can serve; `unready` names the failing dependency.
+   reachable. `ready` or `degraded` means it can serve; `unready` names the failing dependency,
+   and `draining` means it is shutting down.
 2. `list_packages`. Any result, even an empty list, confirms your token works.
 
 If a call fails, the error names the setting to check: `DEPENDABLY_BASE_URL` when the instance
