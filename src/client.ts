@@ -68,34 +68,8 @@ export class DependablyClient {
       signal: AbortSignal.timeout(timeoutMs ?? this.cfg.timeoutMs),
     };
 
-    let res: Response;
-    let text: string;
-    try {
-      res = await fetch(url, init);
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('location') ?? '(no Location header)';
-        throw new ActionableError(
-          `${method} ${url} was redirected to ${location}; DEPENDABLY_BASE_URL must point at the instance itself.`,
-        );
-      }
-      const lengthHeader = res.headers.get('content-length');
-      if (lengthHeader && Number(lengthHeader) > MAX_RESPONSE_BYTES) {
-        // Release the connection rather than leaving it half-read: we are
-        // refusing the body on the strength of the header alone.
-        try {
-          await res.body?.cancel();
-        } catch {
-          // Best-effort; the ActionableError below is what matters to the caller.
-        }
-        throw new ActionableError(
-          `${method} ${url} returned a body of ${lengthHeader} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
-        );
-      }
-      text = await res.text();
-    } catch (err) {
-      if (err instanceof ActionableError) throw new Error(err.message);
-      throw new Error(describeFetchError(method, url, err, timeoutMs ?? this.cfg.timeoutMs));
-    }
+    const effectiveTimeout = timeoutMs ?? this.cfg.timeoutMs;
+    const { res, text } = await this.fetchText(method, url, init, effectiveTimeout);
 
     // `text.length` counts UTF-16 code units, not bytes — a body full of
     // multi-byte characters could clear the cap in `.length` while still
@@ -124,6 +98,39 @@ export class DependablyClient {
       }
     }
     return text;
+  }
+
+  /** Send the request and read its body, refusing redirects and oversized responses. */
+  private async fetchText(method: string, url: string, init: RequestInit, timeoutMs: number): Promise<{ res: Response; text: string }> {
+    let res: Response;
+    let text: string;
+    try {
+      res = await fetch(url, init);
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location') ?? '(no Location header)';
+        throw new ActionableError(
+          `${method} ${url} was redirected to ${location}; DEPENDABLY_BASE_URL must point at the instance itself.`,
+        );
+      }
+      const lengthHeader = res.headers.get('content-length');
+      if (lengthHeader && Number(lengthHeader) > MAX_RESPONSE_BYTES) {
+        // Release the connection rather than leaving it half-read: we are
+        // refusing the body on the strength of the header alone.
+        try {
+          await res.body?.cancel();
+        } catch {
+          // Best-effort; the ActionableError below is what matters to the caller.
+        }
+        throw new ActionableError(
+          `${method} ${url} returned a body of ${lengthHeader} bytes, which exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
+        );
+      }
+      text = await res.text();
+    } catch (err) {
+      if (err instanceof ActionableError) throw new Error(err.message);
+      throw new Error(describeFetchError(method, url, err, timeoutMs));
+    }
+    return { res, text };
   }
 
   private buildUrl(path: string, query?: Query): string {

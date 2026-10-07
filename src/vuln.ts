@@ -694,8 +694,13 @@ const NOT_A_DISTRO_VERSION = /[\s<>=|,]|:\/\/|^(git|file|link):/i;
  * resolving it upstream, so these must be caught here rather than come back
  * "found, no advisories".
  */
-const NOT_A_VERSION =
-  /[\s^~*<>=|,[\]()]|\.\+$|^\+$|^(latest|next|release|x)$|^latest\.|:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
+const RANGE_SYNTAX = /[\s^~*<>=|,[\]()]|\.\+$|^\+$/;
+const DIST_TAG = /^(latest|next|release|x)$|^latest\./i;
+const SOURCE_SPEC = /:\/\/|^(git|git\+[a-z]+|file|link|npm|workspace|github|portal):/i;
+
+function isNotAVersion(version: string): boolean {
+  return RANGE_SYNTAX.test(version) || DIST_TAG.test(version) || SOURCE_SPEC.test(version);
+}
 
 function numericPartsFit(match: RegExpExecArray | null): boolean {
   return !!match && [match[1], match[2], match[3]].every((n) => n.length <= 10 && Number(n) <= INT32_MAX);
@@ -716,7 +721,7 @@ export function isExactVersion(ecosystem: string, version: string): boolean {
     case 'apk':
       return !NOT_A_DISTRO_VERSION.test(version);
     default:
-      return !NOT_A_VERSION.test(version);
+      return !isNotAVersion(version);
   }
 }
 
@@ -753,9 +758,10 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
   }
   const rounds: Array<Map<string, string>> = [];
   for (const [name, versions] of byName) {
-    versions.forEach((version, i) => {
-      (rounds[i] ??= new Map()).set(name, version);
-    });
+    for (const [i, version] of versions.entries()) {
+      if (i === rounds.length) rounds.push(new Map());
+      rounds[i].set(name, version);
+    }
   }
 
   const hits: ReportItem[] = [];
@@ -982,7 +988,10 @@ function collapseEvents(events: unknown): Record<string, string[]> {
   for (const e of events as Record<string, unknown>[]) {
     for (const key of ['introduced', 'fixed', 'lastAffected', 'limit']) {
       const v = e?.[key];
-      if (typeof v === 'string' && v.length > 0) (out[key] ??= []).push(v);
+      if (typeof v !== 'string' || v.length === 0) continue;
+      const values = out[key] ?? [];
+      values.push(v);
+      out[key] = values;
     }
   }
   return out;

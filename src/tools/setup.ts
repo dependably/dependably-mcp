@@ -36,6 +36,19 @@ interface NameRule {
   message: string;
 }
 
+const TERRAFORM_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d+)?$/;
+const TERRAFORM_PART = /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/;
+
+/** `[hostname/]namespace/type`, each segment checked against its own grammar. */
+function isTerraformSource(name: string): boolean {
+  const segments = name.split('/');
+  if (segments.length !== 2 && segments.length !== 3) return false;
+  const host = segments.length === 3 ? segments[0] : undefined;
+  const [namespace, type] = segments.slice(-2);
+  if (host !== undefined && !TERRAFORM_HOST.test(host)) return false;
+  return TERRAFORM_PART.test(namespace) && TERRAFORM_PART.test(type);
+}
+
 const NAME_RULES: Record<SetupEcosystem, NameRule> = {
   npm: {
     // Scopes are lowercase-only; the name part may carry upper-case letters,
@@ -81,8 +94,7 @@ const NAME_RULES: Record<SetupEcosystem, NameRule> = {
     // nothing outside these characters may reach either position.
     // Namespace and type follow Terraform's own part grammar: letters, digits
     // and dashes, not starting or ending with a dash.
-    test: (n) =>
-      /^([a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:[0-9]+)?\/)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?\/[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/.test(n),
+    test: isTerraformSource,
     message: 'Terraform provider sources are [hostname/]namespace/type (e.g. registry.terraform.io/hashicorp/aws): letters, digits and - only, no scheme.',
   },
   hex: {
@@ -119,7 +131,16 @@ const VERSION_MESSAGE = 'Version may only contain letters, digits, and . _ + - !
  * `/Users/me/My Builds/out.rpm` still work; only shell metacharacters,
  * newlines, glob characters and a leading `-` are rejected.
  */
-const ARTIFACT_PATH_PATTERN = /^(?!-)[^;|&$`<>()\n*?[\]{}\x00-\x1f\x7f]+$/;
+const ARTIFACT_PATH_FORBIDDEN = new Set(';|&$`<>()*?[]{}');
+
+function isSafeArtifactPath(path: string): boolean {
+  if (path.length === 0 || path.startsWith('-')) return false;
+  for (const ch of path) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f || ARTIFACT_PATH_FORBIDDEN.has(ch)) return false;
+  }
+  return true;
+}
 const ARTIFACT_PATH_MESSAGE =
   'Artefact path must not contain shell metacharacters (; | & $ ` < > ( ) or newlines), control characters, shell glob characters (* ? [ ] { }), or start with -. Spaces are fine, but name one file — globs are not expanded.';
 
@@ -133,7 +154,7 @@ const versionField = z
 
 const artifactPath = z
   .string()
-  .regex(ARTIFACT_PATH_PATTERN, ARTIFACT_PATH_MESSAGE)
+  .refine(isSafeArtifactPath, { message: ARTIFACT_PATH_MESSAGE })
   .describe('Path to one built artefact file (e.g. ./dist/package.tgz, ./bin/Release/My.Pkg.1.0.0.nupkg, an image tarball from docker save). For cargo and hex, which publish from source, the package directory. Shell globs are not accepted; name the file.');
 
 /**
@@ -142,7 +163,8 @@ const artifactPath = z
  * schema is the primary control, this is the fallback that holds if it is not.
  */
 function shq(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+  const escaped = value.replace(/'/g, "'\\''");
+  return `'${escaped}'`;
 }
 
 function fenced(lang: string, body: string): ToolResult {
@@ -226,13 +248,19 @@ function readSecret(variable: string): string {
  * directory itself or a file in it (Cargo.toml, mix.exs); a path whose last
  * segment has an extension is taken to be a file.
  */
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '/') end--;
+  return value.slice(0, end);
+}
+
 function directoryOf(path: string): string {
-  const trimmed = path.replace(/\/+$/, '') || '/';
+  const trimmed = trimTrailingSlashes(path) || '/';
   const last = trimmed.split('/').pop() ?? '';
   if (!last.includes('.') || last === '.' || last === '..') return trimmed;
   const parent = trimmed.slice(0, trimmed.length - last.length);
   if (parent === '') return '.';
-  return parent.replace(/\/+$/, '') || '/';
+  return trimTrailingSlashes(parent) || '/';
 }
 
 function stripScheme(url: string): string {
@@ -291,6 +319,28 @@ function flag(prefix: string, ver: string | undefined): string {
   return ver ? `${prefix}${shq(ver)}` : '';
 }
 
+/** The quoted pinned version, or the literal `latest` when none is pinned. */
+function orLatest(ver: string | undefined): string {
+  return ver ? shq(ver) : 'latest';
+}
+
+/**
+ * Not a shell command: providers are declared in configuration and fetched
+ * through a network mirror set once in the CLI config.
+ */
+function terraformInstall(base: string, pkg: string, ver: string | undefined): ToolResult {
+  const localName = pkg.split('/').pop();
+  const version = ver ? `\n      version = "${ver}"` : '';
+  const mirror = `${new URL(base).protocol}//user:<token>@${stripScheme(base)}/terraform/`;
+  const note = base.startsWith('http://')
+    ? '\n# Note: Terraform refuses an http:// network mirror; serve this instance over HTTPS'
+    : '';
+  return fenced(
+    'hcl',
+    `# In ~/.terraformrc: provider_installation { network_mirror { url = "${mirror}" } }${note}\n# Then declare the provider and run terraform init:\nterraform {\n  required_providers {\n    ${localName} = {\n      source  = "${pkg}"${version}\n    }\n  }\n}`,
+  );
+}
+
 function installCommand(base: string, ecosystem: string, pkg: string, ver: string | undefined): ToolResult {
   switch (ecosystem) {
     case 'npm':
@@ -328,7 +378,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
         : '';
       return fenced(
         'bash',
-        `# docker login ${loginHost} first\ndocker pull ${pullHost}/${shq(pkg)}:${ver ? shq(ver) : 'latest'}${note}`,
+        `# docker login ${loginHost} first\ndocker pull ${pullHost}/${shq(pkg)}:${orLatest(ver)}${note}`,
       );
     }
     case 'golang': {
@@ -339,7 +389,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       const host = hostOnly(base);
       return fenced(
         'bash',
-        `# Add credentials to ~/.netrc first (machine ${host} login user password <token>), then, inside your module:\nGOPROXY=${base}/go go get ${shq(pkg)}@${ver ? shq(ver) : 'latest'}`,
+        `# Add credentials to ~/.netrc first (machine ${host} login user password <token>), then, inside your module:\nGOPROXY=${base}/go go get ${shq(pkg)}@${orLatest(ver)}`,
       );
     }
     case 'cargo':
@@ -354,27 +404,17 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
         'bash',
         `# Add ${base}/apk/<release>/<repo> lines (e.g. v3.22/main) to /etc/apk/repositories,\n# with user:<token>@ in the URL, then:\napk update\napk add ${shq(pinned(pkg, '=', ver))}`,
       );
-    case 'terraform': {
-      // Not a shell command: providers are declared in configuration and
-      // fetched through a network mirror set once in the CLI config.
-      const localName = pkg.split('/').pop();
-      const version = ver ? `\n      version = "${ver}"` : '';
-      const mirror = `${new URL(base).protocol}//user:<token>@${stripScheme(base)}/terraform/`;
-      const note = base.startsWith('http://')
-        ? '\n# Note: Terraform refuses an http:// network mirror; serve this instance over HTTPS'
-        : '';
-      return fenced(
-        'hcl',
-        `# In ~/.terraformrc: provider_installation { network_mirror { url = "${mirror}" } }${note}\n# Then declare the provider and run terraform init:\nterraform {\n  required_providers {\n    ${localName} = {\n      source  = "${pkg}"${version}\n    }\n  }\n}`,
-      );
-    }
-    case 'hex':
+    case 'terraform':
+      return terraformInstall(base, pkg, ver);
+    case 'hex': {
       // The dependency names the repository, not a URL: the registry signs its
       // index under the name "dependably" and Hex refuses any other.
+      const requirement = ver ? `~> ${ver}` : '>= 0.0.0';
       return fenced(
         'elixir',
-        `# Register the repository once:\n#   curl -sSf ${base}/hex/public_key -o dependably-hex.pem\n#   mix hex.repo add dependably ${base}/hex --public-key dependably-hex.pem --auth-key <token>\n# Then add to deps in mix.exs and run mix deps.get:\n{:${pkg}, "${ver ? `~> ${ver}` : '>= 0.0.0'}", repo: :dependably}`,
+        `# Register the repository once:\n#   curl -sSf ${base}/hex/public_key -o dependably-hex.pem\n#   mix hex.repo add dependably ${base}/hex --public-key dependably-hex.pem --auth-key <token>\n# Then add to deps in mix.exs and run mix deps.get:\n{:${pkg}, "${requirement}", repo: :dependably}`,
       );
+    }
     default:
       throw new Error(`Unsupported ecosystem: ${ecosystem}`);
   }
@@ -432,7 +472,8 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       if (artifactPath.endsWith('.crate')) {
         return fenced('bash', `${prereq}\n# cargo publishes from source, not a packaged .crate: run this in the crate's own directory.\ncargo publish --registry dependably`);
       }
-      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(`${directoryOf(artifactPath).replace(/\/$/, '')}/Cargo.toml`)}`);
+      const manifest = `${directoryOf(artifactPath).replace(/\/$/, '')}/Cargo.toml`;
+      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(manifest)}`);
     }
     case 'apk':
       return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');

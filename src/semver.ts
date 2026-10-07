@@ -98,7 +98,7 @@ function parse(version: string): Parsed {
     const head = cleaned.slice(0, tail.index);
     // Guard against eating a release that merely ends in a marker letter, and
     // against a bare marker with no release in front of it.
-    if (head.length > 0 && /[0-9]$/.test(head)) {
+    if (head.length > 0 && /\d$/.test(head)) {
       const marker = canonicalMarker(tail[1]);
       return {
         release: head.split('.'),
@@ -186,7 +186,7 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
  * or lockfile observed here has ever carried one.
  */
 function rpmSegmentCompare(a: string, b: string): number {
-  const isDigit = (c: string | undefined): c is string => c !== undefined && /[0-9]/.test(c);
+  const isDigit = (c: string | undefined): c is string => c !== undefined && /\d/.test(c);
   const isAlpha = (c: string | undefined): c is string => c !== undefined && /[A-Za-z]/.test(c);
   const isAlnum = (c: string | undefined): c is string => isDigit(c) || isAlpha(c);
   let ai = 0;
