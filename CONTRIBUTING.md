@@ -18,17 +18,14 @@ npm run test:unit  # just the unit tests; writes coverage/lcov.info
 npm run sbom  # local CycloneDX SBOM (cyclonedx-npm) into cyclonedx-sbom.json
 ```
 
-CI runs `npm run sbom` alongside sbom-reach's generate mode and uploads both to
-Dependency-Track as separate projects, so the two generators can be compared. See
-`.gitlab-ci.yml`.
+CI also generates an SBOM with sbom-reach and uploads each to Dependency-Track as its own
+project, so the generators can be compared.
 
 ## A note on the lockfile
 
-We dogfood a private Dependably instance as our npm registry, so the committed
-`package-lock.json` and `.npmrc` resolve against it, at Dependably's own pull-through tarball
-path rather than the npm registry protocol's shape. You do not need access to build. Every
-dependency is also on the public registry, so point npm back at it for your clone and install
-from there:
+The committed `package-lock.json` and `.npmrc` resolve against our private Dependably instance.
+You don't need access to it: every dependency is also on the public registry. Point your clone
+there:
 
 ```bash
 echo 'registry=https://registry.npmjs.org/' > .npmrc
@@ -36,8 +33,8 @@ node scripts/public-lockfile.mjs
 npm ci
 ```
 
-That is what our public CI does. `public-lockfile.mjs` rewrites `resolved` to the public
-registry's URL shape; the lockfile's integrity hashes still pin the same bytes.
+`public-lockfile.mjs` rewrites each `resolved` URL to the public registry; the integrity hashes
+still pin the same bytes. The public CI does the same.
 
 ## Source layout
 
@@ -48,47 +45,46 @@ src/
 ├── client.ts          # fetch wrapper (bearer auth, timeout, RFC 7807 errors)
 ├── server.ts          # registers the 5 tool modules
 ├── format.ts          # tool-result helpers (json/withSummary/err/run)
-├── ecosystems.ts       # the ecosystem enums, one vocabulary per server plane
-├── semver.ts           # minimal version ordering, for comparing against a fix
-├── vuln.ts             # vulnerability scoping and remediation enrichment
+├── ecosystems.ts      # ecosystem vocabularies, read from the instance with a built-in fallback
+├── semver.ts          # version ordering, for comparing against a fix
+├── vuln.ts            # dependency checks, live coverage, alias folding, remediation
 └── tools/
-    ├── read.ts         # list/get/search packages, vulns, licence policy, lookup
-    ├── vuln.ts         # check_dependencies, get_remediation, list_remediation_skills, get_remediation_skill
-    ├── projects.ts      # list_projects, get_project, get_project_version
-    ├── observability.ts# readiness_check
-    └── setup.ts        # get_install_command, get_publish_command
+    ├── read.ts           # packages, vulnerabilities, policies, lookup
+    ├── vuln.ts           # check_dependencies, get_remediation, remediation skills
+    ├── projects.ts       # list_projects, get_project, get_project_version
+    ├── observability.ts  # readiness_check
+    └── setup.ts          # get_install_command, get_publish_command
 
 test/                  # node:test unit tests, run against dist/ with source maps
-├── semver.test.mjs    # version ordering (what bumpTo depends on)
-├── vuln.test.mjs      # report paging, scoping, findings, lockfile parsing
-├── client.test.mjs    # url building and the full error-message surface
-├── config.test.mjs    # env validation
-└── tools.test.mjs     # every tool handler, via an in-memory MCP client + stubbed fetch
+├── client.test.mjs    # URL building and error messages
+├── config.test.mjs    # environment validation
+├── ecosystems.test.mjs  # the instance vocabulary, fallback and retry
+├── semver.test.mjs    # version ordering
+├── server.test.mjs    # stdio startup in a child process, and every tool's annotations
+├── tools.test.mjs     # every tool handler, through an in-memory MCP client and stubbed fetch
+└── vuln.test.mjs      # report paging, matching, findings, lockfile parsing
 ```
 
-Five modules register the tools listed under [What it can do](README.md#what-it-can-do):
-`vuln.ts` holds four tools that sit alongside the read tools, and `projects.ts` holds the
-three project-scoped tools.
+The tools are listed in the README's [Tools](README.md#tools) table.
 
 ## Adding a tool
 
-Import `server` and `client`, then call `server.registerTool(name, config, handler)`. Wrap the
-handler body in the `run()` helper from `format.ts` so HTTP errors become readable text. Keep
-the surface reachable by a personal access token: do not add JWT-only or `scope=system`
-endpoints.
+Register it with `server.registerTool(name, config, handler)` in the matching module under
+`src/tools/`, give it a `title` and read-only `annotations`, and wrap the handler body in
+`run()` from `format.ts` so HTTP errors become readable text. Use only endpoints a personal
+access token can reach.
 
-Run `npm run manifest:sync` after adding or changing a tool. `manifest.json` at the repo root
-is the Claude Desktop extension manifest and its tool list is generated from the server;
-`npm test` fails when it is stale.
+Then run `npm run manifest:sync`. The tool list in `manifest.json`, the Claude Desktop extension
+manifest, is generated from the server, and `npm test` fails when it is stale. `scripts/smoke.mjs`
+pins each tool's required arguments, so update it when those change.
 
 ## Coverage
 
 `npm run test:unit` uses Node's built-in test runner and V8 coverage, with no c8 and no nyc. It
 fails below 90% lines and 85% branches.
 
-`--enable-source-maps` is load-bearing. Without it V8 reports coverage against `dist/*.js`,
-which `sonar.sources=src` excludes, and SonarQube reads the project as 0% covered. CI publishes
-`coverage/lcov.info` from the `test` job and `sonarqube-check` consumes it via `needs:`.
+Keep `--enable-source-maps`: without it coverage is reported against `dist/*.js`, which
+SonarQube excludes, and the project reads as 0% covered.
 
 ## Building the Claude Desktop bundle
 
@@ -98,7 +94,4 @@ npm run bundle:verify    # builds dist-mcpb/dependably-<version>.mcpb and .sha25
                          # then boots the server from the unpacked bundle
 ```
 
-The bundle is unsigned. The distribution plan (#24) covers why, and the plan to list it in
-Anthropic's directory. The listing pack and pre-submission checklist are #25; the manual install
-runbook is #26. These live in the tracker rather than in the repo because they carry status that
-goes stale silently once nothing is reading it.
+The bundle is unsigned.

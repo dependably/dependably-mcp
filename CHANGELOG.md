@@ -8,103 +8,60 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- **`check_dependencies` no longer calls a vulnerable dependency clean because the registry never
-  served it.** The registry's vulnerability report lists only versions it has uploaded or
-  proxied, so `lodash@4.17.20`, which has two HIGH advisories, came back `clean: true` on an
-  instance that had only cached other lodash versions. Every exact version is now checked
-  against live advisory data: npm through the instance's bulk advisory endpoint (the one
-  `npm audit` uses), one request per version when a lockfile holds several versions of a
-  package, and other ecosystems through `/api/v1/lookup`, up to 100 dependencies per call. A
-  version that lookup reports as malicious is a critical finding. A new `coverage` block reports
-  how many were checked live and lists any that could not be checked (`unverified`), and `clean`
-  is never true while that list is non-empty.
-- **A range, tag or source spec is unverified, not clean.** The server matches advisories
-  against one exact version and answers anything it cannot parse (`^4.17.20`, `latest`,
-  `git+https://…`, `file:…`) with no advisories, which read as clean. Such a version is now
-  listed under `coverage.unverified` with the reason. Each ecosystem has its own rule: npm,
-  Cargo, Hex and Terraform need a full `x.y.z`; Go needs a `v`-prefixed module version, so a
-  branch or commit is unverified; rpm and apk keep `~` and `^`, which their versions use; Maven and NuGet bracket ranges, Gradle dynamic versions,
-  `LATEST`, `RELEASE` and PEP 440 specifiers are unverified everywhere. An npm advisory returned
-  without an id leaves its dependency unverified rather than being skipped.
-- **`check_dependencies` requires `ecosystem`.** It defaulted to npm, so a pip list passed
-  without one matched nothing and came back clean. A blank name or version is rejected, and
-  `summary.packagesChecked` now counts distinct dependencies an advisory source covered, not the
-  raw input length.
-- **Fixed-version lookups are bounded.** A large tree made one advisory-detail request per
-  finding. Lookups now stop at the 200 most severe advisories; the rest report no
-  `fixedVersion`, a `remediationNote` says how many and points to `get_remediation`, and a finding
-  whose `bumpTo` may miss a skipped fix carries `bumpToPartial: true`.
-- **One flaw is counted once.** OSV publishes many PyPI flaws twice, as a GHSA and as a PYSEC
-  record, and the summary counted both, roughly doubling the totals and inflating "unknown"
-  severity. Records from different databases that name each other, or the same CVE, as an
-  alias are folded into one advisory, which lists the folded ids in `aliases` and keeps the
-  highest score and fix. Two records fold only when the link is unambiguous, each being the
-  other's sole candidate in the other's database, and records that name each other are matched
-  before records that only share a CVE, so for two databases (PyPI's GHSA and PYSEC) the result
-  does not depend on the order the report lists them in. An ambiguous link folds nothing. Two records from the same database are never folded. An incomplete-fix
-  follow-up, which lists its predecessor's CVE beside its own, is tied to another record only
-  through its own ids, and through no shared id at all when its predecessor is not in the
-  result; counting one flaw twice is the safe direction.
-- **`readiness_check` returns the readiness body on a 503.** `/ready` answers 503 with the
-  failing dependencies when the instance is not ready, and the tool reported only a generic
-  server error. It now returns that body. The description and README name the real fields
-  (`status`, `strict`, `checks`, `required`, `degraded`) and all four statuses.
-- **pip's `.netrc` instructions name the hostname without the port.** pip matches netrc entries
-  on the hostname, so an instance on a non-default port never authenticated. Go matches on
-  `host:port`, so its line keeps the port.
-- **An artefact path with control characters is refused**, so a carriage return cannot make the
-  displayed command differ from what a shell would run. A base URL whose host or path holds
-  shell metacharacters is refused at startup, since it is pasted into every command the setup
-  tools emit.
-
-- **Publish commands no longer put the token on the command line**, where it lands in shell
-  history. PyPI, NuGet and Hex read it with `read -rs` into the variable the tool already uses,
-  RPM lets `curl` prompt for it, and Maven and Cargo keep it in their own config files.
-- **`get_publish_command` uses the path it is given.** OCI loads the image tarball with
-  `docker load` before tagging, instead of passing the file path to `docker tag`. Maven uploads
-  the named file with `deploy:deploy-file`. Cargo publishes with `--manifest-path` pointing at
-  the crate's directory, and says to run it from source when given a packaged `.crate`.
-- **Go install commands no longer fall back around the proxy.** `GOPROXY` dropped `,direct`, so a
-  module the proxy refuses is not fetched straight from its origin. The `GONOSUMDB` advice is
-  gone: it takes module paths, not a host, and the checksum database is already proxied.
-- **A lookup's `blockedReason` now maps to its policy control.** `lookup_package` and the
-  `get_policies` glossary say that `blockedReason` names a `controls` key, and that older servers
-  spell it in PascalCase (`VulnScore` for `vuln_score`).
+- **`check_dependencies` checks every dependency, not only versions your registry has served.**
+  It used to report a vulnerable version as clean when the registry had never cached it
+  (`lodash@4.17.20`, with two HIGH advisories). npm dependencies are now checked through the
+  instance's bulk advisory endpoint, and other ecosystems through `/api/v1/lookup`, up to 100 per
+  call. A malicious version is a critical finding. A new `coverage` block lists anything that
+  could not be checked, and `clean` is never true while that list has entries.
+- **A range, tag or source spec is reported as unverified, not clean.** Pass exact resolved
+  versions, as a lockfile records them. `^4.17.20`, `latest`, a Go branch or commit, a Maven or
+  NuGet bracket range, a Gradle dynamic version, a PEP 440 specifier, or a `git+`/`file:` spec
+  now lands in `coverage.unverified` with the reason.
+- **`check_dependencies` requires `ecosystem`.** A pip list sent without one was checked as npm
+  and came back clean. A blank name or version is rejected, and `summary.packagesChecked` counts
+  the distinct dependencies that were actually checked.
+- **One flaw is counted once.** A PyPI flaw published as both a GHSA and a PYSEC record is shown
+  once, with the other id in `aliases`, so totals and the "unknown" severity count are no longer
+  doubled. Two advisories from the same database are never merged, so an incomplete-fix
+  follow-up stays separate from the flaw it follows up.
+- **Fixed-version lookups are capped** at the 200 most severe advisories per call. Beyond that, a
+  `remediationNote` says how many were skipped, and a finding whose bump target may be low is
+  marked `bumpToPartial`.
+- **`readiness_check` shows why an instance is not ready.** On a 503 it returns the readiness
+  body, naming the failing dependencies, instead of a generic server error.
+- **Publish commands no longer put your token on the command line**, where it would land in shell
+  history. PyPI, NuGet and Hex read it with `read -rs`; RPM lets `curl` prompt for it.
+- **`get_publish_command` uses the path you give it.** OCI loads the image tarball with
+  `docker load` before tagging, Maven uploads the file with `deploy:deploy-file`, and Cargo
+  publishes from the crate's directory.
+- **Go install commands no longer bypass the proxy.** `GOPROXY` has no `,direct` fallback, and the
+  wrong `GONOSUMDB` advice is gone.
+- **pip's `.netrc` line names the host without its port,** which is how pip matches it. Go's keeps
+  the port, which is how Go matches it.
+- **Setup output cannot be made to differ from what a shell runs.** An artefact path with control
+  characters is refused, and so is a base URL with shell metacharacters in its host or path.
+- **A lookup's `blockedReason` maps to its policy control,** the `controls` key `get_policies`
+  uses. Older servers spell it in PascalCase (`VulnScore` for `vuln_score`).
 
 ### Changed
 
-- **`get_vulnerability` is compact by default.** The raw OSV record lists every affected version
-  one by one (over 400 for one Django advisory), thousands of tokens that the ranges beside them
-  already express. Compact output gives each range as `introduced`/`fixed` versions plus a
-  `versionCount`, and lists references as URLs. Severity, CWE, remediation and threat-intel
-  fields are untouched. `verbosity: "full"` returns the raw record.
+- **`get_vulnerability` is compact by default.** It gives each affected range as `introduced` and
+  `fixed` versions instead of listing every affected version, which ran to hundreds for some
+  advisories. `verbosity: "full"` returns the raw OSV record.
 
 ### Added
 
-- **`get_install_command` covers apk, Terraform and Hex.** The server has served all three for
-  a while, but the tool withheld them because it had no command to give. apk gets an
-  `apk add name=version` with a pointer to the `/etc/apk/repositories` line. Terraform gets a
-  `required_providers` block plus the `~/.terraformrc` network-mirror line, and a warning on a
-  plain-HTTP instance, since Terraform refuses an `http://` mirror. Hex gets the Mix dependency
-  on the `dependably` repository and the `mix hex.repo add` step that registers it. Each
-  package name is validated for its ecosystem before it reaches the output; a Hex name, for
-  example, must be a plain atom, so it cannot add options to the dependency.
-- **`get_publish_command` covers Hex** with `mix hex.publish` against the Hex API. For apk and
-  Terraform, which are proxy-only, it says there is no publish endpoint instead of returning a
-  command.
+- **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
+  For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
+  publish.
 
 ### Documentation
 
-- **The README no longer lists audit events,** which no tool reads, and its advisory example no
-  longer names one advisory that only some instances record. Tool descriptions that return
-  upstream or advisory text now say it is third-party data, not instructions, and the
-  `get_package` description says "licences".
-
-- **The README has example prompts**, one per kind of question the tools answer, each naming the
-  tool Claude uses.
-- **The README no longer mentions a request-timeout field in the Claude Desktop install dialog.**
-  That field was removed; `DEPENDABLY_TIMEOUT_MS` still applies where you set environment
-  variables yourself.
+- The README is shorter and gains example prompts and the minimum Dependably version (0.12.2).
+  It drops two inaccuracies: a request-timeout field in the Claude Desktop install dialog, and
+  audit events, which no tool reads. Tool descriptions that return upstream or advisory text now
+  label it as third-party data.
 
 ## [1.1.0] - 2026-09-23
 

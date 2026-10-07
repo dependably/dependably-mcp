@@ -8,14 +8,11 @@ Only the latest published release of `dependably-mcp` receives security fixes.
 
 Please **do not** open a public issue for security problems.
 
-Report privately instead, either via:
-
-- **GitHub private vulnerability reporting** — [Security → Report a vulnerability](https://github.com/dependably/dependably-mcp/security/advisories/new) on this repository, or
-- **Email** — support@dependably.ca with `[dependably-mcp security]` in the subject.
+Report it privately instead, through GitHub's [private vulnerability reporting](https://github.com/dependably/dependably-mcp/security/advisories/new) on this repository, or by email to support@dependably.ca with `[dependably-mcp security]` in the subject.
 
 Include what you can: affected version, a reproduction or proof of concept, and impact as you understand it. You'll get an acknowledgement within a few days, and a fix or mitigation plan before any public disclosure is coordinated with you.
 
 ## Scope notes
 
-- This MCP server holds a **Dependably Personal Access Token** (`DEPENDABLY_TOKEN`) and talks to your Dependably instance on your behalf. Anything that could leak that token, escalate what it can do, or make the server read local files is squarely in scope: no tool reads the filesystem, and a change that introduces one is a finding.
-- Vulnerabilities in the Dependably server itself belong to [dependably-community](https://github.com/dependably/dependably-community) — report them there.
+- This server holds a Dependably personal access token (`DEPENDABLY_TOKEN`) and talks to your instance on your behalf. Anything that could leak that token, extend what it can do, make the server read local files, or put an unintended command into the text the setup tools return is in scope.
+- Report vulnerabilities in the Dependably server itself to [dependably-community](https://github.com/dependably/dependably-community).
