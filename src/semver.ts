@@ -505,10 +505,181 @@ function compareMaven(a: string, b: string): number {
   return mavenCompareList(parseMaven(a), parseMaven(b));
 }
 
+/**
+ * Alpine's apk-tools orders `{digit}{.digit}...{letter}{_suffix{N}}...{-rN}`
+ * with its own token walk (`apk_version_compare`, src/version.c), which the
+ * PEP 440 / semver parsing above gets wrong: `-r4` is a package revision
+ * (newer than the bare version and compared numerically, so `1.2.3-r4` <
+ * `1.2.3-r10`), not a semver prerelease, and `_rc1` is a pre-release, so
+ * `1.2.3_rc1-r0` is BELOW `1.2.3-r0`.
+ *
+ * `compareApk` is a faithful port of that walk, so odd input orders as apk
+ * orders it. A version is read as a stream of typed tokens: a number, an
+ * optional single lower-case letter, a suffix word (`_alpha` < `_beta` <
+ * `_pre` < `_rc` < none < `_cvs` < `_svn` < `_git` < `_hg` < `_p`) with an
+ * optional number, and a `-rN` revision. Tokens compare in lockstep by value.
+ * A number after a `.` that starts with `0` is special: every zero past the
+ * first makes it negative, so `1.00` < `1.0` < `1.1`. When the values tie but
+ * one version has run out of tokens, the longer one is greater UNLESS its next
+ * token is a pre-release suffix (`1.0_rc1` < `1.0`, `1.0_p1` > `1.0`,
+ * `1.0-r1` > `1.0`).
+ *
+ * Invalid input (an unknown suffix such as `_foo`, a stray character, `-` not
+ * followed by `r`, a number of 18+ digits) turns the token stream INVALID,
+ * which ends the walk exactly as apk's does: any differing value so far
+ * decides, otherwise the kind of the token each side stopped on is compared.
+ * So garbage never throws and orders the way apk would order it. Mirrors
+ * apk-tools 2.14 (Alpine 3.22); apk 3's `~<hash>` commit token is not
+ * modelled because no shipped Alpine release uses it yet.
+ */
+const APK_INVALID = -1;
+const APK_DIGIT_OR_ZERO = 0;
+const APK_DIGIT = 1;
+const APK_LETTER = 2;
+const APK_SUFFIX = 3;
+const APK_SUFFIX_NO = 4;
+const APK_REVISION_NO = 5;
+const APK_END = 6;
+
+const APK_PRE_SUFFIXES = ['alpha', 'beta', 'pre', 'rc'];
+const APK_POST_SUFFIXES = ['cvs', 'svn', 'git', 'hg', 'p'];
+
+interface ApkCursor {
+  s: string;
+  pos: number;
+  type: number;
+}
+
+const apkIsDigit = (c: string | undefined): boolean => c !== undefined && c >= '0' && c <= '9';
+const apkIsLower = (c: string | undefined): boolean => c !== undefined && c >= 'a' && c <= 'z';
+
+/** The kind of the token after the one just read, consuming its separator. */
+function apkFollowingKind(cur: ApkCursor): number {
+  const c = cur.s[cur.pos];
+  if (c === undefined || c === '\0') return APK_END;
+  const t = cur.type;
+  if ((t === APK_DIGIT || t === APK_DIGIT_OR_ZERO) && apkIsLower(c)) return APK_LETTER;
+  if (t === APK_LETTER && apkIsDigit(c)) return APK_DIGIT;
+  if (t === APK_SUFFIX && apkIsDigit(c)) return APK_SUFFIX_NO;
+  let kind = APK_INVALID;
+  if (c === '.') kind = APK_DIGIT_OR_ZERO;
+  else if (c === '_') kind = APK_SUFFIX;
+  else if (c === '-' && cur.s[cur.pos + 1] === 'r') {
+    kind = APK_REVISION_NO;
+    cur.pos++;
+  }
+  cur.pos++;
+  return kind;
+}
+
+/** Moves to the next token kind; kinds only go forward, bar three legal loop-backs. */
+function apkAdvance(cur: ApkCursor): void {
+  const kind = apkFollowingKind(cur);
+  const loopBack =
+    (kind === APK_DIGIT_OR_ZERO && cur.type === APK_DIGIT) ||
+    (kind === APK_SUFFIX && cur.type === APK_SUFFIX_NO) ||
+    (kind === APK_DIGIT && cur.type === APK_LETTER);
+  cur.type = kind < cur.type && !loopBack ? APK_INVALID : kind;
+}
+
+/** Reads the digit run at `pos`; undefined at 18+ digits (apk's overflow guard). */
+function apkReadNumber(s: string, pos: number): { value: bigint; len: number } | undefined {
+  let end = pos;
+  while (apkIsDigit(s[end])) end++;
+  if (end - pos >= 18) return undefined;
+  return { value: end > pos ? BigInt(s.slice(pos, end)) : 0n, len: end - pos };
+}
+
+/** Reads a suffix word: pre-release ones are negative, post-release ones positive. */
+function apkReadSuffix(rest: string): { value: bigint; len: number } | undefined {
+  const pre = APK_PRE_SUFFIXES.findIndex((w) => rest.startsWith(w));
+  if (pre >= 0) {
+    return { value: BigInt(pre - APK_PRE_SUFFIXES.length), len: APK_PRE_SUFFIXES[pre].length };
+  }
+  const post = APK_POST_SUFFIXES.findIndex((w) => rest.startsWith(w));
+  if (post >= 0) return { value: BigInt(post), len: APK_POST_SUFFIXES[post].length };
+  return undefined;
+}
+
+/** Reads the token at the cursor as its current kind; undefined if it cannot be read. */
+function apkReadToken(cur: ApkCursor): { value: bigint; len: number; next?: number } | undefined {
+  const rest = cur.s.slice(cur.pos);
+  switch (cur.type) {
+    case APK_DIGIT_OR_ZERO:
+      if (rest[0] === '0') {
+        let extra = 0;
+        while (rest[extra + 1] === '0') extra++;
+        return { value: BigInt(-extra), len: extra, next: APK_DIGIT };
+      }
+      return apkReadNumber(cur.s, cur.pos);
+    case APK_DIGIT:
+    case APK_SUFFIX_NO:
+    case APK_REVISION_NO:
+      return apkReadNumber(cur.s, cur.pos);
+    case APK_LETTER:
+      return { value: BigInt(rest.charCodeAt(0)), len: 1 };
+    case APK_SUFFIX:
+      return apkReadSuffix(rest);
+    default:
+      return undefined;
+  }
+}
+
+/** Reads the current token's value and moves on; leaves the cursor INVALID on failure. */
+function apkGetToken(cur: ApkCursor): bigint {
+  if (cur.pos >= cur.s.length) {
+    cur.type = APK_END;
+    return 0n;
+  }
+  const tok = apkReadToken(cur);
+  if (!tok) {
+    cur.type = APK_INVALID;
+    return -1n;
+  }
+  cur.pos += tok.len;
+  if (cur.pos >= cur.s.length) cur.type = APK_END;
+  else if (tok.next !== undefined) cur.type = tok.next;
+  else apkAdvance(cur);
+  return tok.value;
+}
+
+const apkSign = (a: bigint, b: bigint): number => {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+};
+
+/** True when the pending token is a pre-release suffix (`_rc`, `_alpha`, ...). */
+function apkNextIsPreRelease(cur: ApkCursor): boolean {
+  if (cur.type !== APK_SUFFIX) return false;
+  return apkGetToken({ ...cur }) < 0n;
+}
+
+/** Tie-break when the shared tokens are equal but the streams stopped on different kinds. */
+function apkCompareEnds(a: ApkCursor, b: ApkCursor): number {
+  if (apkNextIsPreRelease(a)) return -1;
+  if (apkNextIsPreRelease(b)) return 1;
+  return Math.sign(b.type - a.type);
+}
+
+function compareApk(a: string, b: string): number {
+  const ca: ApkCursor = { s: a, pos: 0, type: APK_DIGIT };
+  const cb: ApkCursor = { s: b, pos: 0, type: APK_DIGIT };
+  let av = 0n;
+  let bv = 0n;
+  while (ca.type === cb.type && ca.type !== APK_END && ca.type !== APK_INVALID && av === bv) {
+    av = apkGetToken(ca);
+    bv = apkGetToken(cb);
+  }
+  const byValue = apkSign(av, bv);
+  if (byValue !== 0 || ca.type === cb.type) return byValue;
+  return apkCompareEnds(ca, cb);
+}
+
 /** -1 if a < b, 0 if equal, 1 if a > b. */
 export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') return compareMaven(a, b);
+  if (ecosystem === 'apk') return compareApk(a, b);
   const pep440 = ecosystem === 'pypi';
   if (pep440) {
     const ka = parsePep440(a);
