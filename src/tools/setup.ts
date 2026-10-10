@@ -347,6 +347,16 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
     case 'npm':
       return fenced('bash', `npm install --registry=${base}/npm/ ${shq(pinned(pkg, '@', ver))}`);
     case 'pypi': {
+      if (new URL(base).hostname.startsWith('[')) {
+        // requests splits the netloc on ':' to find the netrc entry, which cuts a
+        // bracketed IPv6 host to '[', so no machine line can match. Userinfo in the
+        // index URL needs no netrc.
+        const indexUrl = base.replace('://', '://user:${PIP_TOKEN}@');
+        return fenced(
+          'bash',
+          `# pip cannot match a .netrc entry for an IPv6 host, so the token goes in the index URL instead.\n# It must be URL-safe (percent-encode any reserved characters).\n${readSecret('PIP_TOKEN')}\npip install --index-url "${indexUrl}/simple/" ${shq(pinned(pkg, '==', ver))}`,
+        );
+      }
       const host = netrcHost(base);
       return fenced(
         'bash',

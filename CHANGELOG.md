@@ -31,6 +31,11 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **`get_install_command` no longer suggests a `.netrc` line pip cannot match for an IPv6 host.**
+  For a base URL such as `http://[::1]:8443`, requests looks the entry up by the text before the
+  first colon, so the bracketed `machine [::1]` line never matched and pip failed to authenticate
+  without a warning. The pypi command now reads the token with `read -rs` and passes it in the
+  `--index-url` userinfo instead. IPv4 and DNS hosts, and Go, are unchanged.
 - **`check_dependencies` checks every dependency, not only versions your registry has served.**
   It used to report a vulnerable version as clean when the registry had never cached it
   (`lodash@4.17.20`, with two HIGH advisories). npm dependencies are now checked through the

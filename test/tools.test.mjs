@@ -1892,6 +1892,30 @@ describe('setup tools — netrc and artefact path hygiene', () => {
     ok(!t.includes('machine dep.example.com:8443'), t);
   });
 
+  it('passes credentials in the index URL userinfo for an IPv6 host with a port, not a netrc line', async () => {
+    stubFetch();
+    const v6 = { baseUrl: 'http://[::1]:8443', token: 'tok', timeoutMs: 5000 };
+    const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
+    ok(!t.includes('machine'), t);
+    ok(t.includes('read -rs PIP_TOKEN'), t);
+    ok(t.includes('pip install --index-url "http://user:${PIP_TOKEN}@[::1]:8443/simple/" \'requests==1.0.0\''), t);
+    ok(!t.includes('user:tok'), t);
+  });
+
+  it('passes credentials in the index URL userinfo for an IPv6 host without a port', async () => {
+    stubFetch();
+    const v6 = { baseUrl: 'https://[2001:db8::1]', token: 'tok', timeoutMs: 5000 };
+    const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests' })).content[0].text;
+    ok(!t.includes('machine'), t);
+    ok(t.includes('--index-url "https://user:${PIP_TOKEN}@[2001:db8::1]/simple/"'), t);
+  });
+
+  it('leaves the pip output for a DNS host byte-identical', async () => {
+    stubFetch();
+    const t = (await call(ported, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
+    ok(t.includes("# Put your token in ~/.netrc for dep.example.com (machine dep.example.com login user password <token>) first\npip install --index-url https://dep.example.com:8443/simple/ 'requests==1.0.0'"), t);
+  });
+
   it('keeps the port in Go\'s netrc line, since Go matches netrc on host:port', async () => {
     stubFetch();
     const t = (await call(ported, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.0.0' })).content[0].text;
