@@ -811,6 +811,108 @@ describe('check_dependencies live coverage', () => {
     deepStrictEqual(JSON.parse(bulk.body), { lodash: ['4.17.20'] });
   });
 
+  it('takes a live npm hit\'s fix and aliases from the bulk answer, with no detail lookup', async () => {
+    // Servers with dependably-community#813 resolve the fix inline; the detail
+    // endpoint 404s for an advisory the org has never stored.
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({
+        lodash: [
+          { id: 'GHSA-35jh-r3h4-6jhm', title: 'Command Injection in lodash', severity: 'high', vulnerable_versions: '<4.17.21', cvss: { score: 7.2 }, aliases: ['CVE-2021-23337'], fixed_version: '4.17.21' },
+        ],
+      }),
+      '*': () => ({ status: 404, body: { title: 'Not Found' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    strictEqual(body.findings[0].bumpTo, '4.17.21');
+    strictEqual(body.findings[0].advisories[0].fixedVersion, '4.17.21');
+    strictEqual(calls.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 0, 'no detail lookup when the fix is inline');
+  });
+
+  it('folds a GHSA and PYSEC pair from a live lookup into one finding with its fix', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: {
+          available: true,
+          scored: [{ id: 'GHSA-x', severity: 'HIGH', cvssScore: 7.5, epss: null, isKev: false, summary: 'SQL injection', aliases: ['CVE-2024-1', 'PYSEC-y'], fixedVersion: '4.2.14' }],
+          unscored: [{ id: 'PYSEC-y', summary: null, aliases: ['CVE-2024-1', 'GHSA-x'], fixedVersion: '4.2.14' }],
+        },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'django', version: '4.2.0' }] }));
+    strictEqual(body.findings.length, 1);
+    const f = body.findings[0];
+    strictEqual(f.advisories.length, 1, 'one flaw is counted once');
+    strictEqual(f.advisories[0].osvId, 'GHSA-x');
+    ok(f.advisories[0].aliases.includes('PYSEC-y'), JSON.stringify(f.advisories[0]));
+    strictEqual(f.bumpTo, '4.2.14');
+    strictEqual(body.summary.bySeverity.unknown, 0, JSON.stringify(body.summary));
+    strictEqual(body.summary.withoutFixedVersion, 0, JSON.stringify(body.summary));
+  });
+
+  it('a finding whose fixes are all inline is not marked bumpToPartial when the cap skips others', async () => {
+    const items = Array.from({ length: 205 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-p${i}`, severity: 'HIGH', cvssScore: 8 }));
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '9.0.0' } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }, { name: 'q', version: '1.0.0' }] }),
+    );
+    match(body.remediationNote, /5 more/);
+    const byName = Object.fromEntries(body.findings.map((f) => [f.package, f]));
+    strictEqual(byName.p.bumpToPartial, true);
+    strictEqual(byName.q.bumpToPartial, undefined);
+    strictEqual(byName.q.bumpTo, '2.0.0');
+  });
+
+  it('with includeAdvisoryDetail, the detail lookup\'s fix wins over the inline one, and inline hits do not use the cap', async () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-p${i}`, severity: 'HIGH', cvssScore: 8 }));
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '2.0.1', cweIds: ['CWE-79'] } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'npm', includeAdvisoryDetail: true,
+        packages: [{ name: 'p', version: '1.0.0' }, { name: 'q', version: '1.0.0' }],
+      }),
+    );
+    strictEqual(body.remediationNote, undefined, 'all 200 hits without a fix were looked up');
+    const details = calls.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/'));
+    strictEqual(details.length, 200, 'the inline hit waits for room the cap does not have');
+    const q = body.findings.find((f) => f.package === 'q');
+    strictEqual(q.bumpTo, '2.0.0', 'with no detail lookup the inline fix stands');
+
+    const calls2 = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '2.0.1', cweIds: ['CWE-79'] } }),
+    });
+    const body2 = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', includeAdvisoryDetail: true, packages: [{ name: 'q', version: '1.0.0' }] }),
+    );
+    strictEqual(calls2.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 1);
+    strictEqual(body2.findings[0].advisories[0].fixedVersion, '2.0.1', 'the release-line-aware detail answer wins');
+    deepStrictEqual(body2.findings[0].advisories[0].cwes, ['CWE-79']);
+  });
+
+  it('still asks the detail endpoint when the server sends no inline fix (older servers)', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ lodash: [{ id: 'GHSA-l', severity: 'high', vulnerable_versions: '<4.17.21' }] }),
+      '*': () => ({ remediation: { fixedVersion: '4.17.21' } }),
+    });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'lodash', version: '4.17.20' }] }));
+    strictEqual(body.findings[0].bumpTo, '4.17.21');
+    strictEqual(calls.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 1);
+  });
+
   it('asks about one version per name per request, so a listed advisory applies to that version', async () => {
     // The server lists an advisory under a name only if it affects a requested
     // version of it; with two versions in one request the client could not tell
