@@ -1019,6 +1019,8 @@ export async function liveCheckByLookup(
     const verdict = classifyLookup(r);
     if (verdict.kind === 'unverified') {
       unverified.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
+      // A partial answer (an image scan with gaps) still reports what it found.
+      if ('res' in r && r.res) hits.push(...lookupHits(r.p, r.res));
     } else if (verdict.kind === 'notApplicable') {
       notApplicable.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
     } else {
@@ -1063,19 +1065,29 @@ const NO_ADVISORY_SOURCE_NOTE = 'no advisory database covers this ecosystem, so 
 
 type LookupVerdict = { kind: 'checked' } | { kind: 'unverified' | 'notApplicable'; reason: string };
 
-/** How one lookup answer counts: checked, unverified (with why), or not applicable. */
+/**
+ * How one lookup answer counts: checked, unverified (with why), or not
+ * applicable. A server that sends `advisorySource` is believed only for the two
+ * statuses that vouch for something, `checked` and `not_applicable`; anything
+ * else, including a status added after this was written, is unverified. An
+ * older server without it is judged by `vulnerabilities.available` as before.
+ */
 function classifyLookup(r: { error: string } | { res: Record<string, unknown> | null }): LookupVerdict {
   if ('error' in r) return { kind: 'unverified', reason: r.error };
   if (r.res?.found === false) return { kind: 'unverified', reason: 'not found upstream' };
-  const source = (r.res?.advisorySource ?? null) as { status?: unknown; reason?: unknown } | null;
-  if (source?.status === 'not_applicable') return { kind: 'notApplicable', reason: NO_ADVISORY_SOURCE_NOTE };
   const vulns = (r.res?.vulnerabilities ?? null) as { available?: unknown } | null;
-  if (source?.status === 'unavailable' || !vulns || vulns.available === false) {
-    const known = typeof source?.reason === 'string' ? ADVISORY_UNAVAILABLE_REASONS[source.reason] : undefined;
-    return { kind: 'unverified', reason: known ?? 'the advisory source was unavailable' };
+  const vulnsAvailable = vulns !== null && vulns.available !== false;
+  const source = (r.res?.advisorySource ?? null) as { status?: unknown; reason?: unknown } | null;
+  if (source === null) {
+    return vulnsAvailable ? { kind: 'checked' } : { kind: 'unverified', reason: UNAVAILABLE_FALLBACK };
   }
-  return { kind: 'checked' };
+  if (source.status === 'not_applicable') return { kind: 'notApplicable', reason: NO_ADVISORY_SOURCE_NOTE };
+  if (source.status === 'checked' && vulnsAvailable) return { kind: 'checked' };
+  const known = typeof source.reason === 'string' ? ADVISORY_UNAVAILABLE_REASONS[source.reason] : undefined;
+  return { kind: 'unverified', reason: known ?? UNAVAILABLE_FALLBACK };
 }
+
+const UNAVAILABLE_FALLBACK = 'the advisory source was unavailable';
 
 /** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
 function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[] {

@@ -36,7 +36,7 @@ All notable changes to this project are documented here. The format follows
   anything else is listed as unverified with that reason instead of being sent. A dependency whose
   advisory source was not consulted (no release, unreachable, no coverage, an image without a
   complete scan) is unverified with the reason, and the server's own message is shown when it
-  rejects a lookup. Terraform has no advisory database, so its modules appear in the new
+  rejects a lookup. Terraform has no advisory database, so its providers appear in the new
   `coverage.notApplicable` list: they do not block `clean` and are not counted in
   `summary.packagesChecked`. An older instance behaves as before.
 - **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.

@@ -2440,6 +2440,57 @@ describe('lookup of apk, rpm, oci and terraform', () => {
     strictEqual(lookups(calls).length, 2);
   });
 
+  it('an advisorySource status it does not know is unverified, even with available advisories', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: { available: true, scored: [], unscored: [] },
+        advisorySource: { status: 'partial', source: 'osv', reason: null },
+      }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'x', version: '1.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.summary.packagesChecked, 0);
+  });
+
+  it('reports the findings of a partial image scan and still leaves the image unverified', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`;
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: {
+          available: true,
+          scored: [{ id: 'CVE-2024-1', cvssScore: 9.8, severity: 'CRITICAL', isKev: false, epss: null, summary: 'rce', aliases: [], fixedVersion: null }],
+          unscored: [],
+        },
+        advisorySource: { status: 'unavailable', source: 'oci_scan', reason: 'scan_incomplete' },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'oci', packages: [{ name: 'library/app', version: digest }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.findings.length, 1);
+    strictEqual(body.findings[0].advisories[0].osvId, 'CVE-2024-1');
+  });
+
+  it('a checked status with the advisory source reported unavailable is unverified', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: { available: false, scored: [], unscored: [] },
+        advisorySource: { status: 'checked', source: 'osv', reason: null },
+      }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'x', version: '1.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+  });
+
   it('on an older server without advisorySource, behaves as before', async () => {
     stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
