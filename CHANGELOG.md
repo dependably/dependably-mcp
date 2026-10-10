@@ -55,7 +55,10 @@ All notable changes to this project are documented here. The format follows
   call. A malicious version is a critical finding. A new `coverage` block lists anything that
   could not be checked, and `clean` is never true while that list has entries. When the server
   returns each advisory's aliases and fixed version with the live answer, these findings get a
-  `bumpTo` and fold aliases like any other, with no extra request per advisory.
+  `bumpTo` and fold aliases like any other, with no extra request per advisory. An ecosystem the
+  instance cannot look up (rpm, apk, oci and terraform today) has no live source, so its
+  dependencies the report does not flag are listed as unverified and `clean` is never true for
+  it; the tool description says so.
 - **A range, tag or source spec is reported as unverified, not clean.** Pass exact resolved
   versions, as a lockfile records them. `^4.17.20`, `latest`, a Go branch or commit, a Maven or
   NuGet bracket range, a Gradle dynamic version, a PEP 440 specifier, or a `git+`/`file:` spec
