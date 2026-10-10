@@ -206,6 +206,38 @@ describe('PEP 440 alias spellings', () => {
   });
 });
 
+describe('rpm tilde and caret markers (rpm tests/rpmvercmp.at)', () => {
+  // [a, b, expected sign of compare(a, b)]
+  const vectors = [
+    ['1.0~rc1', '1.0~rc1', 0],
+    ['1.0~rc1', '1.0', -1],
+    ['1.0', '1.0~rc1', 1],
+    ['1.0~rc1', '1.0~rc2', -1],
+    ['1.0~rc1~git123', '1.0~rc1~git123', 0],
+    ['1.0~rc1~git123', '1.0~rc1', -1],
+    ['1.0^', '1.0^', 0],
+    ['1.0^', '1.0', 1],
+    ['1.0', '1.0^', -1],
+    ['1.0^git1', '1.0^git1', 0],
+    ['1.0^git1', '1.0', 1],
+    ['1.0^git1', '1.0^git2', -1],
+    ['1.0^git1', '1.01', -1],
+    ['1.0^20160101', '1.0.1', -1],
+    ['1.0^20160101^git1', '1.0^20160101', 1],
+    ['1.0^20160102', '1.0^20160101^git1', 1],
+    ['1.0~rc1^git1', '1.0~rc1', 1],
+    ['1.0^git1~pre', '1.0^git1', -1],
+    ['1.0^git1', '1.0~rc1', 1],
+    ['1.0~rc1^git1', '1.0', -1],
+    ['1.0.~rc1', '1.0', -1],
+  ];
+  for (const [a, b, want] of vectors) {
+    it(`${a} ${want < 0 ? '<' : want > 0 ? '>' : '=='} ${b}`, () => {
+      strictEqual(Math.sign(compare(a, b, 'rpm')), want);
+    });
+  }
+});
+
 describe('rpm version-release ordering', () => {
   // rpm's NEVRA glues a second ordered field onto the version with a hyphen:
   // "1.2.3-4" is release 4 of version 1.2.3, not a semver prerelease "4" of

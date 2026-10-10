@@ -38,9 +38,8 @@
  * NOT the PEP 440 / semver parsing above, which reads an rpm NEVRA's
  * `version-release` hyphen as a prerelease and gets the ordering backwards.
  * Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
- * (`el9` < `el10`), and `~` (tilde) pre-release markers. Not modelled: rpm
- * 4.15's `^` (caret) post-release marker — the opposite of `~` — because no
- * advisory or lockfile observed here has ever carried one.
+ * (`el9` < `el10`), `~` (tilde) pre-release markers and rpm 4.15's `^`
+ * (caret) post-release markers.
  */
 
 /** dev < pre < release < post, per PEP 440. */
@@ -181,21 +180,25 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
  * content with no `~` is newer, not a tiebreak). A missing release ranks
  * below any present one, the same way a missing segment does not.
  *
- * Not modelled: rpm 4.15's `^` (caret), which sorts ABOVE everything — the
- * opposite of `~`, used for post-release build markers — because no advisory
- * or lockfile observed here has ever carried one.
+ * `^` (caret, rpm 4.15) is the opposite of `~`: a post-release marker, so
+ * `1.0^git1` is newer than `1.0` but older than `1.0.1` or `1.0a`. Both are
+ * found before separators are skipped, as rpmvercmp does, so `1.0.~rc1` keeps
+ * its tilde.
  */
 function rpmSegmentCompare(a: string, b: string): number {
   let ai = 0;
   let bi = 0;
 
   for (;;) {
-    const tildes = matchedTildes(a, ai, b, bi);
-    ai += tildes;
-    bi += tildes;
-    if (a[ai] === '~' || b[bi] === '~') return a[ai] === '~' ? -1 : 1;
     ai = skipSeparators(a, ai);
     bi = skipSeparators(b, bi);
+    const marker = compareMarkers(a[ai], b[bi]);
+    if (marker === 'both') {
+      ai++;
+      bi++;
+      continue;
+    }
+    if (marker !== 0) return marker;
     if (a[ai] === undefined || b[bi] === undefined) break;
 
     const run = compareRuns(a, ai, b, bi);
@@ -204,22 +207,39 @@ function rpmSegmentCompare(a: string, b: string): number {
     bi = run.bi;
   }
 
-  return compareRpmTails(a[ai], b[bi]);
+  // Whichever side still has a run is newer.
+  if (a[ai] === undefined && b[bi] === undefined) return 0;
+  return a[ai] === undefined ? -1 : 1;
+}
+
+/**
+ * rpmvercmp's `~` and `^` rules at one position. `~` sorts before anything,
+ * even the end of the string. `^` sorts after the end of the string but before
+ * any further run. 'both' means each side has the same marker, to be skipped.
+ */
+function compareMarkers(a: string | undefined, b: string | undefined): number | 'both' {
+  if (a === '~' || b === '~') {
+    if (a !== '~') return 1;
+    if (b !== '~') return -1;
+    return 'both';
+  }
+  if (a === '^' || b === '^') {
+    if (a === undefined) return -1;
+    if (b === undefined) return 1;
+    if (a !== '^') return 1;
+    if (b !== '^') return -1;
+    return 'both';
+  }
+  return 0;
 }
 
 const isDigit = (c: string | undefined): c is string => c !== undefined && /\d/.test(c);
 const isAlpha = (c: string | undefined): c is string => c !== undefined && /[A-Za-z]/.test(c);
 const isAlnum = (c: string | undefined): c is string => isDigit(c) || isAlpha(c);
 
-/** How many `~` the two strings carry in lockstep from the given offsets. */
-function matchedTildes(a: string, ai: number, b: string, bi: number): number {
-  let n = 0;
-  while (a[ai + n] === '~' && b[bi + n] === '~') n++;
-  return n;
-}
-
+/** Skips everything but a run or a `~` / `^` marker. */
 function skipSeparators(s: string, i: number): number {
-  while (s[i] !== undefined && !isAlnum(s[i])) i++;
+  while (s[i] !== undefined && !isAlnum(s[i]) && s[i] !== '~' && s[i] !== '^') i++;
   return i;
 }
 
@@ -258,13 +278,6 @@ function compareDigitRuns(a: string, b: string): number {
 function compareWords(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
-}
-
-/** What is left once one side has run out of runs: only a `~` makes the remainder older. */
-function compareRpmTails(a: string | undefined, b: string | undefined): number {
-  if (a === undefined && b === undefined) return 0;
-  if (a === undefined) return b === '~' ? 1 : -1;
-  return a === '~' ? -1 : 1;
 }
 
 function splitRpm(version: string): [string, string | undefined] {
