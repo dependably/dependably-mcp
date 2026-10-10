@@ -40,9 +40,10 @@
  * bump to a spelling that was already superseded. Every marker is canonicalized
  * before it enters `prerelease` so the two spellings compare as one phase.
  *
- * `compare`/`gte`/`maxVersion` take an optional `ecosystem`. `'rpm'` and
- * `'maven'` switch to native comparators (`compareRpm`, `compareMaven`, defined
- * below, each with its own doc comment), and `'pypi'` to `comparePep440`
+ * `compare`/`gte`/`maxVersion` take an optional `ecosystem`. `'rpm'`,
+ * `'maven'` and `'apk'` switch to native comparators (`compareRpm`,
+ * `compareMaven`, `compareApk`, defined below, each with its own doc comment),
+ * and `'pypi'` to `comparePep440`
  * (src/pep440.ts) whenever both versions are valid PEP 440; every other
  * ecosystem uses the
  * semver / PEP 440 parsing above, with two differences for `'nuget'`, which
@@ -109,17 +110,16 @@ function parse(version: string, ecosystem?: string): Parsed {
 
 function parseTail(cleaned: string, ecosystem?: string): Omit<Parsed, 'epoch'> {
 
-  // A hyphenated tail is semver's spelling and is already a prerelease; keep that
-  // path exactly as it was so existing orderings do not shift underneath callers.
+  // A hyphenated tail is semver's spelling and is already a prerelease.
   const hyphen = cleaned.indexOf('-');
   if (hyphen !== -1) {
     // NuGet.Versioning compares prerelease labels case-insensitively, so
     // 1.0.0-beta2 < 1.0.0-RC1. npm, Cargo, Hex and Go compare them as ASCII.
-    const tail = cleaned.slice(hyphen + 1);
+    const label = cleaned.slice(hyphen + 1);
     return {
       release: cleaned.slice(0, hyphen).split('.'),
       phase: PRE,
-      prerelease: (ecosystem === 'nuget' ? tail.toLowerCase() : tail).split('.'),
+      prerelease: (ecosystem === 'nuget' ? label.toLowerCase() : label).split('.'),
     };
   }
 
@@ -141,20 +141,43 @@ function parseTail(cleaned: string, ecosystem?: string): Omit<Parsed, 'epoch'> {
   return { release: cleaned.split('.'), phase: RELEASE, prerelease: [] };
 }
 
-/** Whether a prerelease identifier is numeric, which differs by ecosystem. */
-type IsNumeric = (identifier: string) => boolean;
+/**
+ * How an ecosystem reads a prerelease identifier as a number, and orders two
+ * numeric ones. SemVer and NuGet differ on both.
+ */
+type IdentifierRules = {
+  isNumeric: (identifier: string) => boolean;
+  compareNumbers: (a: string, b: string) => number;
+};
 
 /** SemVer §11's numeric identifier: `0` or digits with no leading zero. */
-const isSemverNumeric: IsNumeric = (id) => /^(0|[1-9]\d*)$/.test(id);
+const SEMVER_IDENTIFIERS: IdentifierRules = {
+  isNumeric: (id) => /^(0|[1-9]\d*)$/.test(id),
+  compareNumbers: (a, b) => compareDigits(a, b),
+};
+
+const INT32_MIN = -(2n ** 31n);
+const INT32_MAX = 2n ** 31n - 1n;
 
 /**
- * NuGet.Versioning parses an identifier with `int.TryParse`, so it is numeric
- * only while it fits in an Int32; a longer run of digits is text and compares
- * as such (`20230101000000` sorts above `-`, and `9007199254740992` above `0x10`).
- * Not modelled: `int.TryParse` also reads a signed identifier such as `-1` as a
- * number below zero; no real NuGet label looks like that.
+ * NuGet.Versioning reads an identifier with `int.TryParse`: an optional sign,
+ * then digits, numeric only while the value fits an Int32. So `-1` is the
+ * number -1 (below `0`), while `20230101000000` is too large and is text,
+ * sorting above `-` and `0x10`. Two numeric identifiers compare by value.
  */
-const isNugetNumeric: IsNumeric = (id) => /^\d+$/.test(id) && compareDigits(id, '2147483647') <= 0;
+const NUGET_IDENTIFIERS: IdentifierRules = {
+  isNumeric: (id) => {
+    if (!/^[+-]?\d+$/.test(id)) return false;
+    const n = BigInt(id);
+    return n >= INT32_MIN && n <= INT32_MAX;
+  },
+  compareNumbers: (a, b) => {
+    const x = BigInt(a);
+    const y = BigInt(b);
+    if (x === y) return 0;
+    return x < y ? -1 : 1;
+  },
+};
 
 /**
  * Two digit strings by value without `Number()`, which rounds above 2^53
@@ -184,10 +207,10 @@ function compareSegment(a: string, b: string): number {
  * compare by value, a numeric identifier ranks below an alphanumeric one, and
  * two alphanumeric identifiers compare as ASCII text.
  */
-function compareIdentifier(a: string, b: string, isNumeric: IsNumeric): number {
-  const aNumeric = isNumeric(a);
-  const bNumeric = isNumeric(b);
-  if (aNumeric && bNumeric) return compareDigits(a, b);
+function compareIdentifier(a: string, b: string, rules: IdentifierRules): number {
+  const aNumeric = rules.isNumeric(a);
+  const bNumeric = rules.isNumeric(b);
+  if (aNumeric && bNumeric) return rules.compareNumbers(a, b);
   if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
   return sign(a, b);
 }
@@ -208,7 +231,7 @@ function compareRelease(a: readonly string[], b: readonly string[]): number {
   return 0;
 }
 
-function comparePrerelease(a: readonly string[], b: readonly string[], isNumeric: IsNumeric): number {
+function comparePrerelease(a: readonly string[], b: readonly string[], rules: IdentifierRules): number {
   // An empty prerelease list means "is a release", which outranks any prerelease.
   if (a.length === 0 && b.length === 0) return 0;
   if (a.length === 0) return 1;
@@ -220,7 +243,7 @@ function comparePrerelease(a: readonly string[], b: readonly string[], isNumeric
     // A shorter identifier chain sorts first when the shared prefix is equal.
     if (x === undefined) return -1;
     if (y === undefined) return 1;
-    const cmp = compareIdentifier(x, y, isNumeric);
+    const cmp = compareIdentifier(x, y, rules);
     if (cmp !== 0) return cmp;
   }
   return 0;
@@ -741,7 +764,7 @@ export function compare(a: string, b: string, ecosystem?: string): number {
     sign(pa.epoch, pb.epoch) ||
     compareRelease(pa.release, pb.release) ||
     sign(pa.phase, pb.phase) ||
-    comparePrerelease(pa.prerelease, pb.prerelease, ecosystem === 'nuget' ? isNugetNumeric : isSemverNumeric)
+    comparePrerelease(pa.prerelease, pb.prerelease, ecosystem === 'nuget' ? NUGET_IDENTIFIERS : SEMVER_IDENTIFIERS)
   );
 }
 

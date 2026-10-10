@@ -548,6 +548,15 @@ describe('compare: NuGet prerelease labels are case-insensitive', () => {
     ['1.0.0-9007199254740992', '1.0.0-A', -1],
     ['1.0.0-20230101000000', '1.0.0-5', 1],
     ['1.0.0-4000000000', '1.0.0-3000000000', 1],
+    // Each of these differs under SemVer's numeric rule, so they pin NuGet's.
+    ['1.0.0-2147483648', '1.0.0--', 1],
+    // int.TryParse reads an optional sign: -1 is the number below 0.
+    ['1.0.0--1', '1.0.0-0', -1],
+    ['1.0.0--0', '1.0.0-0', 0],
+    ['1.0.0--1', '1.0.0-a', -1],
+    ['1.0.0--2147483649', '1.0.0--2147483648', 1],
+    // `--1` does not parse, so it is text, and text ranks above the number -1.
+    ['1.0.0---1', '1.0.0--1', 1],
   ];
 
   for (const [a, b, expected] of vectors) {
