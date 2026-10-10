@@ -7,9 +7,12 @@
  * ranges, so all this needs is a total order over dotted releases with an
  * optional pre/post tail. Prereleases sort below their release
  * (1.2.3-rc.1 < 1.2.3), matching semver, and build metadata is ignored.
- * Segments are compared numerically when both sides are numeric and lexically
+ * Release segments are compared by value when both sides are digits and as text
  * otherwise, so an unusual-but-real version still yields a stable order instead
- * of comparing equal.
+ * of comparing equal. Prerelease identifiers follow SemVer §11: numeric
+ * identifiers (`0` or no leading zero) compare by value, rank below
+ * alphanumeric ones, and alphanumeric ones compare as ASCII. Digit strings are
+ * never converted to `Number`, so values past 2^53 keep their order.
  *
  * Python spells a prerelease without the hyphen semver requires — `2.0.0rc1`,
  * `1.0a1`, `1.0.dev1`, `1.0.post1`. Splitting only on `-` left the marker glued
@@ -37,12 +40,21 @@
  * bump to a spelling that was already superseded. Every marker is canonicalized
  * before it enters `prerelease` so the two spellings compare as one phase.
  *
- * `compare`/`gte`/`maxVersion` take an optional `ecosystem`: for `'rpm'` they
- * switch to `rpmSegmentCompare` (defined below, with its own doc comment),
- * a real rpmvercmp-style segment comparison over epoch, version and release —
- * NOT the PEP 440 / semver parsing above, which reads an rpm NEVRA's
- * `version-release` hyphen as a prerelease and gets the ordering backwards.
- * Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
+ * `compare`/`gte`/`maxVersion` take an optional `ecosystem`. `'rpm'`,
+ * `'maven'` and `'apk'` switch to native comparators (`compareRpm`,
+ * `compareMaven`, `compareApk`, defined below, each with its own doc comment),
+ * and `'pypi'` to `comparePep440`
+ * (src/pep440.ts) whenever both versions are valid PEP 440; every other
+ * ecosystem uses the
+ * semver / PEP 440 parsing above, with two differences for `'nuget'`, which
+ * follows NuGet.Versioning: prerelease labels fold to lower case (npm, Cargo,
+ * Hex and Go compare them case-sensitively), and a numeric identifier is
+ * numeric only while it fits an Int32.
+ *
+ * For rpm, `rpmSegmentCompare` is a real rpmvercmp-style segment comparison over
+ * epoch, version and release — NOT the PEP 440 / semver parsing above, which
+ * reads an rpm NEVRA's `version-release` hyphen as a prerelease and gets the
+ * ordering backwards. Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
  * (`el9` < `el10`), `~` (tilde) pre-release markers and rpm 4.15's `^`
  * (caret) post-release markers.
  */
@@ -88,24 +100,26 @@ function phaseOf(marker: string): number {
 /** A leading PEP 440 `N!` epoch, split off the rest of the version. */
 const PEP440_EPOCH = /^(\d+)!/;
 
-function parse(version: string, pep440 = false): Parsed {
+function parse(version: string, ecosystem?: string): Parsed {
   const unprefixed = version.trim().replace(/^[vV]/, '').split('+')[0];
-  const epochMatch = pep440 ? PEP440_EPOCH.exec(unprefixed) : null;
+  const epochMatch = ecosystem === 'pypi' ? PEP440_EPOCH.exec(unprefixed) : null;
   const epoch = epochMatch ? Number(epochMatch[1]) : 0;
   const cleaned = epochMatch ? unprefixed.slice(epochMatch[0].length) : unprefixed;
-  return { epoch, ...parseTail(cleaned) };
+  return { epoch, ...parseTail(cleaned, ecosystem) };
 }
 
-function parseTail(cleaned: string): Omit<Parsed, 'epoch'> {
+function parseTail(cleaned: string, ecosystem?: string): Omit<Parsed, 'epoch'> {
 
-  // A hyphenated tail is semver's spelling and is already a prerelease; keep that
-  // path exactly as it was so existing orderings do not shift underneath callers.
+  // A hyphenated tail is semver's spelling and is already a prerelease.
   const hyphen = cleaned.indexOf('-');
   if (hyphen !== -1) {
+    // NuGet.Versioning compares prerelease labels case-insensitively, so
+    // 1.0.0-beta2 < 1.0.0-RC1. npm, Cargo, Hex and Go compare them as ASCII.
+    const label = cleaned.slice(hyphen + 1);
     return {
       release: cleaned.slice(0, hyphen).split('.'),
       phase: PRE,
-      prerelease: cleaned.slice(hyphen + 1).split('.'),
+      prerelease: (ecosystem === 'nuget' ? label.toLowerCase() : label).split('.'),
     };
   }
 
@@ -128,17 +142,76 @@ function parseTail(cleaned: string): Omit<Parsed, 'epoch'> {
 }
 
 /**
- * Compare one dotted segment. Numeric on both sides compares as numbers, so
- * 9 < 10; anything else compares as text. Segments are kept as strings rather
- * than coerced up front, because coercing a non-numeric segment to NaN loses
- * the only information that distinguishes it from any other non-numeric one.
+ * How an ecosystem reads a prerelease identifier as a number, and orders two
+ * numeric ones. SemVer and NuGet differ on both.
+ */
+type IdentifierRules = {
+  isNumeric: (identifier: string) => boolean;
+  compareNumbers: (a: string, b: string) => number;
+};
+
+/** SemVer §11's numeric identifier: `0` or digits with no leading zero. */
+const SEMVER_IDENTIFIERS: IdentifierRules = {
+  isNumeric: (id) => /^(0|[1-9]\d*)$/.test(id),
+  compareNumbers: (a, b) => compareDigits(a, b),
+};
+
+const INT32_MIN = -(2n ** 31n);
+const INT32_MAX = 2n ** 31n - 1n;
+
+/**
+ * NuGet.Versioning reads an identifier with `int.TryParse`: an optional sign,
+ * then digits, numeric only while the value fits an Int32. So `-1` is the
+ * number -1 (below `0`), while `20230101000000` is too large and is text,
+ * sorting above `-` and `0x10`. Two numeric identifiers compare by value.
+ */
+const NUGET_IDENTIFIERS: IdentifierRules = {
+  isNumeric: (id) => {
+    if (!/^[+-]?\d+$/.test(id)) return false;
+    const n = BigInt(id);
+    return n >= INT32_MIN && n <= INT32_MAX;
+  },
+  compareNumbers: (a, b) => {
+    const x = BigInt(a);
+    const y = BigInt(b);
+    if (x === y) return 0;
+    return x < y ? -1 : 1;
+  },
+};
+
+/**
+ * Two digit strings by value without `Number()`, which rounds above 2^53
+ * (`9007199254740992` and `...993` both become `9007199254740992`). Leading
+ * zeros are dropped, then the longer string is the larger number.
+ */
+function compareDigits(a: string, b: string): number {
+  const x = a.replace(/^0+(?=\d)/, '');
+  const y = b.replace(/^0+(?=\d)/, '');
+  return x.length === y.length ? sign(x, y) : sign(x.length, y.length);
+}
+
+/**
+ * Compare one dotted release segment. Digits on both sides compare by value,
+ * so 9 < 10; anything else compares as text. Segments are kept as strings
+ * rather than coerced up front, because coercing a non-numeric segment to NaN
+ * loses the only information that distinguishes it from any other non-numeric
+ * one. `Number()` is avoided: it reads `0x10`, `0b1` and `1e3` as numbers.
  */
 function compareSegment(a: string, b: string): number {
-  const na = Number(a);
-  const nb = Number(b);
-  if (a !== '' && b !== '' && Number.isFinite(na) && Number.isFinite(nb)) {
-    return sign(na, nb);
-  }
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) return compareDigits(a, b);
+  return sign(a, b);
+}
+
+/**
+ * Compare one prerelease identifier per SemVer §11: two numeric identifiers
+ * compare by value, a numeric identifier ranks below an alphanumeric one, and
+ * two alphanumeric identifiers compare as ASCII text.
+ */
+function compareIdentifier(a: string, b: string, rules: IdentifierRules): number {
+  const aNumeric = rules.isNumeric(a);
+  const bNumeric = rules.isNumeric(b);
+  if (aNumeric && bNumeric) return rules.compareNumbers(a, b);
+  if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
   return sign(a, b);
 }
 
@@ -158,7 +231,7 @@ function compareRelease(a: readonly string[], b: readonly string[]): number {
   return 0;
 }
 
-function comparePrerelease(a: readonly string[], b: readonly string[]): number {
+function comparePrerelease(a: readonly string[], b: readonly string[], rules: IdentifierRules): number {
   // An empty prerelease list means "is a release", which outranks any prerelease.
   if (a.length === 0 && b.length === 0) return 0;
   if (a.length === 0) return 1;
@@ -170,7 +243,7 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
     // A shorter identifier chain sorts first when the shared prefix is equal.
     if (x === undefined) return -1;
     if (y === undefined) return 1;
-    const cmp = compareSegment(x, y);
+    const cmp = compareIdentifier(x, y, rules);
     if (cmp !== 0) return cmp;
   }
   return 0;
@@ -680,19 +753,18 @@ export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') return compareMaven(a, b);
   if (ecosystem === 'apk') return compareApk(a, b);
-  const pep440 = ecosystem === 'pypi';
-  if (pep440) {
+  if (ecosystem === 'pypi') {
     const ka = parsePep440(a);
     const kb = parsePep440(b);
     if (ka && kb) return comparePep440(ka, kb);
   }
-  const pa = parse(a, pep440);
-  const pb = parse(b, pep440);
+  const pa = parse(a, ecosystem);
+  const pb = parse(b, ecosystem);
   return (
     sign(pa.epoch, pb.epoch) ||
     compareRelease(pa.release, pb.release) ||
     sign(pa.phase, pb.phase) ||
-    comparePrerelease(pa.prerelease, pb.prerelease)
+    comparePrerelease(pa.prerelease, pb.prerelease, ecosystem === 'nuget' ? NUGET_IDENTIFIERS : SEMVER_IDENTIFIERS)
   );
 }
 

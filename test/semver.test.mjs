@@ -529,3 +529,122 @@ describe('apk version ordering', () => {
     strictEqual(maxVersion(['1.2.3-r4', '1.2.3-r10', '1.2.3-r9'], 'apk'), '1.2.3-r10');
   });
 });
+
+describe('compare: NuGet prerelease labels are case-insensitive', () => {
+  // Confirmed against NuGet.Versioning 6.11.1 VersionComparer.Default. npm semver
+  // 7.8.5, the Rust semver crate and Elixir 1.17 Version compare the same labels
+  // as ASCII, so the case folding is NuGet-only.
+  const vectors = [
+    ['1.0.0-beta2', '1.0.0-RC1', -1],
+    ['1.0.0-RC1', '1.0.0-beta1', 1],
+    ['1.0.0-ALPHA', '1.0.0-alpha', 0],
+    ['1.0.0-A', '1.0.0-a', 0],
+    ['1.0.0-Preview.2', '1.0.0-preview.10', -1],
+    ['1.0.0-RC1', '1.0.0', -1],
+    // NuGet reads an identifier as a number only while it fits an Int32; past
+    // that it is text, so these compare as text rather than by value.
+    ['1.0.0-2147483647', '1.0.0-2147483648', -1],
+    ['1.0.0-2147483648', '1.0.0-a', -1],
+    ['1.0.0-9007199254740992', '1.0.0-A', -1],
+    ['1.0.0-20230101000000', '1.0.0-5', 1],
+    ['1.0.0-4000000000', '1.0.0-3000000000', 1],
+    // Each of these differs under SemVer's numeric rule, so they pin NuGet's.
+    ['1.0.0-2147483648', '1.0.0--', 1],
+    // int.TryParse reads an optional sign: -1 is the number below 0.
+    ['1.0.0--1', '1.0.0-0', -1],
+    ['1.0.0--0', '1.0.0-0', 0],
+    ['1.0.0--1', '1.0.0-a', -1],
+    ['1.0.0--2147483649', '1.0.0--2147483648', 1],
+    // `--1` does not parse, so it is text, and text ranks above the number -1.
+    ['1.0.0---1', '1.0.0--1', 1],
+  ];
+
+  for (const [a, b, expected] of vectors) {
+    it(`${a} vs ${b} is ${expected} for nuget`, () => {
+      strictEqual(compare(a, b, 'nuget'), expected);
+      strictEqual(compare(b, a, 'nuget'), expected === 0 ? 0 : -expected);
+    });
+  }
+
+  it('keeps other ecosystems case-sensitive', () => {
+    for (const eco of ['npm', 'cargo', 'hex', 'golang', undefined]) {
+      ok(compare('1.0.0-beta2', '1.0.0-RC1', eco) > 0, String(eco));
+      ok(compare('1.0.0-ALPHA', '1.0.0-alpha', eco) < 0, String(eco));
+    }
+  });
+
+  it('does not report a vulnerable beta as already fixed by an RC', () => {
+    ok(!gte('1.0.0-beta2', '1.0.0-RC1', 'nuget'));
+    ok(gte('1.0.0-RC1', '1.0.0-beta2', 'nuget'));
+    strictEqual(maxVersion(['1.0.0-beta2', '1.0.0-RC1'], 'nuget'), '1.0.0-RC1');
+  });
+});
+
+describe('compare: SemVer prerelease identifiers', () => {
+  // Every expected value below was confirmed against npm semver 7.8.5, the Rust
+  // semver crate 1.x (precedence), Elixir 1.17 Version.compare and
+  // NuGet.Versioning 6.11.1 VersionComparer.Default, which agree with each
+  // other. Where npm differs it is noted: npm rounds identifiers above 2^53
+  // through Number() and reports them equal; SemVer says they differ.
+  const vectors = [
+    // A numeric identifier ranks below an alphanumeric one (SemVer 11.4.3).
+    ['2.9.0-beta.A.-', '2.9.0-beta.A.0', 1],
+    ['3.10.2-a.2.10a', '3.10.2-a.2.3', 1],
+    ['1.0.0-1', '1.0.0-alpha', -1],
+    ['1.0.0-alpha.1', '1.0.0-alpha.beta', -1],
+    ['0.0.0-20230101000000-abcdef123456', '0.0.0-0.20230101000000-abcdef123456', 1],
+    // Only 0 or digits with no leading zero are numeric; 1e2, 0x10 and 0b1 are text.
+    ['1.0.0-1e2', '1.0.0-100', 1],
+    ['1.0.0-1e3', '1.0.0-2', 1],
+    ['1.0.0-0x10', '1.0.0-9', 1],
+    ['1.0.0-0b1', '1.0.0-1', 1],
+    // Numeric identifiers compare by value, not as text.
+    ['1.0.0-2', '1.0.0-10', -1],
+    // A longer chain outranks its own prefix; a prerelease is below its release.
+    ['1.0.0-1.2.3', '1.0.0-1.2', 1],
+    ['1.0.0-alpha', '1.0.0-alpha.1', -1],
+    ['1.0.0-rc.1', '1.0.0', -1],
+    // Uppercase sorts below lowercase in ASCII, outside NuGet.
+    ['1.0.0-A', '1.0.0-a', -1],
+    ['1.0.0-beta2', '1.0.0-RC1', 1],
+  ];
+
+  for (const [a, b, expected] of vectors) {
+    it(`${a} vs ${b} is ${expected}`, () => {
+      for (const eco of ['npm', 'cargo', 'hex']) {
+        strictEqual(compare(a, b, eco), expected, eco);
+        strictEqual(compare(b, a, eco), -expected, eco);
+      }
+    });
+  }
+
+  // Cargo, Hex and NuGet.Versioning order these; npm semver reports 0 for all three.
+  const wide = [
+    ['1.0.0-9007199254740992', '1.0.0-9007199254740993', -1],
+    ['1.0.0-alpha.9007199254740993', '1.0.0-alpha.9007199254740992', 1],
+    ['1.0.0-123456789012345678901234567890', '1.0.0-123456789012345678901234567891', -1],
+  ];
+
+  for (const [a, b, expected] of wide) {
+    it(`keeps precision past 2^53: ${a} vs ${b}`, () => {
+      strictEqual(compare(a, b, 'cargo'), expected);
+      strictEqual(compare(b, a, 'hex'), -expected);
+    });
+  }
+
+  it('keeps precision in release numbers past 2^53 (Cargo and Hex agree)', () => {
+    strictEqual(compare('9007199254740993.0.0', '9007199254740992.0.0', 'cargo'), 1);
+    strictEqual(compare('1.9007199254740993.0', '1.9007199254740992.0', 'hex'), 1);
+    strictEqual(compare('1.9007199254740992.0', '1.9007199254740992.0', 'hex'), 0);
+  });
+
+  it('still treats leading zeros in a release number as the same value', () => {
+    strictEqual(compare('1.02.0', '1.2.0'), 0);
+    ok(compare('1.10.0', '1.9.0') > 0);
+  });
+
+  it('lets an alphanumeric prerelease fix clear a numeric one, not the reverse', () => {
+    ok(gte('1.0.0-alpha', '1.0.0-1'));
+    ok(!gte('1.0.0-1', '1.0.0-alpha'));
+  });
+});

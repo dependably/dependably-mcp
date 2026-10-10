@@ -8,6 +8,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **NuGet prerelease labels compare without regard to case.** `1.0.0-RC1` is now newer than
+  `1.0.0-beta2`, as NuGet.Versioning orders them, and `1.0.0-ALPHA` equals `1.0.0-alpha`. Before,
+  uppercase sorted below lowercase, so a project on `1.0.0-beta2` could read as already past a
+  fix in `1.0.0-RC1` while still vulnerable. NuGet also reads a prerelease number as a number
+  only up to Int32, so longer digit runs now compare as text. npm, Cargo, Hex and Go keep their
+  case-sensitive order.
+- **SemVer prerelease identifiers are ordered the way SemVer 2.0 orders them.** A numeric
+  identifier now ranks below an alphanumeric one (`1.0.0-1` < `1.0.0-alpha`), `1e2`, `0x10` and
+  `0b1` are text rather than numbers, and numbers above 2^53 keep their order in both prerelease
+  identifiers and release numbers instead of comparing equal. Before, an installed prerelease could read as already
+  fixed when it was not, or the reverse.
 - **Maven versions are ordered the way Maven orders them.** `1.0-sp1` is now newer than `1.0`,
   and `1.0.Final`, `1.0-ga` and `2.0.0.RELEASE` equal `1.0` and `2.0.0`, so Spring and
   Hibernate releases no longer get a bump recommended for a version that is already fixed. The
