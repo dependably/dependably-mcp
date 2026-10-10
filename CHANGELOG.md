@@ -37,10 +37,11 @@ All notable changes to this project are documented here. The format follows
   without a warning. The pypi command now reads the token with `read -rs` and passes it in the
   index URL's userinfo, through `PIP_INDEX_URL` for that one command so it stays off pip's
   command line, and unsets it afterwards. IPv4 and DNS hosts, and Go, are unchanged.
-- **`check_dependencies` bounds package names and splits large npm bulk requests.** A name over
-  512 characters is rejected, and an npm bulk request is split into several requests of at most
-  3 MB each, so a very long list cannot exceed the server's 4 MB request limit and leave every
-  dependency unverified.
+- **`check_dependencies` no longer reports an npm dependency clean when the advisory endpoint
+  skipped it.** The endpoint ignores a name over npm's 214-character limit, a version over 256
+  characters, or either with a control character, and answers with no advisories. Such a
+  dependency is now listed in `coverage.unverified` with the reason. A name over 512 characters is
+  rejected in every ecosystem.
 - **Compact `get_vulnerability` keeps the affected versions of an advisory that has no ranges.**
   Such an entry used to show an empty `ranges` list and only a `versionCount`. It now lists
   `versions`, up to 50, with `versionsTruncated` set when the list was cut. GIT ranges also keep

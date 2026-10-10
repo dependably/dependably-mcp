@@ -734,27 +734,31 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
   return [...seen.values()];
 }
 
-/** Serialized bytes a single bulk request may carry; the server rejects bodies over 4 MB. */
-const NPM_BULK_BODY_BUDGET = 3 * 1024 * 1024;
-
-/** Split one round into chunks whose JSON body stays under the budget. */
-function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string>> {
-  const chunks: Array<Map<string, string>> = [];
-  let current = new Map<string, string>();
-  let size = 2;
-  for (const [name, version] of round) {
-    // `"name":["version"],` — quoting and punctuation included.
-    const entry = Buffer.byteLength(JSON.stringify(name)) + Buffer.byteLength(JSON.stringify(version)) + 4;
-    if (current.size > 0 && size + entry > NPM_BULK_BODY_BUDGET) {
-      chunks.push(current);
-      current = new Map();
-      size = 2;
-    }
-    current.set(name, version);
-    size += entry;
+/**
+ * What the npm bulk-advisory endpoint will look at. It skips, without saying
+ * so, a name over npm's 214-character limit, a version over 256, and either
+ * with a control character (dependably-community NpmAuditHandler.IsUsableName
+ * / IsUsableVersion). A skipped pair comes back with no advisories, which reads
+ * as clean, so such a pair is reported unverified and never sent. Within these
+ * limits a round of 5000 pairs is under 2.5 MB, below the endpoint's 4 MiB
+ * body cap, so one request per round always fits.
+ */
+const NPM_MAX_NAME = 214;
+const NPM_MAX_VERSION = 256;
+/** C0, DEL and C1, the characters .NET's char.IsControl matches. */
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return true;
   }
-  if (current.size > 0) chunks.push(current);
-  return chunks;
+  return false;
+}
+
+function npmUnusable(p: InputPackage): string | null {
+  if (p.name.length > NPM_MAX_NAME) return `npm package names are at most ${NPM_MAX_NAME} characters; the advisory endpoint skips longer ones`;
+  if (p.version.length > NPM_MAX_VERSION) return `versions over ${NPM_MAX_VERSION} characters are skipped by the advisory endpoint`;
+  if (hasControlChar(p.name) || hasControlChar(p.version)) return 'a control character in the name or version; the advisory endpoint skips it';
+  return null;
 }
 
 /**
@@ -773,8 +777,14 @@ function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string
  * the whole tree, so a failed round leaves that round's dependencies unverified.
  */
 export async function liveCheckNpm(client: DependablyClient, packages: readonly InputPackage[]): Promise<LiveCheck> {
+  const unverified: Unverified[] = [];
   const byName = new Map<string, string[]>();
   for (const p of packages) {
+    const unusable = npmUnusable(p);
+    if (unusable) {
+      unverified.push({ name: p.name, version: p.version, reason: unusable });
+      continue;
+    }
     const versions = byName.get(p.name) ?? [];
     if (!versions.includes(p.version)) versions.push(p.version);
     byName.set(p.name, versions);
@@ -788,9 +798,8 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
   }
 
   const hits: ReportItem[] = [];
-  const unverified: Unverified[] = [];
   let checked = 0;
-  for (const round of rounds.flatMap(splitByBodyBudget)) {
+  for (const round of rounds) {
     const failed = (reason: string) => {
       for (const [name, version] of round) unverified.push({ name, version, reason });
     };

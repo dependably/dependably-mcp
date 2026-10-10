@@ -694,25 +694,35 @@ describe('check_dependencies live coverage', () => {
     strictEqual(body.findings[0].bumpToPartial, true);
   });
 
-  it('splits an over-budget npm bulk round into several requests and merges the results', async () => {
-    // Long versions push 5000 names past the budget even though each name is within its cap.
-    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `p${i}-`.padEnd(512, 'x'), version: `1.0.0-${'y'.repeat(200)}` }));
+  it('reports npm pairs the advisory endpoint would skip as unverified, never as clean', async () => {
+    // The server drops a name over 214 characters, a version over 256, or a
+    // control character, and answers with no advisories, which reads as clean.
+    const packages = [
+      { name: 'ok', version: '1.0.0' },
+      { name: 'n'.repeat(215), version: '1.0.0' },
+      { name: 'long-version', version: `1.0.0-${'y'.repeat(251)}` },
+      { name: 'ctl', version: '1.0.0\u0007' },
+    ];
     const bodies = [];
-    const client = {
-      post: async (path, body) => {
-        strictEqual(path, '/npm/-/npm/v1/security/advisories/bulk');
-        bodies.push(JSON.stringify(body));
-        const out = {};
-        for (const n of [packages[0].name, packages[4999].name]) if (n in body) out[n] = [{ id: `GHSA-${n.slice(0, 5)}`, severity: 'high' }];
-        return out;
-      },
-    };
+    const client = { post: async (_path, body) => { bodies.push(body); return {}; } };
     const res = await liveCheckNpm(client, packages);
-    ok(bodies.length > 1, `expected several POSTs, got ${bodies.length}`);
-    ok(bodies.every((b) => Buffer.byteLength(b) <= 3 * 1024 * 1024), 'every body stays under the budget');
-    strictEqual(res.hits.length, 2, 'hits from different chunks are merged');
-    strictEqual(res.unverified.length, 0);
+    deepStrictEqual(bodies, [{ ok: ['1.0.0'] }], 'only the usable pair is sent');
+    strictEqual(res.checked, 1);
+    deepStrictEqual(res.unverified.map((u) => u.name), ['n'.repeat(215), 'long-version', 'ctl']);
+    match(res.unverified[0].reason, /214/);
+    match(res.unverified[1].reason, /256/);
+    match(res.unverified[2].reason, /control character/);
+  });
+
+  it('a 5000-pair npm round at the endpoint limits fits one request under the 4 MiB body cap', async () => {
+    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `p${i}-`.padEnd(214, 'x'), version: `1.0.0-${'y'.repeat(250)}` }));
+    const bodies = [];
+    const client = { post: async (_path, body) => { bodies.push(JSON.stringify(body)); return {}; } };
+    const res = await liveCheckNpm(client, packages);
+    strictEqual(bodies.length, 1);
+    ok(Buffer.byteLength(bodies[0]) < 4 * 1024 * 1024, `${Buffer.byteLength(bodies[0])} bytes`);
     strictEqual(res.checked, 5000);
+    strictEqual(res.unverified.length, 0);
   });
 
   it('rejects a package name over 512 characters with a validation error', async () => {
