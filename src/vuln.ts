@@ -824,20 +824,11 @@ function npmUnusable(p: InputPackage): string | null {
   return null;
 }
 
+/** A high surrogate not followed by a low one, or a low one not preceded by a high one. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 function hasLoneSurrogate(value: string): boolean {
-  for (let i = 0; i < value.length; i++) {
-    const c = value.charCodeAt(i);
-    if (c >= 0xd800 && c <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        i++;
-        continue;
-      }
-      return true;
-    }
-    if (c >= 0xdc00 && c <= 0xdfff) return true;
-  }
-  return false;
+  return LONE_SURROGATE.test(value);
 }
 
 /**
@@ -1129,6 +1120,32 @@ export async function liveCoverage(
 /** Most explicit affected versions compact output lists for an entry that has no ranges. */
 const MAX_COMPACT_VERSIONS = 50;
 
+/** One OSV `affected[]` entry, ranges collapsed, versions kept only when no range says more. */
+function compactAffected(a: Record<string, unknown>): Record<string, unknown> {
+  const pkg = (a?.package ?? {}) as Record<string, unknown>;
+  const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
+  const versions = Array.isArray(a?.versions) ? (a.versions as unknown[]) : [];
+  const entry: Record<string, unknown> = {
+    package: { ecosystem: pkg.ecosystem, name: pkg.name },
+    ranges: ranges.map(compactRange),
+    versionCount: versions.length,
+  };
+  // With no range to read, the explicit list is the only record of what is affected.
+  if (ranges.length === 0 && versions.length > 0) {
+    entry.versions = versions.slice(0, MAX_COMPACT_VERSIONS);
+    if (versions.length > MAX_COMPACT_VERSIONS) entry.versionsTruncated = true;
+  }
+  return entry;
+}
+
+function compactRange(r: Record<string, unknown>): Record<string, unknown> {
+  return {
+    type: r?.type,
+    ...(typeof r?.repo === 'string' && r.repo ? { repo: r.repo } : {}),
+    ...collapseEvents(r?.events),
+  };
+}
+
 /**
  * Shape an advisory detail (`GET /api/v1/vulnerabilities/{osvId}`) for reading.
  *
@@ -1143,26 +1160,7 @@ export function compactVulnerability(detail: Record<string, unknown>): Record<st
   const out: Record<string, unknown> = { ...rest };
 
   if (Array.isArray(affected)) {
-    out.affected = (affected as Record<string, unknown>[]).map((a) => {
-      const pkg = (a?.package ?? {}) as Record<string, unknown>;
-      const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
-      const versions = Array.isArray(a?.versions) ? (a.versions as unknown[]) : [];
-      const entry: Record<string, unknown> = {
-        package: { ecosystem: pkg.ecosystem, name: pkg.name },
-        ranges: ranges.map((r) => ({
-          type: r?.type,
-          ...(typeof r?.repo === 'string' && r.repo ? { repo: r.repo } : {}),
-          ...collapseEvents(r?.events),
-        })),
-        versionCount: versions.length,
-      };
-      // With no range to read, the explicit list is the only record of what is affected.
-      if (ranges.length === 0 && versions.length > 0) {
-        entry.versions = versions.slice(0, MAX_COMPACT_VERSIONS);
-        if (versions.length > MAX_COMPACT_VERSIONS) entry.versionsTruncated = true;
-      }
-      return entry;
-    });
+    out.affected = (affected as Record<string, unknown>[]).map(compactAffected);
   }
   if (Array.isArray(references)) {
     out.references = (references as Record<string, unknown>[])

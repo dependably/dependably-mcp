@@ -498,11 +498,14 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');
     case 'terraform':
       return proxyOnly('Terraform is proxy-only — there is no hosted publish/upload endpoint. Providers are fetched from their upstream registry on first request.');
-    case 'hex':
+    case 'hex': {
+      const cd = `cd ${shq(directoryOf(artifactPath, 'mix.exs'))} && `;
+      const publish = withSecret('HEX_API_KEY', cd, `HEX_API_URL=${base}/hex/api mix hex.publish`);
       return fenced(
         'bash',
-        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${withSecret('HEX_API_KEY', `cd ${shq(directoryOf(artifactPath, 'mix.exs'))} && `, `HEX_API_URL=${base}/hex/api mix hex.publish`)}`,
+        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${publish}`,
       );
+    }
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
 }
