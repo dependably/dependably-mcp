@@ -456,10 +456,43 @@ export function collapseAliases(
   aliasesOf: (osvId: string) => readonly string[],
   ecosystem?: string,
 ): Advisory[] {
-  // Union-find over the advisory ids only. Two advisories are joined when one
-  // names the other, or both name a shared id (a CVE), and the two groups hold
-  // no advisory from the same database.
   const ids = [...new Set(advisories.map((a) => a.osvId))];
+  const groupIndex = createGroupIndex(ids);
+  const named = namedIdsOf(advisories, aliasesOf);
+
+  // Direct mentions are joined before shared ids, so a PYSEC record that names
+  // one GHSA attaches to that GHSA whatever order the advisories arrive in,
+  // rather than to whichever GHSA sharing its CVE happened to come first.
+  const mentions = (i: string, j: string): boolean => named.get(i)!.has(j) || named.get(j)!.has(i);
+  joinSoleLinks(ids, mentions, groupIndex.union);
+  const shareable = shareableIdsOf(ids, named);
+  const shares = (i: string, j: string): boolean => {
+    const si = shareable.get(i);
+    const sj = shareable.get(j);
+    return !!si && !!sj && [...si].some((n) => n !== i && n !== j && sj.has(n));
+  };
+  joinSoleLinks(ids, shares, groupIndex.union);
+
+  const groups = new Map<string, Advisory[]>();
+  for (const a of advisories) {
+    const root = groupIndex.find(a.osvId);
+    const group = groups.get(root) ?? [];
+    // The same id reached twice (registry report and live check) is one record.
+    if (!group.some((g) => g.osvId === a.osvId)) group.push(a);
+    groups.set(root, group);
+  }
+
+  return [...groups.values()].map((group) => (group.length === 1 ? group[0] : mergeGroup(group, ecosystem)));
+}
+
+/**
+ * Union-find over the advisory ids only. Two groups are joined unless they
+ * already hold an advisory from the same database.
+ */
+function createGroupIndex(ids: readonly string[]): {
+  find: (x: string) => string;
+  union: (a: string, b: string) => void;
+} {
   const parent = new Map<string, string>(ids.map((id) => [id, id]));
   const databases = new Map<string, Set<string>>(ids.map((id) => [id, new Set([databaseOf(id)])]));
   const find = (x: string): string => {
@@ -478,38 +511,57 @@ export function collapseAliases(
     parent.set(ra, rb);
     databases.set(rb, new Set([...da, ...db]));
   };
+  return { find, union };
+}
 
+/** Every id each advisory id names: itself, its own aliases, and the caller's. */
+function namedIdsOf(
+  advisories: readonly Advisory[],
+  aliasesOf: (osvId: string) => readonly string[],
+): Map<string, Set<string>> {
   const named = new Map<string, Set<string>>();
   for (const a of advisories) {
     const names = new Set([a.osvId, ...(a.aliases ?? []), ...aliasesOf(a.osvId)]);
     named.set(a.osvId, new Set([...(named.get(a.osvId) ?? []), ...names]));
   }
-  // Direct mentions are joined before shared ids, so a PYSEC record that names
-  // one GHSA attaches to that GHSA whatever order the advisories arrive in,
-  // rather than to whichever GHSA sharing its CVE happened to come first.
-  const pairs = (linked: (ni: Set<string>, nj: Set<string>, i: string, j: string) => boolean): void => {
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        if (linked(named.get(ids[i])!, named.get(ids[j])!, ids[i], ids[j])) union(ids[i], ids[j]);
-      }
-    }
-  };
-  // Each pass ties two records only when the link is unambiguous: each is the
-  // other's sole candidate in the other's database. Union-find over every
-  // candidate would let input order decide which twin a third record joined.
-  const mentions = (i: string, j: string): boolean => named.get(i)!.has(j) || named.get(j)!.has(i);
-  const sole = (link: (i: string, j: string) => boolean) => (i: string, j: string): boolean => {
+  return named;
+}
+
+/**
+ * Each pass ties two records only when the link is unambiguous: each is the
+ * other's sole candidate in the other's database. Union-find over every
+ * candidate would let input order decide which twin a third record joined.
+ */
+function joinSoleLinks(
+  ids: readonly string[],
+  link: (i: string, j: string) => boolean,
+  union: (a: string, b: string) => void,
+): void {
+  const sole = (i: string, j: string): boolean => {
     if (!link(i, j)) return false;
     const ci = ids.filter((k) => k !== i && databaseOf(k) === databaseOf(j) && link(i, k));
     const cj = ids.filter((k) => k !== j && databaseOf(k) === databaseOf(i) && link(j, k));
     return ci.length === 1 && cj.length === 1;
   };
-  pairs((_ni, _nj, i, j) => sole(mentions)(i, j));
-  // A record naming another advisory of its own database is an incomplete-fix
-  // follow-up, and it lists its predecessor's ids (the old CVE) beside its own.
-  // Only the ids it does not inherit can tie it to another record; when a
-  // predecessor is not in this set its ids are unknown, so a shared id ties
-  // the follow-up to nothing. Counting one flaw twice is the safe direction.
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      if (sole(ids[i], ids[j])) union(ids[i], ids[j]);
+    }
+  }
+}
+
+/**
+ * The ids each record can be tied to another record by. A record naming
+ * another advisory of its own database is an incomplete-fix follow-up, and it
+ * lists its predecessor's ids (the old CVE) beside its own. Only the ids it
+ * does not inherit can tie it to another record; when a predecessor is not in
+ * this set its ids are unknown, so a shared id ties the follow-up to nothing.
+ * Counting one flaw twice is the safe direction.
+ */
+function shareableIdsOf(
+  ids: readonly string[],
+  named: ReadonlyMap<string, Set<string>>,
+): Map<string, Set<string> | null> {
   const shareable = new Map<string, Set<string> | null>();
   for (const id of ids) {
     const names = named.get(id)!;
@@ -523,23 +575,7 @@ export function collapseAliases(
       shareable.set(id, new Set([...names].filter((n) => !inherited.has(n))));
     }
   }
-  const shares = (i: string, j: string): boolean => {
-    const si = shareable.get(i);
-    const sj = shareable.get(j);
-    return !!si && !!sj && [...si].some((n) => n !== i && n !== j && sj.has(n));
-  };
-  pairs((_ni, _nj, i, j) => sole(shares)(i, j));
-
-  const groups = new Map<string, Advisory[]>();
-  for (const a of advisories) {
-    const root = find(a.osvId);
-    const group = groups.get(root) ?? [];
-    // The same id reached twice (registry report and live check) is one record.
-    if (!group.some((g) => g.osvId === a.osvId)) group.push(a);
-    groups.set(root, group);
-  }
-
-  return [...groups.values()].map((group) => (group.length === 1 ? group[0] : mergeGroup(group, ecosystem)));
+  return shareable;
 }
 
 /** The database an advisory id comes from: its prefix (GHSA, PYSEC, CVE, MAL, …). */
@@ -850,24 +886,7 @@ function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string
  */
 export async function liveCheckNpm(client: DependablyClient, packages: readonly InputPackage[]): Promise<LiveCheck> {
   const unverified: Unverified[] = [];
-  const byName = new Map<string, string[]>();
-  for (const p of packages) {
-    const unusable = npmUnusable(p);
-    if (unusable) {
-      unverified.push({ name: p.name, version: p.version, reason: unusable });
-      continue;
-    }
-    const versions = byName.get(p.name) ?? [];
-    if (!versions.includes(p.version)) versions.push(p.version);
-    byName.set(p.name, versions);
-  }
-  const rounds: Array<Map<string, string>> = [];
-  for (const [name, versions] of byName) {
-    for (const [i, version] of versions.entries()) {
-      if (i === rounds.length) rounds.push(new Map());
-      rounds[i].set(name, version);
-    }
-  }
+  const rounds = npmRounds(groupUsableByName(packages, unverified));
 
   const hits: ReportItem[] = [];
   let checked = 0;
@@ -889,32 +908,78 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
       failed('live npm advisory check returned an unexpected body');
       continue;
     }
-    const idless = new Set<string>();
-    for (const [name, advisories] of Object.entries(res as Record<string, unknown>)) {
-      const version = round.get(name);
-      if (version === undefined || !Array.isArray(advisories)) continue;
-      for (const raw of advisories as Record<string, unknown>[]) {
-        if (typeof raw?.id !== 'string') {
-          if (!idless.has(name)) unverified.push({ name, version, reason: 'live npm advisory check returned an advisory without an id' });
-          idless.add(name);
-          continue;
-        }
-        const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
-        hits.push({
-          packageName: name,
-          version,
-          osvId: raw.id,
-          severity: NPM_SEVERITY[String(raw.severity)] ?? 'UNKNOWN',
-          cvssScore: typeof cvss === 'number' ? cvss : null,
-          summary: typeof raw.title === 'string' ? raw.title : '',
-          // npm's advisory format is snake_case, so the extension field is too.
-          ...inlineRemediation(raw, 'fixed_version'),
-        });
-      }
-    }
-    checked += round.size - idless.size;
+    const idless = collectNpmHits(round, res as Record<string, unknown>, hits, unverified);
+    checked += round.size - idless;
   }
   return { hits, unverified, checked };
+}
+
+/** Distinct versions per name; a pair the endpoint would skip goes straight to `unverified`. */
+function groupUsableByName(packages: readonly InputPackage[], unverified: Unverified[]): Map<string, string[]> {
+  const byName = new Map<string, string[]>();
+  for (const p of packages) {
+    const unusable = npmUnusable(p);
+    if (unusable) {
+      unverified.push({ name: p.name, version: p.version, reason: unusable });
+      continue;
+    }
+    const versions = byName.get(p.name) ?? [];
+    if (!versions.includes(p.version)) versions.push(p.version);
+    byName.set(p.name, versions);
+  }
+  return byName;
+}
+
+/** Round N holds each name's Nth version, so a request carries one version per name. */
+function npmRounds(byName: ReadonlyMap<string, readonly string[]>): Array<Map<string, string>> {
+  const rounds: Array<Map<string, string>> = [];
+  for (const [name, versions] of byName) {
+    for (const [i, version] of versions.entries()) {
+      if (i === rounds.length) rounds.push(new Map());
+      rounds[i].set(name, version);
+    }
+  }
+  return rounds;
+}
+
+/**
+ * Turn one bulk answer into hits, returning how many names listed an advisory
+ * without an id (those names are unverified, not clean).
+ */
+function collectNpmHits(
+  round: ReadonlyMap<string, string>,
+  res: Record<string, unknown>,
+  hits: ReportItem[],
+  unverified: Unverified[],
+): number {
+  const idless = new Set<string>();
+  for (const [name, advisories] of Object.entries(res)) {
+    const version = round.get(name);
+    if (version === undefined || !Array.isArray(advisories)) continue;
+    for (const raw of advisories as Record<string, unknown>[]) {
+      if (typeof raw?.id === 'string') {
+        hits.push(npmHit(name, version, raw, raw.id));
+        continue;
+      }
+      if (!idless.has(name)) unverified.push({ name, version, reason: 'live npm advisory check returned an advisory without an id' });
+      idless.add(name);
+    }
+  }
+  return idless.size;
+}
+
+function npmHit(name: string, version: string, raw: Record<string, unknown>, id: string): ReportItem {
+  const cvss = (raw.cvss as { score?: unknown } | undefined)?.score;
+  return {
+    packageName: name,
+    version,
+    osvId: id,
+    severity: NPM_SEVERITY[String(raw.severity)] ?? 'UNKNOWN',
+    cvssScore: typeof cvss === 'number' ? cvss : null,
+    summary: typeof raw.title === 'string' ? raw.title : '',
+    // npm's advisory format is snake_case, so the extension field is too.
+    ...inlineRemediation(raw, 'fixed_version'),
+  };
 }
 
 type LookupAdvisory = { id?: unknown; severity?: unknown; cvssScore?: unknown; epss?: unknown; isKev?: unknown; summary?: unknown; [k: string]: unknown };
@@ -949,54 +1014,66 @@ export async function liveCheckByLookup(
   });
 
   for (const r of results) {
-    if ('error' in r) {
-      unverified.push({ name: r.p.name, version: r.p.version, reason: `live lookup failed: ${r.error}` });
-      continue;
-    }
-    const vulns = (r.res?.vulnerabilities ?? null) as { scored?: unknown; unscored?: unknown; available?: unknown } | null;
-    if (r.res?.found === false) {
-      unverified.push({ name: r.p.name, version: r.p.version, reason: 'not found upstream' });
-      continue;
-    }
-    if (!vulns || vulns.available === false) {
-      unverified.push({ name: r.p.name, version: r.p.version, reason: 'the advisory source was unavailable' });
+    const skipped = lookupSkipReason(r);
+    if (skipped) {
+      unverified.push({ name: r.p.name, version: r.p.version, reason: skipped });
       continue;
     }
     checked++;
-    // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
-    // under malware.advisoryIds, never in scored or unscored.
-    const malware = (r.res?.malware ?? null) as { advisoryIds?: unknown } | null;
-    for (const id of Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []) {
-      if (typeof id !== 'string') continue;
-      hits.push({
-        packageName: r.p.name,
-        version: r.p.version,
+    hits.push(...lookupHits(r.p, (r as { res: Record<string, unknown> }).res));
+  }
+  return { hits, unverified, checked };
+}
+
+/** Why a lookup answer cannot vouch for its dependency, or null when it can. */
+function lookupSkipReason(r: { error: string } | { res: Record<string, unknown> | null }): string | null {
+  if ('error' in r) return `live lookup failed: ${r.error}`;
+  if (r.res?.found === false) return 'not found upstream';
+  const vulns = (r.res?.vulnerabilities ?? null) as { available?: unknown } | null;
+  if (!vulns || vulns.available === false) return 'the advisory source was unavailable';
+  return null;
+}
+
+/** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
+function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[] {
+  const vulns = res.vulnerabilities as { scored?: unknown; unscored?: unknown };
+  // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
+  // under malware.advisoryIds, never in scored or unscored.
+  const malware = (res.malware ?? null) as { advisoryIds?: unknown } | null;
+  const malwareIds = (Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []).filter(
+    (id): id is string => typeof id === 'string',
+  );
+  const all = [
+    ...(Array.isArray(vulns.scored) ? vulns.scored : []),
+    ...(Array.isArray(vulns.unscored) ? vulns.unscored : []),
+  ] as LookupAdvisory[];
+  return [
+    ...malwareIds.map(
+      (id): ReportItem => ({
+        packageName: p.name,
+        version: p.version,
         osvId: id,
         severity: 'CRITICAL',
         cvssScore: null,
         summary: 'Malicious package: an OpenSSF malicious-packages advisory names this version.',
-      });
-    }
-    const all = [
-      ...(Array.isArray(vulns.scored) ? vulns.scored : []),
-      ...(Array.isArray(vulns.unscored) ? vulns.unscored : []),
-    ] as LookupAdvisory[];
-    for (const a of all) {
-      if (typeof a?.id !== 'string') continue;
-      hits.push({
-        packageName: r.p.name,
-        version: r.p.version,
-        osvId: a.id,
-        severity: typeof a.severity === 'string' ? a.severity : 'UNKNOWN',
-        cvssScore: typeof a.cvssScore === 'number' ? a.cvssScore : null,
-        epssScore: typeof a.epss === 'number' ? a.epss : null,
-        isKev: a.isKev === true,
-        summary: typeof a.summary === 'string' ? a.summary : '',
-        ...inlineRemediation(a, 'fixedVersion'),
-      });
-    }
-  }
-  return { hits, unverified, checked };
+      }),
+    ),
+    ...all.flatMap((a) => (typeof a?.id === 'string' ? [lookupHit(p, a, a.id)] : [])),
+  ];
+}
+
+function lookupHit(p: InputPackage, a: LookupAdvisory, id: string): ReportItem {
+  return {
+    packageName: p.name,
+    version: p.version,
+    osvId: id,
+    severity: typeof a.severity === 'string' ? a.severity : 'UNKNOWN',
+    cvssScore: typeof a.cvssScore === 'number' ? a.cvssScore : null,
+    epssScore: typeof a.epss === 'number' ? a.epss : null,
+    isKev: a.isKev === true,
+    summary: typeof a.summary === 'string' ? a.summary : '',
+    ...inlineRemediation(a, 'fixedVersion'),
+  };
 }
 
 /**

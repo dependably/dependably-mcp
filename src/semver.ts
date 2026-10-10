@@ -186,48 +186,85 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
  * or lockfile observed here has ever carried one.
  */
 function rpmSegmentCompare(a: string, b: string): number {
-  const isDigit = (c: string | undefined): c is string => c !== undefined && /\d/.test(c);
-  const isAlpha = (c: string | undefined): c is string => c !== undefined && /[A-Za-z]/.test(c);
-  const isAlnum = (c: string | undefined): c is string => isDigit(c) || isAlpha(c);
   let ai = 0;
   let bi = 0;
 
   for (;;) {
-    while (a[ai] === '~' || b[bi] === '~') {
-      if (a[ai] !== '~') return 1;
-      if (b[bi] !== '~') return -1;
-      ai++;
-      bi++;
-    }
-    while (isAlnum(a[ai]) === false && a[ai] !== undefined) ai++;
-    while (isAlnum(b[bi]) === false && b[bi] !== undefined) bi++;
+    const tildes = matchedTildes(a, ai, b, bi);
+    ai += tildes;
+    bi += tildes;
+    if (a[ai] === '~' || b[bi] === '~') return a[ai] === '~' ? -1 : 1;
+    ai = skipSeparators(a, ai);
+    bi = skipSeparators(b, bi);
     if (a[ai] === undefined || b[bi] === undefined) break;
 
-    if (isDigit(a[ai])) {
-      if (!isDigit(b[bi])) return 1; // a digit run always outranks a letter run here
-      const aStart = ai;
-      while (isDigit(a[ai])) ai++;
-      const bStart = bi;
-      while (isDigit(b[bi])) bi++;
-      const aNum = a.slice(aStart, ai).replace(/^0+/, '') || '0';
-      const bNum = b.slice(bStart, bi).replace(/^0+/, '') || '0';
-      if (aNum.length !== bNum.length) return aNum.length < bNum.length ? -1 : 1;
-      if (aNum !== bNum) return aNum < bNum ? -1 : 1;
-    } else {
-      if (isDigit(b[bi])) return -1;
-      const aStart = ai;
-      while (isAlpha(a[ai])) ai++;
-      const bStart = bi;
-      while (isAlpha(b[bi])) bi++;
-      const aWord = a.slice(aStart, ai);
-      const bWord = b.slice(bStart, bi);
-      if (aWord !== bWord) return aWord < bWord ? -1 : 1;
-    }
+    const run = compareRuns(a, ai, b, bi);
+    if (run.cmp !== 0) return run.cmp;
+    ai = run.ai;
+    bi = run.bi;
   }
 
-  if (a[ai] === undefined && b[bi] === undefined) return 0;
-  if (a[ai] === undefined) return b[bi] === '~' ? 1 : -1;
-  return a[ai] === '~' ? -1 : 1;
+  return compareRpmTails(a[ai], b[bi]);
+}
+
+const isDigit = (c: string | undefined): c is string => c !== undefined && /\d/.test(c);
+const isAlpha = (c: string | undefined): c is string => c !== undefined && /[A-Za-z]/.test(c);
+const isAlnum = (c: string | undefined): c is string => isDigit(c) || isAlpha(c);
+
+/** How many `~` the two strings carry in lockstep from the given offsets. */
+function matchedTildes(a: string, ai: number, b: string, bi: number): number {
+  let n = 0;
+  while (a[ai + n] === '~' && b[bi + n] === '~') n++;
+  return n;
+}
+
+function skipSeparators(s: string, i: number): number {
+  while (s[i] !== undefined && !isAlnum(s[i])) i++;
+  return i;
+}
+
+function skipWhile(s: string, i: number, pred: (c: string | undefined) => boolean): number {
+  while (pred(s[i])) i++;
+  return i;
+}
+
+/** Compares the digit-or-letter run at each offset, reporting where each run ended. */
+function compareRuns(
+  a: string,
+  ai: number,
+  b: string,
+  bi: number,
+): { cmp: number; ai: number; bi: number } {
+  const numeric = isDigit(a[ai]);
+  // A digit run always outranks a letter run at the same position.
+  if (numeric !== isDigit(b[bi])) return { cmp: numeric ? 1 : -1, ai, bi };
+  const pred = numeric ? isDigit : isAlpha;
+  const aEnd = skipWhile(a, ai, pred);
+  const bEnd = skipWhile(b, bi, pred);
+  const aRun = a.slice(ai, aEnd);
+  const bRun = b.slice(bi, bEnd);
+  const cmp = numeric ? compareDigitRuns(aRun, bRun) : compareWords(aRun, bRun);
+  return { cmp, ai: aEnd, bi: bEnd };
+}
+
+function compareDigitRuns(a: string, b: string): number {
+  const aNum = a.replace(/^0+/, '') || '0';
+  const bNum = b.replace(/^0+/, '') || '0';
+  if (aNum.length !== bNum.length) return aNum.length < bNum.length ? -1 : 1;
+  if (aNum !== bNum) return aNum < bNum ? -1 : 1;
+  return 0;
+}
+
+function compareWords(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/** What is left once one side has run out of runs: only a `~` makes the remainder older. */
+function compareRpmTails(a: string | undefined, b: string | undefined): number {
+  if (a === undefined && b === undefined) return 0;
+  if (a === undefined) return b === '~' ? 1 : -1;
+  return a === '~' ? -1 : 1;
 }
 
 function splitRpm(version: string): [string, string | undefined] {

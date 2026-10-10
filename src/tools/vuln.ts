@@ -18,6 +18,8 @@ import {
   summarizeRemediation,
   mapLimit,
   type Finding,
+  type ReportItem,
+  type Unverified,
 } from '../vuln.js';
 
 const READ_ANNOTATIONS = {
@@ -88,27 +90,9 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         const live = await liveCoverage(client, args.ecosystem, args.packages, reportHits, planes.lookup);
         const hits = [...reportHits, ...live.hits];
 
-        // The lookup cap goes to hits that need a fixed version. A hit that
-        // names its fix inline is looked up only for the CWE / OWASP / skill
-        // ids, which are stripped unless asked for, and only in what room the
-        // cap has left, so it never costs another hit its bumpTo.
-        const { pairs, skipped } = remediationPairs(hits.filter((h) => !hasInlineFix(h)));
-        const detailPairs = args.includeAdvisoryDetail
-          ? [...pairs, ...remediationPairs(hits.filter(hasInlineFix), MAX_REMEDIATION_LOOKUPS - pairs.length).pairs]
-          : pairs;
-        const remediations = await fetchRemediations(client, detailPairs);
+        const { pairs, skipped, remediations } = await lookUpRemediations(client, hits, args.includeAdvisoryDetail === true);
         const findings = buildFindings(hits, devOf, remediations, args.ecosystem);
-        if (skipped) {
-          // Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix.
-          const looked = new Set([
-            ...pairs.map((p) => `${p.osvId}@@${p.version}`),
-            ...hits.filter(hasInlineFix).map((h) => `${h.osvId}@@${h.version}`),
-          ]);
-          for (const f of findings) {
-            const ids = f.advisories.flatMap((a) => [a.osvId, ...(a.aliases ?? [])]);
-            if (ids.some((id) => !looked.has(`${id}@@${f.installed}`))) f.bumpToPartial = true;
-          }
-        }
+        if (skipped) markPartialBumps(findings, pairs, hits);
         if (!args.includeAdvisoryDetail) stripAdvisoryDetail(findings);
 
         return json({
@@ -127,16 +111,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
                 remediationNote: `Fixed versions were looked up for the ${pairs.length} most severe advisories; ${skipped} more report no fixedVersion. Use get_remediation for those.`,
               }
             : {}),
-          coverage: {
-            liveChecked: live.checked,
-            unverified: live.unverified.length,
-            ...(live.unverified.length
-              ? {
-                  unverifiedPackages: live.unverified.slice(0, UNVERIFIED_LISTED),
-                  note: `${live.unverified.length} dependenc${live.unverified.length === 1 ? 'y was' : 'ies were'} not checked against any advisory source; \`clean\` cannot be true until they are.`,
-                }
-              : {}),
-          },
+          coverage: coverageOf(live),
           ...(truncated
             ? {
                 truncated: true,
@@ -227,6 +202,54 @@ const UNVERIFIED_LISTED = 50;
 /** True when every batched element carries an `error`, i.e. nothing in the batch succeeded. */
 function allFailed(results: readonly Record<string, unknown>[]): boolean {
   return results.length > 0 && results.every((r) => 'error' in r);
+}
+
+/** What the live checks covered, and which dependencies they could not vouch for. */
+function coverageOf(live: { checked: number; unverified: readonly Unverified[] }) {
+  const count = live.unverified.length;
+  return {
+    liveChecked: live.checked,
+    unverified: count,
+    ...(count
+      ? {
+          unverifiedPackages: live.unverified.slice(0, UNVERIFIED_LISTED),
+          note: `${count} dependenc${count === 1 ? 'y was' : 'ies were'} not checked against any advisory source; \`clean\` cannot be true until they are.`,
+        }
+      : {}),
+  };
+}
+
+/**
+ * Fetch fixed versions for the hits that need them.
+ *
+ * The lookup cap goes to hits that need a fixed version. A hit that names its
+ * fix inline is looked up only for the CWE / OWASP / skill ids, which are
+ * stripped unless asked for, and only in what room the cap has left, so it
+ * never costs another hit its bumpTo.
+ */
+async function lookUpRemediations(client: DependablyClient, hits: readonly ReportItem[], includeDetail: boolean) {
+  const { pairs, skipped } = remediationPairs(hits.filter((h) => !hasInlineFix(h)));
+  const detailPairs = includeDetail
+    ? [...pairs, ...remediationPairs(hits.filter(hasInlineFix), MAX_REMEDIATION_LOOKUPS - pairs.length).pairs]
+    : pairs;
+  const remediations = await fetchRemediations(client, detailPairs);
+  return { pairs, skipped, remediations };
+}
+
+/** Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix. */
+function markPartialBumps(
+  findings: readonly Finding[],
+  pairs: readonly { osvId: string; version: string }[],
+  hits: readonly ReportItem[],
+): void {
+  const looked = new Set([
+    ...pairs.map((p) => `${p.osvId}@@${p.version}`),
+    ...hits.filter(hasInlineFix).map((h) => `${h.osvId}@@${h.version}`),
+  ]);
+  for (const f of findings) {
+    const ids = f.advisories.flatMap((a) => [a.osvId, ...(a.aliases ?? [])]);
+    if (ids.some((id) => !looked.has(`${id}@@${f.installed}`))) f.bumpToPartial = true;
+  }
 }
 
 /** Drop the CWE/OWASP/skill detail callers did not ask for. */
