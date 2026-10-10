@@ -30,8 +30,34 @@ export type ReportItem = {
   isKevRansomware?: boolean | null;
   summary?: string;
   ecosystem?: string;
+  /** Other ids for this flaw, when the source lists them (newer report rows, live checks). */
+  aliases?: string[];
+  /** The fix for this row's installed version, when the source resolves it inline. */
+  fixedVersion?: string | null;
   [k: string]: unknown;
 };
+
+/**
+ * The aliases and inline fixed version an advisory payload carries, when the
+ * server sends them: lookup and npm bulk results from servers with
+ * dependably-community#813. Without them the fixed version comes from the
+ * advisory detail, which 404s for an advisory the org has never stored.
+ */
+function inlineRemediation(raw: Record<string, unknown>, fixedKey: string): Pick<ReportItem, 'aliases' | 'fixedVersion'> {
+  const aliases = Array.isArray(raw.aliases)
+    ? raw.aliases.filter((v): v is string => typeof v === 'string' && v.length > 0)
+    : [];
+  const fixed = raw[fixedKey];
+  return {
+    ...(aliases.length ? { aliases } : {}),
+    ...(typeof fixed === 'string' && fixed.length > 0 ? { fixedVersion: fixed } : {}),
+  };
+}
+
+/** True when a hit already names its fix, so no detail lookup is needed for bumpTo. */
+export function hasInlineFix(hit: ReportItem): boolean {
+  return typeof hit.fixedVersion === 'string' && hit.fixedVersion.length > 0;
+}
 
 export type Advisory = {
   osvId: string;
@@ -318,7 +344,7 @@ function toAdvisory(hit: ReportItem, rem: RemediationLookup | undefined): Adviso
     epss: hit.epssScore ?? null,
     kev: hit.isKev === true,
     summary: hit.summary ?? '',
-    fixedVersion: rem?.fixedVersion ?? null,
+    fixedVersion: rem?.fixedVersion ?? (hasInlineFix(hit) ? (hit.fixedVersion as string) : null),
     ...(rem?.cwes.length ? { cwes: rem.cwes } : {}),
     ...(rem?.owasp.length ? { owasp: rem.owasp } : {}),
     ...(rem?.skills.length ? { skills: rem.skills } : {}),
@@ -881,6 +907,8 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
           severity: NPM_SEVERITY[String(raw.severity)] ?? 'UNKNOWN',
           cvssScore: typeof cvss === 'number' ? cvss : null,
           summary: typeof raw.title === 'string' ? raw.title : '',
+          // npm's advisory format is snake_case, so the extension field is too.
+          ...inlineRemediation(raw, 'fixed_version'),
         });
       }
     }
@@ -889,7 +917,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
   return { hits, unverified, checked };
 }
 
-type LookupAdvisory = { id?: unknown; severity?: unknown; cvssScore?: unknown; epss?: unknown; isKev?: unknown; summary?: unknown };
+type LookupAdvisory = { id?: unknown; severity?: unknown; cvssScore?: unknown; epss?: unknown; isKev?: unknown; summary?: unknown; [k: string]: unknown };
 
 /**
  * Check dependencies one at a time against `/api/v1/lookup`, which resolves a
@@ -964,6 +992,7 @@ export async function liveCheckByLookup(
         epssScore: typeof a.epss === 'number' ? a.epss : null,
         isKev: a.isKev === true,
         summary: typeof a.summary === 'string' ? a.summary : '',
+        ...inlineRemediation(a, 'fixedVersion'),
       });
     }
   }

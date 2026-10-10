@@ -53,7 +53,9 @@ All notable changes to this project are documented here. The format follows
   (`lodash@4.17.20`, with two HIGH advisories). npm dependencies are now checked through the
   instance's bulk advisory endpoint, and other ecosystems through `/api/v1/lookup`, up to 100 per
   call. A malicious version is a critical finding. A new `coverage` block lists anything that
-  could not be checked, and `clean` is never true while that list has entries.
+  could not be checked, and `clean` is never true while that list has entries. When the server
+  returns each advisory's aliases and fixed version with the live answer, these findings get a
+  `bumpTo` and fold aliases like any other, with no extra request per advisory.
 - **A range, tag or source spec is reported as unverified, not clean.** Pass exact resolved
   versions, as a lockfile records them. `^4.17.20`, `latest`, a Go branch or commit, a Maven or
   NuGet bracket range, a Gradle dynamic version, a PEP 440 specifier, or a `git+`/`file:` spec

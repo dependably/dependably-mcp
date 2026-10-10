@@ -7,6 +7,7 @@ import { FALLBACK_REGISTRY_ECOSYSTEMS, enumOf, type EcosystemPlanes } from '../e
 import {
   buildFindings,
   fetchRemediations,
+  hasInlineFix,
   remediationPairs,
   uniquePackages,
   fetchReport,
@@ -86,12 +87,19 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         const live = await liveCoverage(client, args.ecosystem, args.packages, reportHits, planes.lookup);
         const hits = [...reportHits, ...live.hits];
 
-        const { pairs, skipped } = remediationPairs(hits);
+        // A hit that names its fix inline needs a detail lookup only for the
+        // CWE / OWASP / skill ids, which are stripped unless asked for.
+        const { pairs, skipped } = remediationPairs(
+          args.includeAdvisoryDetail ? hits : hits.filter((h) => !hasInlineFix(h)),
+        );
         const remediations = await fetchRemediations(client, pairs);
         const findings = buildFindings(hits, devOf, remediations, args.ecosystem);
         if (skipped) {
           // Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix.
-          const looked = new Set(pairs.map((p) => `${p.osvId}@@${p.version}`));
+          const looked = new Set([
+            ...pairs.map((p) => `${p.osvId}@@${p.version}`),
+            ...hits.filter(hasInlineFix).map((h) => `${h.osvId}@@${h.version}`),
+          ]);
           for (const f of findings) {
             const ids = f.advisories.flatMap((a) => [a.osvId, ...(a.aliases ?? [])]);
             if (ids.some((id) => !looked.has(`${id}@@${f.installed}`))) f.bumpToPartial = true;
