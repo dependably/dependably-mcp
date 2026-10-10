@@ -739,9 +739,9 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
  * so, a name over npm's 214-character limit, a version over 256, and either
  * with a control character (dependably-community NpmAuditHandler.IsUsableName
  * / IsUsableVersion). A skipped pair comes back with no advisories, which reads
- * as clean, so such a pair is reported unverified and never sent. Within these
- * limits a round of 5000 pairs is under 2.5 MB, below the endpoint's 4 MiB
- * body cap, so one request per round always fits.
+ * as clean, so such a pair is reported unverified and never sent. So is a name
+ * with an unpaired surrogate, which is not valid text and could fail the whole
+ * request.
  */
 const NPM_MAX_NAME = 214;
 const NPM_MAX_VERSION = 256;
@@ -758,8 +758,54 @@ function npmUnusable(p: InputPackage): string | null {
   if (p.name.length > NPM_MAX_NAME) return `npm package names are at most ${NPM_MAX_NAME} characters; the advisory endpoint skips longer ones`;
   if (p.version.length > NPM_MAX_VERSION) return `versions over ${NPM_MAX_VERSION} characters are skipped by the advisory endpoint`;
   if (hasControlChar(p.name) || hasControlChar(p.version)) return 'a control character in the name or version; the advisory endpoint skips it';
+  if (hasLoneSurrogate(p.name)) return 'the name is not valid text (an unpaired surrogate)';
   return null;
 }
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++;
+        continue;
+      }
+      return true;
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) return true;
+  }
+  return false;
+}
+
+/**
+ * Serialized bytes one bulk request may carry; the endpoint rejects a body over
+ * 4 MiB. ASCII names keep a 5000-pair round near 2.4 MB, but a name may be
+ * non-ASCII (3 UTF-8 bytes per character) or full of escaped characters, so a
+ * round is split rather than sent as one request that could fail whole.
+ */
+const NPM_BULK_BODY_BUDGET = 3 * 1024 * 1024;
+
+/** Split one round into chunks whose JSON body stays under the budget. */
+function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string>> {
+  const chunks: Array<Map<string, string>> = [];
+  let current = new Map<string, string>();
+  let size = 2;
+  for (const [name, version] of round) {
+    // `"name":["version"],` — quoting and punctuation included.
+    const entry = Buffer.byteLength(JSON.stringify(name)) + Buffer.byteLength(JSON.stringify(version)) + 4;
+    if (current.size > 0 && size + entry > NPM_BULK_BODY_BUDGET) {
+      chunks.push(current);
+      current = new Map();
+      size = 2;
+    }
+    current.set(name, version);
+    size += entry;
+  }
+  if (current.size > 0) chunks.push(current);
+  return chunks;
+}
+
 
 /**
  * Check every npm dependency against live OSV data through the instance's npm
@@ -799,7 +845,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
 
   const hits: ReportItem[] = [];
   let checked = 0;
-  for (const round of rounds) {
+  for (const round of rounds.flatMap(splitByBodyBudget)) {
     const failed = (reason: string) => {
       for (const [name, version] of round) unverified.push({ name, version, reason });
     };

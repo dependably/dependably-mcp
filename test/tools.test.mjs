@@ -714,15 +714,32 @@ describe('check_dependencies live coverage', () => {
     match(res.unverified[2].reason, /control character/);
   });
 
-  it('a 5000-pair npm round at the endpoint limits fits one request under the 4 MiB body cap', async () => {
-    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `p${i}-`.padEnd(214, 'x'), version: `1.0.0-${'y'.repeat(250)}` }));
+  it('splits an npm round whose body would pass the 4 MiB cap, and merges the answers', async () => {
+    // 214-character names of a 3-byte character push 5000 pairs past 4 MiB.
+    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `${i}-`.padEnd(214, '界'), version: `1.0.0-${'y'.repeat(250)}` }));
     const bodies = [];
-    const client = { post: async (_path, body) => { bodies.push(JSON.stringify(body)); return {}; } };
+    const client = {
+      post: async (_path, body) => {
+        bodies.push(JSON.stringify(body));
+        const out = {};
+        for (const n of [packages[0].name, packages[4999].name]) if (n in body) out[n] = [{ id: `GHSA-${n.slice(0, 4)}`, severity: 'high' }];
+        return out;
+      },
+    };
     const res = await liveCheckNpm(client, packages);
-    strictEqual(bodies.length, 1);
-    ok(Buffer.byteLength(bodies[0]) < 4 * 1024 * 1024, `${Buffer.byteLength(bodies[0])} bytes`);
-    strictEqual(res.checked, 5000);
+    ok(bodies.length > 1, `expected several POSTs, got ${bodies.length}`);
+    ok(bodies.every((b) => Buffer.byteLength(b) <= 3 * 1024 * 1024), 'every body stays under the budget');
+    strictEqual(res.hits.length, 2, 'hits from different chunks are merged');
     strictEqual(res.unverified.length, 0);
+    strictEqual(res.checked, 5000);
+  });
+
+  it('reports an npm name with an unpaired surrogate as unverified', async () => {
+    const bodies = [];
+    const client = { post: async (_path, body) => { bodies.push(body); return {}; } };
+    const res = await liveCheckNpm(client, [{ name: 'a\ud800b', version: '1.0.0' }, { name: '😀ok', version: '1.0.0' }]);
+    deepStrictEqual(bodies, [{ '😀ok': ['1.0.0'] }]);
+    deepStrictEqual(res.unverified.map((u) => u.reason), ['the name is not valid text (an unpaired surrogate)']);
   });
 
   it('rejects a package name over 512 characters with a validation error', async () => {

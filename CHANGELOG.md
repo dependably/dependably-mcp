@@ -41,7 +41,8 @@ All notable changes to this project are documented here. The format follows
   skipped it.** The endpoint ignores a name over npm's 214-character limit, a version over 256
   characters, or either with a control character, and answers with no advisories. Such a
   dependency is now listed in `coverage.unverified` with the reason. A name over 512 characters is
-  rejected in every ecosystem.
+  rejected in every ecosystem, and a long npm list is split across requests so none passes the
+  endpoint's 4 MiB limit.
 - **Compact `get_vulnerability` keeps the affected versions of an advisory that has no ranges.**
   Such an entry used to show an empty `ranges` list and only a `versionCount`. It now lists
   `versions`, up to 50, with `versionsTruncated` set when the list was cut. GIT ranges also keep
