@@ -1898,7 +1898,8 @@ describe('setup tools — netrc and artefact path hygiene', () => {
     const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
     ok(!t.includes('machine'), t);
     ok(t.includes('read -rs PIP_TOKEN'), t);
-    ok(t.includes('pip install --index-url "http://user:${PIP_TOKEN}@[::1]:8443/simple/" \'requests==1.0.0\''), t);
+    ok(t.includes('PIP_INDEX_URL="http://user:${PIP_TOKEN}@[::1]:8443/simple/" pip install \'requests==1.0.0\'; unset PIP_TOKEN'), t);
+    ok(!t.includes('export PIP_TOKEN') && !t.includes('--index-url'), 'the token stays out of the environment and argv');
     ok(!t.includes('user:tok'), t);
   });
 
@@ -1907,7 +1908,7 @@ describe('setup tools — netrc and artefact path hygiene', () => {
     const v6 = { baseUrl: 'https://[2001:db8::1]', token: 'tok', timeoutMs: 5000 };
     const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests' })).content[0].text;
     ok(!t.includes('machine'), t);
-    ok(t.includes('--index-url "https://user:${PIP_TOKEN}@[2001:db8::1]/simple/"'), t);
+    ok(t.includes('PIP_INDEX_URL="https://user:${PIP_TOKEN}@[2001:db8::1]/simple/" pip install'), t);
   });
 
   it('leaves the pip output for a DNS host byte-identical', async () => {
