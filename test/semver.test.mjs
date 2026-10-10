@@ -530,6 +530,47 @@ describe('apk version ordering', () => {
   });
 });
 
+describe('compare: NuGet prerelease labels are case-insensitive', () => {
+  // Confirmed against NuGet.Versioning 6.11.1 VersionComparer.Default. npm semver
+  // 7.8.5, the Rust semver crate and Elixir 1.17 Version compare the same labels
+  // as ASCII, so the case folding is NuGet-only.
+  const vectors = [
+    ['1.0.0-beta2', '1.0.0-RC1', -1],
+    ['1.0.0-RC1', '1.0.0-beta1', 1],
+    ['1.0.0-ALPHA', '1.0.0-alpha', 0],
+    ['1.0.0-A', '1.0.0-a', 0],
+    ['1.0.0-Preview.2', '1.0.0-preview.10', -1],
+    ['1.0.0-RC1', '1.0.0', -1],
+    // NuGet reads an identifier as a number only while it fits an Int32; past
+    // that it is text, so these compare as text rather than by value.
+    ['1.0.0-2147483647', '1.0.0-2147483648', -1],
+    ['1.0.0-2147483648', '1.0.0-a', -1],
+    ['1.0.0-9007199254740992', '1.0.0-A', -1],
+    ['1.0.0-20230101000000', '1.0.0-5', 1],
+    ['1.0.0-4000000000', '1.0.0-3000000000', 1],
+  ];
+
+  for (const [a, b, expected] of vectors) {
+    it(`${a} vs ${b} is ${expected} for nuget`, () => {
+      strictEqual(compare(a, b, 'nuget'), expected);
+      strictEqual(compare(b, a, 'nuget'), expected === 0 ? 0 : -expected);
+    });
+  }
+
+  it('keeps other ecosystems case-sensitive', () => {
+    for (const eco of ['npm', 'cargo', 'hex', 'golang', undefined]) {
+      ok(compare('1.0.0-beta2', '1.0.0-RC1', eco) > 0, String(eco));
+      ok(compare('1.0.0-ALPHA', '1.0.0-alpha', eco) < 0, String(eco));
+    }
+  });
+
+  it('does not report a vulnerable beta as already fixed by an RC', () => {
+    ok(!gte('1.0.0-beta2', '1.0.0-RC1', 'nuget'));
+    ok(gte('1.0.0-RC1', '1.0.0-beta2', 'nuget'));
+    strictEqual(maxVersion(['1.0.0-beta2', '1.0.0-RC1'], 'nuget'), '1.0.0-RC1');
+  });
+});
+
 describe('compare: SemVer prerelease identifiers', () => {
   // Every expected value below was confirmed against npm semver 7.8.5, the Rust
   // semver crate 1.x (precedence), Elixir 1.17 Version.compare and

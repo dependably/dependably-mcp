@@ -40,12 +40,20 @@
  * bump to a spelling that was already superseded. Every marker is canonicalized
  * before it enters `prerelease` so the two spellings compare as one phase.
  *
- * `compare`/`gte`/`maxVersion` take an optional `ecosystem`: for `'rpm'` they
- * switch to `rpmSegmentCompare` (defined below, with its own doc comment),
- * a real rpmvercmp-style segment comparison over epoch, version and release —
- * NOT the PEP 440 / semver parsing above, which reads an rpm NEVRA's
- * `version-release` hyphen as a prerelease and gets the ordering backwards.
- * Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
+ * `compare`/`gte`/`maxVersion` take an optional `ecosystem`. `'rpm'` and
+ * `'maven'` switch to native comparators (`compareRpm`, `compareMaven`, defined
+ * below, each with its own doc comment), and `'pypi'` to `comparePep440`
+ * (src/pep440.ts) whenever both versions are valid PEP 440; every other
+ * ecosystem uses the
+ * semver / PEP 440 parsing above, with two differences for `'nuget'`, which
+ * follows NuGet.Versioning: prerelease labels fold to lower case (npm, Cargo,
+ * Hex and Go compare them case-sensitively), and a numeric identifier is
+ * numeric only while it fits an Int32.
+ *
+ * For rpm, `rpmSegmentCompare` is a real rpmvercmp-style segment comparison over
+ * epoch, version and release — NOT the PEP 440 / semver parsing above, which
+ * reads an rpm NEVRA's `version-release` hyphen as a prerelease and gets the
+ * ordering backwards. Modelled: epochs (`2:1.2.3-1`), alternating digit/letter run comparison
  * (`el9` < `el10`), `~` (tilde) pre-release markers and rpm 4.15's `^`
  * (caret) post-release markers.
  */
@@ -91,24 +99,27 @@ function phaseOf(marker: string): number {
 /** A leading PEP 440 `N!` epoch, split off the rest of the version. */
 const PEP440_EPOCH = /^(\d+)!/;
 
-function parse(version: string, pep440 = false): Parsed {
+function parse(version: string, ecosystem?: string): Parsed {
   const unprefixed = version.trim().replace(/^[vV]/, '').split('+')[0];
-  const epochMatch = pep440 ? PEP440_EPOCH.exec(unprefixed) : null;
+  const epochMatch = ecosystem === 'pypi' ? PEP440_EPOCH.exec(unprefixed) : null;
   const epoch = epochMatch ? Number(epochMatch[1]) : 0;
   const cleaned = epochMatch ? unprefixed.slice(epochMatch[0].length) : unprefixed;
-  return { epoch, ...parseTail(cleaned) };
+  return { epoch, ...parseTail(cleaned, ecosystem) };
 }
 
-function parseTail(cleaned: string): Omit<Parsed, 'epoch'> {
+function parseTail(cleaned: string, ecosystem?: string): Omit<Parsed, 'epoch'> {
 
   // A hyphenated tail is semver's spelling and is already a prerelease; keep that
   // path exactly as it was so existing orderings do not shift underneath callers.
   const hyphen = cleaned.indexOf('-');
   if (hyphen !== -1) {
+    // NuGet.Versioning compares prerelease labels case-insensitively, so
+    // 1.0.0-beta2 < 1.0.0-RC1. npm, Cargo, Hex and Go compare them as ASCII.
+    const tail = cleaned.slice(hyphen + 1);
     return {
       release: cleaned.slice(0, hyphen).split('.'),
       phase: PRE,
-      prerelease: cleaned.slice(hyphen + 1).split('.'),
+      prerelease: (ecosystem === 'nuget' ? tail.toLowerCase() : tail).split('.'),
     };
   }
 
@@ -130,8 +141,20 @@ function parseTail(cleaned: string): Omit<Parsed, 'epoch'> {
   return { release: cleaned.split('.'), phase: RELEASE, prerelease: [] };
 }
 
+/** Whether a prerelease identifier is numeric, which differs by ecosystem. */
+type IsNumeric = (identifier: string) => boolean;
+
 /** SemVer §11's numeric identifier: `0` or digits with no leading zero. */
-const NUMERIC_IDENTIFIER = /^(0|[1-9]\d*)$/;
+const isSemverNumeric: IsNumeric = (id) => /^(0|[1-9]\d*)$/.test(id);
+
+/**
+ * NuGet.Versioning parses an identifier with `int.TryParse`, so it is numeric
+ * only while it fits in an Int32; a longer run of digits is text and compares
+ * as such (`20230101000000` sorts above `-`, and `9007199254740992` above `0x10`).
+ * Not modelled: `int.TryParse` also reads a signed identifier such as `-1` as a
+ * number below zero; no real NuGet label looks like that.
+ */
+const isNugetNumeric: IsNumeric = (id) => /^\d+$/.test(id) && compareDigits(id, '2147483647') <= 0;
 
 /**
  * Two digit strings by value without `Number()`, which rounds above 2^53
@@ -161,9 +184,9 @@ function compareSegment(a: string, b: string): number {
  * compare by value, a numeric identifier ranks below an alphanumeric one, and
  * two alphanumeric identifiers compare as ASCII text.
  */
-function compareIdentifier(a: string, b: string): number {
-  const aNumeric = NUMERIC_IDENTIFIER.test(a);
-  const bNumeric = NUMERIC_IDENTIFIER.test(b);
+function compareIdentifier(a: string, b: string, isNumeric: IsNumeric): number {
+  const aNumeric = isNumeric(a);
+  const bNumeric = isNumeric(b);
   if (aNumeric && bNumeric) return compareDigits(a, b);
   if (aNumeric !== bNumeric) return aNumeric ? -1 : 1;
   return sign(a, b);
@@ -185,7 +208,7 @@ function compareRelease(a: readonly string[], b: readonly string[]): number {
   return 0;
 }
 
-function comparePrerelease(a: readonly string[], b: readonly string[]): number {
+function comparePrerelease(a: readonly string[], b: readonly string[], isNumeric: IsNumeric): number {
   // An empty prerelease list means "is a release", which outranks any prerelease.
   if (a.length === 0 && b.length === 0) return 0;
   if (a.length === 0) return 1;
@@ -197,7 +220,7 @@ function comparePrerelease(a: readonly string[], b: readonly string[]): number {
     // A shorter identifier chain sorts first when the shared prefix is equal.
     if (x === undefined) return -1;
     if (y === undefined) return 1;
-    const cmp = compareIdentifier(x, y);
+    const cmp = compareIdentifier(x, y, isNumeric);
     if (cmp !== 0) return cmp;
   }
   return 0;
@@ -707,19 +730,18 @@ export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') return compareMaven(a, b);
   if (ecosystem === 'apk') return compareApk(a, b);
-  const pep440 = ecosystem === 'pypi';
-  if (pep440) {
+  if (ecosystem === 'pypi') {
     const ka = parsePep440(a);
     const kb = parsePep440(b);
     if (ka && kb) return comparePep440(ka, kb);
   }
-  const pa = parse(a, pep440);
-  const pb = parse(b, pep440);
+  const pa = parse(a, ecosystem);
+  const pb = parse(b, ecosystem);
   return (
     sign(pa.epoch, pb.epoch) ||
     compareRelease(pa.release, pb.release) ||
     sign(pa.phase, pb.phase) ||
-    comparePrerelease(pa.prerelease, pb.prerelease)
+    comparePrerelease(pa.prerelease, pb.prerelease, ecosystem === 'nuget' ? isNugetNumeric : isSemverNumeric)
   );
 }
 
