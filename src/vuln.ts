@@ -1,4 +1,5 @@
 import type { DependablyClient } from './client.js';
+import { canonicalPep440 } from './pep440.js';
 import { gte, maxVersion } from './semver.js';
 
 /**
@@ -182,6 +183,10 @@ const TRAILING_ZERO_ECOSYSTEMS = new Set(['pypi', 'nuget', 'maven']);
  * than an equivalent spelling of the same one.
  */
 export function canonicalVersion(ecosystem: string | undefined, v: string): string {
+  if (ecosystem === 'pypi') {
+    const pep440 = canonicalPep440(v);
+    if (pep440 !== null) return pep440;
+  }
   let s = v.trim().replace(/^[vV]/, '').toLowerCase();
   if (TRAILING_ZERO_ECOSYSTEMS.has(String(ecosystem))) {
     const parts = s.split('.');

@@ -43,10 +43,15 @@ All notable changes to this project are documented here. The format follows
   `1.0^20230101` now sorts after `1.0` and before `1.0.1`, where it used to compare equal to
   `1.0`, so a caret build could be taken as already fixed. A `~` after a separator (`1.0.~rc1`)
   is no longer skipped as one.
-- **PyPI version ordering now honours PEP 440 epochs.** `1!1.0` used to sort below `2.0` because
-  the `1!` prefix was read as part of the release, which mis-stated "already fixed" and the
-  suggested upgrade target for projects that changed their versioning scheme. The epoch is now
-  compared first, with a missing epoch counting as 0. Other ecosystems are unaffected.
+- **PyPI version ordering now follows PEP 440 in full.** `1!1.0` used to sort below `2.0` because
+  the `1!` prefix was read as part of the release, and a version combining pre-release, post and
+  dev parts (`1.0rc1.post1`, `1.0.post1.dev0`) or carrying a local label (`1.0+ubuntu1`) mis-sorted
+  too, which mis-stated "already fixed" and the suggested upgrade target. Ordering is now a port
+  of `packaging.version`: epoch, release, pre, post, dev, then local label, with its spelling
+  rules (`alpha`/`a`, `c`/`rc`, `-1`/`.post1`, implicit zeros, any separator). Equal spellings such
+  as `1.0` and `1.0.0` or `0!1.0` also join as one version when matching a report to your
+  dependencies. A pypi string that is not valid PEP 440 keeps the previous ordering, and other
+  ecosystems are unaffected.
 - **`get_install_command` no longer suggests a `.netrc` line pip cannot match for an IPv6 host.**
   For a base URL such as `http://[::1]:8443`, requests looks the entry up by the text before the
   first colon, so the bracketed `machine [::1]` line never matched and pip failed to authenticate

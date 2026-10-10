@@ -26,6 +26,53 @@ describe('compare with PEP 440 epochs (pypi)', () => {
     });
   }
 
+  // Also confirmed with packaging 26.3: compound tails, local labels, and
+  // spellings that packaging folds together.
+  const fullVectors = [
+    ['1.0rc1.post1', '1.0rc1', 1],
+    ['1.0.post1.dev0', '1.0.post1', -1],
+    ['1.0.post1.dev0', '1.0', 1],
+    ['1.0a1.dev1', '1.0a1', -1],
+    ['1.0a1.dev1', '1.0.dev9', 1],
+    ['1.0.dev1', '1.0a0', -1],
+    ['1.0.post1', '1.0rc1.post9', 1],
+    ['1.0', '1.0+ubuntu1', -1],
+    ['1.0+5', '1.0+abc', 1],
+    ['1.0+abc.1', '1.0+abc', 1],
+    ['1.0+2', '1.0+10', -1],
+    ['1.0+a', '1.0+b', -1],
+    ['1.0a', '1.0a0', 0],
+    ['1.0-1', '1.0.post1', 0],
+    ['1.0alpha1', '1.0a1', 0],
+    ['1.0c1', '1.0RC1', 0],
+    ['v1.0.0', '1.0', 0],
+    ['1.0_beta_2', '1.0b2', 0],
+    ['1.0.rev3', '1.0-r3', 0],
+    ['1.0+1.2', '1.0+1-2', 0],
+    ['1.0.dev', '1.0.dev0', 0],
+    ['1.0+007', '1.0+7', 0],
+    ['1!1.0+x', '2.0', 1],
+  ];
+  for (const [a, b, want] of fullVectors) {
+    it(`full PEP 440: ${a} against ${b} is ${want}`, () => {
+      strictEqual(compare(a, b, 'pypi'), want);
+      strictEqual(compare(b, a, 'pypi'), want === 0 ? 0 : -want);
+    });
+  }
+
+  it('leaves the other ecosystems on the generic path', () => {
+    // Under semver rules a "+" tail is build metadata and "1.0.post1.dev0"
+    // has no PEP 440 meaning; these results are the pre-change behaviour.
+    strictEqual(compare('1.0', '1.0+ubuntu1', 'npm'), 0);
+    strictEqual(compare('1.0', '1.0+ubuntu1'), 0);
+    strictEqual(compare('1.0-1', '1.0', 'cargo'), -1);
+    strictEqual(compare('1.0.0', '1.0', 'npm'), 0);
+  });
+
+  it('falls back to the generic path for a pypi string that is not PEP 440', () => {
+    ok(compare('1.2.3-beta.2', '1.2.3-beta.10', 'pypi') < 0);
+  });
+
   it('lets the epoch outrank a later release in gte and maxVersion', () => {
     ok(gte('1!1.0', '2.0', 'pypi'));
     strictEqual(maxVersion(['2.0', '1!1.0', '3.0'], 'pypi'), '1!1.0');

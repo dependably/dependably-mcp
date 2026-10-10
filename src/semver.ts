@@ -18,13 +18,14 @@
  * version is at or above the ceiling, so a project pinned to an RC was told the
  * advisory needed no action.
  *
- * For `'pypi'` a leading `N!` epoch is parsed and compared numerically ahead of
+ * For `'pypi'` a valid PEP 440 version is ordered by `pep440.ts`, a port of
+ * `packaging.version`: epochs, compound pre/post/dev tails and local labels
+ * included. The parsing described above remains the fallback for a pypi string
+ * that is not valid PEP 440, where a leading `N!` epoch is parsed and compared numerically ahead of
  * the release (absent = 0), so `1!1.0` outranks `2.0`. Other ecosystems never
  * have an epoch parsed, so `!` keeps whatever meaning it had for them.
  *
- * Not modelled, because neither an advisory nor a lockfile has been observed to
- * carry one: PEP 440 local version labels (`1.0+ubuntu1`, whose `+` tail is
- * dropped as build metadata).
+ * Outside pypi, a `+` tail is dropped as build metadata.
  *
  * PEP 440 also permits several spellings of the same phase — `c`, `pre` and
  * `preview` all mean `rc`; `a` means `alpha`; `b` means `beta`; `r` and `rev`
@@ -45,6 +46,8 @@
  * (`el9` < `el10`), `~` (tilde) pre-release markers and rpm 4.15's `^`
  * (caret) post-release markers.
  */
+
+import { comparePep440, parsePep440 } from './pep440.js';
 
 /** dev < pre < release < post, per PEP 440. */
 const DEV = -2;
@@ -507,6 +510,11 @@ export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') return compareMaven(a, b);
   const pep440 = ecosystem === 'pypi';
+  if (pep440) {
+    const ka = parsePep440(a);
+    const kb = parsePep440(b);
+    if (ka && kb) return comparePep440(ka, kb);
+  }
   const pa = parse(a, pep440);
   const pb = parse(b, pep440);
   return (
