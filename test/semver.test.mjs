@@ -463,3 +463,69 @@ describe('pypi strips the whitespace packaging strips', () => {
   });
 });
 
+describe('apk version ordering', () => {
+  it('orders an empty version as apk does (confirmed with apk version -t on Alpine 3.22)', () => {
+    strictEqual(compare('', '1', 'apk'), -1);
+    strictEqual(compare('1', '', 'apk'), 1);
+    strictEqual(compare('', '', 'apk'), 0);
+    strictEqual(compare('', '_rc1', 'apk'), 1);
+    strictEqual(compare('_rc1', '', 'apk'), -1);
+  });
+
+  // Every expectation below was confirmed against `apk version -t A B` from
+  // apk-tools 2.14.10 on Alpine 3.22.5. apk's `-rN` is a package revision and
+  // `_rc`/`_alpha`/... are suffixes with a fixed rank, none of which the generic
+  // semver / PEP 440 parsing understands.
+  const vectors = [
+    ['1.2.3-r4', '>', '1.2.3'],
+    ['1.2.3', '<', '1.2.3-r4'],
+    ['1.2.3-r4', '<', '1.2.3-r10'],
+    ['1.2.3-r10', '>', '1.2.3-r4'],
+    ['1.2.3-r4', '=', '1.2.3-r04'],
+    ['1.2.3_rc1-r0', '<', '1.2.3-r0'],
+    ['1.2.3_rc1', '<', '1.2.3_rc2'],
+    ['1.2.3_alpha', '<', '1.2.3_beta'],
+    ['1.2.3_beta', '<', '1.2.3_pre'],
+    ['1.2.3_pre', '<', '1.2.3_rc'],
+    ['1.2.3_rc9', '<', '1.2.3'],
+    ['1.2.3_p1', '>', '1.2.3'],
+    ['1.2.3_cvs', '<', '1.2.3_svn'],
+    ['1.2.3_svn', '<', '1.2.3_git'],
+    ['1.2.3_git', '<', '1.2.3_hg'],
+    ['1.2.3_hg', '<', '1.2.3_p'],
+    ['1.2.3_p1-r1', '>', '1.2.3_p1'],
+    ['1.2.3a', '>', '1.2.3'],
+    ['1.2.3b', '>', '1.2.3a'],
+    ['1.2.3a', '<', '1.2.4'],
+    ['1.10', '>', '1.9'],
+    ['1.01', '<', '1.1'],
+    ['1.00', '<', '1.0'],
+    ['1.0.0', '>', '1.0'],
+    ['2.0_rc1-r0', '>', '1.9.9-r5'],
+    ['3.1.4_p20240101', '>', '3.1.4_p3'],
+    ['1.2.3_git20240101-r2', '>', '1.2.3-r2'],
+    // Invalid input orders as apk orders it: never a throw.
+    ['1.2.3_foo', '<', '1.2.3'],
+    ['1.2.3_foo', '=', '1.2.3_bar'],
+    ['1.2.3-rx', '>', '1.2.3'],
+    ['1.2.3', '=', '1.2.3'],
+  ];
+  const expected = { '<': -1, '=': 0, '>': 1 };
+
+  for (const [a, op, b] of vectors) {
+    it(`${a} ${op} ${b}`, () => {
+      strictEqual(compare(a, b, 'apk'), expected[op]);
+      strictEqual(compare(b, a, 'apk'), expected[op] === 0 ? 0 : -expected[op]);
+    });
+  }
+
+  it('leaves the generic ordering alone for other ecosystems', () => {
+    ok(compare('1.2.3-r4', '1.2.3') < 0, 'semver still reads -r4 as a prerelease without the apk ecosystem');
+  });
+
+  it('feeds gte and maxVersion: a revision clears its bare fix, the newest revision wins', () => {
+    ok(gte('1.2.3-r4', '1.2.3', 'apk'));
+    ok(!gte('1.2.3_rc1-r0', '1.2.3-r0', 'apk'));
+    strictEqual(maxVersion(['1.2.3-r4', '1.2.3-r10', '1.2.3-r9'], 'apk'), '1.2.3-r10');
+  });
+});

@@ -52,6 +52,13 @@ All notable changes to this project are documented here. The format follows
   as `1.0` and `1.0.0` or `0!1.0` also join as one version when matching a report to your
   dependencies. A pypi string that is not valid PEP 440 keeps the previous ordering, and other
   ecosystems are unaffected.
+- **Alpine (apk) versions are now ordered the way apk orders them.** `compare`, `gte` and
+  `maxVersion` read an apk version with the generic semver rules, so `1.2.3-r4` sorted below
+  `1.2.3`, `1.2.3-r4` above `1.2.3-r10`, and `1.2.3_rc1-r0` above `1.2.3-r0`. That skewed the
+  "already fixed" check and the suggested upgrade version in `check_dependencies` and
+  `get_remediation`. They now follow apk-tools' own comparison: `-rN` revisions are numeric,
+  `_alpha`, `_beta`, `_pre` and `_rc` sort before the release, and `_cvs`, `_svn`, `_git`, `_hg`
+  and `_p` sort after it. Checked against `apk version -t` on Alpine 3.22.
 - **`get_install_command` no longer suggests a `.netrc` line pip cannot match for an IPv6 host.**
   For a base URL such as `http://[::1]:8443`, requests looks the entry up by the text before the
   first colon, so the bracketed `machine [::1]` line never matched and pip failed to authenticate
