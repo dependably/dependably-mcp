@@ -8,6 +8,7 @@ import {
   buildFindings,
   fetchRemediations,
   hasInlineFix,
+  MAX_REMEDIATION_LOOKUPS,
   remediationPairs,
   uniquePackages,
   fetchReport,
@@ -87,12 +88,15 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         const live = await liveCoverage(client, args.ecosystem, args.packages, reportHits, planes.lookup);
         const hits = [...reportHits, ...live.hits];
 
-        // A hit that names its fix inline needs a detail lookup only for the
-        // CWE / OWASP / skill ids, which are stripped unless asked for.
-        const { pairs, skipped } = remediationPairs(
-          args.includeAdvisoryDetail ? hits : hits.filter((h) => !hasInlineFix(h)),
-        );
-        const remediations = await fetchRemediations(client, pairs);
+        // The lookup cap goes to hits that need a fixed version. A hit that
+        // names its fix inline is looked up only for the CWE / OWASP / skill
+        // ids, which are stripped unless asked for, and only in what room the
+        // cap has left, so it never costs another hit its bumpTo.
+        const { pairs, skipped } = remediationPairs(hits.filter((h) => !hasInlineFix(h)));
+        const detailPairs = args.includeAdvisoryDetail
+          ? [...pairs, ...remediationPairs(hits.filter(hasInlineFix), MAX_REMEDIATION_LOOKUPS - pairs.length).pairs]
+          : pairs;
+        const remediations = await fetchRemediations(client, detailPairs);
         const findings = buildFindings(hits, devOf, remediations, args.ecosystem);
         if (skipped) {
           // Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix.

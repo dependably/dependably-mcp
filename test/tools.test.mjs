@@ -853,6 +853,55 @@ describe('check_dependencies live coverage', () => {
     strictEqual(body.summary.withoutFixedVersion, 0, JSON.stringify(body.summary));
   });
 
+  it('a finding whose fixes are all inline is not marked bumpToPartial when the cap skips others', async () => {
+    const items = Array.from({ length: 205 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-p${i}`, severity: 'HIGH', cvssScore: 8 }));
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '9.0.0' } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }, { name: 'q', version: '1.0.0' }] }),
+    );
+    match(body.remediationNote, /5 more/);
+    const byName = Object.fromEntries(body.findings.map((f) => [f.package, f]));
+    strictEqual(byName.p.bumpToPartial, true);
+    strictEqual(byName.q.bumpToPartial, undefined);
+    strictEqual(byName.q.bumpTo, '2.0.0');
+  });
+
+  it('with includeAdvisoryDetail, the detail lookup\'s fix wins over the inline one, and inline hits do not use the cap', async () => {
+    const items = Array.from({ length: 200 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-p${i}`, severity: 'HIGH', cvssScore: 8 }));
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '2.0.1', cweIds: ['CWE-79'] } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'npm', includeAdvisoryDetail: true,
+        packages: [{ name: 'p', version: '1.0.0' }, { name: 'q', version: '1.0.0' }],
+      }),
+    );
+    strictEqual(body.remediationNote, undefined, 'all 200 hits without a fix were looked up');
+    const details = calls.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/'));
+    strictEqual(details.length, 200, 'the inline hit waits for room the cap does not have');
+    const q = body.findings.find((f) => f.package === 'q');
+    strictEqual(q.bumpTo, '2.0.0', 'with no detail lookup the inline fix stands');
+
+    const calls2 = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/npm/-/npm/v1/security/advisories/bulk': () => ({ q: [{ id: 'GHSA-q', severity: 'high', vulnerable_versions: '<2.0.0', fixed_version: '2.0.0' }] }),
+      '*': () => ({ remediation: { fixedVersion: '2.0.1', cweIds: ['CWE-79'] } }),
+    });
+    const body2 = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'npm', includeAdvisoryDetail: true, packages: [{ name: 'q', version: '1.0.0' }] }),
+    );
+    strictEqual(calls2.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 1);
+    strictEqual(body2.findings[0].advisories[0].fixedVersion, '2.0.1', 'the release-line-aware detail answer wins');
+    deepStrictEqual(body2.findings[0].advisories[0].cwes, ['CWE-79']);
+  });
+
   it('still asks the detail endpoint when the server sends no inline fix (older servers)', async () => {
     const calls = stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
