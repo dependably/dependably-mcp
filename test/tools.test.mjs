@@ -2477,6 +2477,24 @@ describe('lookup of apk, rpm, oci and terraform', () => {
     strictEqual(body.findings[0].advisories[0].osvId, 'CVE-2024-1');
   });
 
+  it('a not-found answer with no vulnerabilities block is unverified, not a crash', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) =>
+        u.searchParams.get('name') === 'typo'
+          ? { found: false, ecosystem: 'pypi', name: 'typo', version: '1.0' }
+          : { found: true },
+    });
+    const res = await callWith('check_dependencies', {
+      ecosystem: 'pypi',
+      packages: [{ name: 'typo', version: '1.0' }, { name: 'bare', version: '1.0' }],
+    });
+    ok(!res.isError, res.content[0].text);
+    const body = payload(res);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 2);
+  });
+
   it('a checked status with the advisory source reported unavailable is unverified', async () => {
     stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,

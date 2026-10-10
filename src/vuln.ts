@@ -1091,7 +1091,8 @@ const UNAVAILABLE_FALLBACK = 'the advisory source was unavailable';
 
 /** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
 function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[] {
-  const vulns = res.vulnerabilities as { scored?: unknown; unscored?: unknown };
+  // A not-found answer, or an older server's, may carry no vulnerabilities block.
+  const vulns = (res.vulnerabilities ?? {}) as { scored?: unknown; unscored?: unknown };
   // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
   // under malware.advisoryIds, never in scored or unscored.
   const malware = (res.malware ?? null) as { advisoryIds?: unknown } | null;
