@@ -2,6 +2,7 @@ import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { compare, gte, maxVersion } from '../dist/semver.js';
+import { parsePep440 } from '../dist/pep440.js';
 import { isExactVersion } from '../dist/vuln.js';
 
 describe('compare with PEP 440 epochs (pypi)', () => {
@@ -452,3 +453,13 @@ describe('maven ComparableVersion ordering', () => {
     ok(!isExactVersion('maven', '[1.0,2.0)'));
   });
 });
+describe('pypi strips the whitespace packaging strips', () => {
+  it('treats U+001C and U+0085 at the ends as space, and U+FEFF as part of the string', () => {
+    strictEqual(compare('1.0\u001c', '1.0', 'pypi'), 0);
+    strictEqual(compare('\u00851.0', '1.0', 'pypi'), 0);
+    strictEqual(compare('\u30001.0\u3000', '1.0', 'pypi'), 0);
+    // packaging rejects a leading BOM as invalid PEP 440, and so does the parser.
+    strictEqual(parsePep440('\ufeff1.0'), null);
+  });
+});
+

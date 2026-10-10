@@ -102,9 +102,20 @@ function postNumber(implicit: string | undefined, letter: string | undefined, n:
   return letter === undefined ? null : digits(n);
 }
 
+/**
+ * Python's str.isspace set, which packaging's `^\s*…\s*$` strips: unlike JS
+ * `trim()` it includes U+001C–U+001F and U+0085, and excludes U+FEFF.
+ */
+const PY_SPACE = '[\\t\\n\\v\\f\\r \\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
+const PY_SPACE_ENDS = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g');
+
+function stripPythonSpace(value: string): string {
+  return value.replace(PY_SPACE_ENDS, '');
+}
+
 /** Parses a PEP 440 version, or returns null when it is not one. */
 export function parsePep440(version: string): Pep440Key | null {
-  const m = PEP440.exec(version.trim());
+  const m = PEP440.exec(stripPythonSpace(version));
   if (!m) return null;
   const [, epoch, release, preLetter, preN, postImplicit, postLetter, postN, devLetter, devN, local] = m;
   const post = postNumber(postImplicit, postLetter, postN);
