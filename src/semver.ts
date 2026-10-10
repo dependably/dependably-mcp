@@ -309,9 +309,189 @@ function compareRpm(a: string, b: string): number {
   return rpmSegmentCompare(av, bv) || compareRpmRelease(ar, br);
 }
 
+/**
+ * Maven orders versions with `ComparableVersion` (maven-artifact, 3.9.x), which
+ * the semver / PEP 440 parsing above gets wrong in both directions: `1.0-sp1`
+ * is NEWER than `1.0` (`sp` is a post-release qualifier), while `1.0.Final`,
+ * `1.0-ga` and `2.0.0.RELEASE` are EQUAL to `1.0` and `2.0.0` (Spring and
+ * Hibernate/JBoss releases carry them). `compareMaven` ports that algorithm.
+ *
+ * The version is lower-cased and tokenized on `.` and `-` and on every
+ * digit/letter transition (`1.0alpha1` reads as `1.0-alpha-1`). A token is a
+ * number or a string qualifier; a `-` (or a transition) opens a nested list,
+ * so `1-sp1` is `[1, [sp, [1]]]`. Trailing "null" items (zero, the empty
+ * qualifier and its aliases `final`/`ga`/`release`, empty lists) are trimmed
+ * from every list, which is what makes `1.0.0` equal `1`.
+ *
+ * Qualifiers order alpha < beta < milestone < rc (= cr) < snapshot < "" (=
+ * final = ga = release) < sp, and the single letters a, b and m mean alpha,
+ * beta and milestone only when a digit follows directly (`1.0a1`, not
+ * `1.0-a`). A qualifier outside that list sorts after `sp`, compared
+ * case-insensitively as text. A number outranks a qualifier, and a nested list
+ * outranks a number but not a qualifier. Numbers of up to nine digits, of up
+ * to eighteen, and longer fall in three width classes that compare in that
+ * order before their values do, as Maven's Int/Long/BigInteger items do. Width
+ * ignores leading zeros except in an all-zero token, which keeps its length
+ * (`1.0000000000` outranks `1.999999999`, a quirk the oracle confirms).
+ *
+ * Not modelled: non-ASCII digits, which Java's `Character.isDigit` accepts.
+ */
+type MavenItem = MavenNumber | MavenQualifier | MavenList;
+type MavenNumber = { kind: 'number'; value: bigint; width: number };
+type MavenQualifier = { kind: 'qualifier'; value: string };
+type MavenList = { kind: 'list'; items: MavenItem[] };
+
+const MAVEN_QUALIFIERS = ['alpha', 'beta', 'milestone', 'rc', 'snapshot', '', 'sp'];
+const MAVEN_RELEASE_KEY = String(MAVEN_QUALIFIERS.indexOf(''));
+const MAVEN_ALIASES: Record<string, string> = { ga: '', final: '', release: '', cr: 'rc' };
+const MAVEN_SHORT_QUALIFIERS: Record<string, string> = { a: 'alpha', b: 'beta', m: 'milestone' };
+
+function mavenNumber(digits: string): MavenNumber {
+  const stripped = digits.replace(/^0+/, '') || digits;
+  const width = stripped.length <= 9 ? 0 : stripped.length <= 18 ? 1 : 2;
+  return { kind: 'number', value: BigInt(stripped), width };
+}
+
+function mavenQualifier(text: string, followedByDigit: boolean): MavenQualifier {
+  const expanded = followedByDigit ? (MAVEN_SHORT_QUALIFIERS[text] ?? text) : text;
+  return { kind: 'qualifier', value: MAVEN_ALIASES[expanded] ?? expanded };
+}
+
+/** Unknown qualifiers get a key above every known one, then compare as text. */
+function mavenQualifierKey(value: string): string {
+  const index = MAVEN_QUALIFIERS.indexOf(value);
+  return index === -1 ? `${MAVEN_QUALIFIERS.length}-${value}` : String(index);
+}
+
+function mavenIsNull(item: MavenItem): boolean {
+  if (item.kind === 'number') return item.value === 0n;
+  if (item.kind === 'qualifier') return mavenQualifierKey(item.value) === MAVEN_RELEASE_KEY;
+  return item.items.length === 0;
+}
+
+function mavenNormalize(list: MavenList): void {
+  for (let i = list.items.length - 1; i >= 0; i--) {
+    const last = list.items[i];
+    if (mavenIsNull(last)) list.items.splice(i, 1);
+    else if (last.kind !== 'list') break;
+  }
+}
+
+type MavenParse = { text: string; stack: MavenList[]; list: MavenList; start: number; digit: boolean };
+
+function mavenToken(state: MavenParse, end: number): MavenItem {
+  const token = state.text.slice(state.start, end);
+  return state.digit ? mavenNumber(token) : mavenQualifier(token, false);
+}
+
+function mavenOpenList(state: MavenParse): void {
+  const child: MavenList = { kind: 'list', items: [] };
+  state.list.items.push(child);
+  state.list = child;
+  state.stack.push(child);
+}
+
+/** `.X` reads as `-X` for a qualifier X, so a qualifier after other items starts its own list. */
+function mavenOpenQualifierList(state: MavenParse): void {
+  if (state.list.items.length > 0) mavenOpenList(state);
+}
+
+function mavenSeparator(state: MavenParse, i: number): void {
+  state.list.items.push(i === state.start ? mavenNumber('0') : mavenToken(state, i));
+  state.start = i + 1;
+  if (state.text[i] === '-') mavenOpenList(state);
+}
+
+function mavenDigit(state: MavenParse, i: number): void {
+  if (!state.digit && i > state.start) {
+    mavenOpenQualifierList(state);
+    state.list.items.push(mavenQualifier(state.text.slice(state.start, i), true));
+    state.start = i;
+    mavenOpenList(state);
+  }
+  state.digit = true;
+}
+
+function mavenLetter(state: MavenParse, i: number): void {
+  if (state.digit && i > state.start) {
+    state.list.items.push(mavenToken(state, i));
+    state.start = i;
+    mavenOpenList(state);
+  }
+  state.digit = false;
+}
+
+function parseMaven(version: string): MavenList {
+  const root: MavenList = { kind: 'list', items: [] };
+  const state: MavenParse = { text: version.toLowerCase(), stack: [root], list: root, start: 0, digit: false };
+  for (let i = 0; i < state.text.length; i++) {
+    const c = state.text[i];
+    if (c === '.' || c === '-') mavenSeparator(state, i);
+    else if (c >= '0' && c <= '9') mavenDigit(state, i);
+    else mavenLetter(state, i);
+  }
+  if (state.text.length > state.start) {
+    if (!state.digit) mavenOpenQualifierList(state);
+    state.list.items.push(mavenToken(state, state.text.length));
+  }
+  for (let list = state.stack.pop(); list !== undefined; list = state.stack.pop()) mavenNormalize(list);
+  return root;
+}
+
+/** `item` against `other`; a null `other` is the absent side of a shorter list. */
+function mavenItemCompare(item: MavenItem, other: MavenItem | null): number {
+  if (item.kind === 'number') return mavenCompareNumber(item, other);
+  if (item.kind === 'qualifier') return mavenCompareQualifier(item, other);
+  return mavenCompareList(item, other);
+}
+
+function mavenCompareNumber(item: MavenNumber, other: MavenItem | null): number {
+  if (other === null) return item.value === 0n ? 0 : 1;
+  if (other.kind !== 'number') return 1;
+  if (item.width !== other.width) return sign(item.width, other.width);
+  return item.value === other.value ? 0 : item.value < other.value ? -1 : 1;
+}
+
+function mavenCompareQualifier(item: MavenQualifier, other: MavenItem | null): number {
+  if (other === null) return sign(mavenQualifierKey(item.value), MAVEN_RELEASE_KEY);
+  if (other.kind === 'qualifier') return sign(mavenQualifierKey(item.value), mavenQualifierKey(other.value));
+  return -1;
+}
+
+/** A list against nothing: the first item that is not itself null decides (not just item 0). */
+function mavenFirstNonZero(items: readonly MavenItem[]): number {
+  for (const entry of items) {
+    const result = mavenItemCompare(entry, null);
+    if (result !== 0) return result;
+  }
+  return 0;
+}
+
+function mavenCompareList(item: MavenList, other: MavenItem | null): number {
+  if (other === null) return mavenFirstNonZero(item.items);
+  if (other.kind === 'number') return -1;
+  if (other.kind === 'qualifier') return 1;
+  const length = Math.max(item.items.length, other.items.length);
+  for (let i = 0; i < length; i++) {
+    const result = mavenCompareSlot(item.items[i] ?? null, other.items[i] ?? null);
+    if (result !== 0) return result;
+  }
+  return 0;
+}
+
+function mavenCompareSlot(left: MavenItem | null, right: MavenItem | null): number {
+  if (left !== null) return mavenItemCompare(left, right);
+  return right === null ? 0 : -mavenItemCompare(right, left);
+}
+
+function compareMaven(a: string, b: string): number {
+  return mavenCompareList(parseMaven(a), parseMaven(b));
+}
+
 /** -1 if a < b, 0 if equal, 1 if a > b. */
 export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
+  if (ecosystem === 'maven') return compareMaven(a, b);
   const pa = parse(a);
   const pb = parse(b);
   return (
