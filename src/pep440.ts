@@ -35,16 +35,42 @@ export type Pep440Key = {
   local: LocalPart[] | null;
 };
 
-const PEP440 = new RegExp(
-  '^v?' +
-    '(?:(\\d+)!)?' +
-    '(\\d+(?:\\.\\d+)*)' +
-    '(?:[-_.]?(alpha|a|beta|b|preview|pre|c|rc)[-_.]?(\\d+)?)?' +
-    '(?:(?:-(\\d+))|(?:[-_.]?(post|rev|r)[-_.]?(\\d+)?))?' +
-    '(?:[-_.]?(dev)[-_.]?(\\d+)?)?' +
-    '(?:\\+([a-z0-9]+(?:[-_.][a-z0-9]+)*))?$',
-  'i',
-);
+/**
+ * packaging's VERSION_PATTERN, one segment at a time, in order: `v`, epoch,
+ * release, pre, post, dev, local. Each is a sticky match at the end of the
+ * last, so no segment's pattern needs the others'; a missing optional segment
+ * contributes undefined groups, and the whole string must be consumed.
+ */
+type Segment = { re: RegExp; groups: number; optional: boolean };
+
+const SEGMENTS: readonly Segment[] = [
+  { re: /v?/iy, groups: 0, optional: true },
+  { re: /(\d+)!/y, groups: 1, optional: true },
+  { re: /(\d+(?:\.\d+)*)/y, groups: 1, optional: false },
+  { re: /[-_.]?(alpha|a|beta|b|preview|pre|c|rc)[-_.]?(\d+)?/iy, groups: 2, optional: true },
+  { re: /-(\d+)|[-_.]?(post|rev|r)[-_.]?(\d+)?/iy, groups: 3, optional: true },
+  { re: /[-_.]?(dev)[-_.]?(\d+)?/iy, groups: 2, optional: true },
+  { re: /\+([a-z0-9]+(?:[-_.][a-z0-9]+)*)/iy, groups: 1, optional: true },
+];
+
+/** The capture groups of a full PEP 440 match, or null when it does not match. */
+function matchPep440(version: string): Array<string | undefined> | null {
+  const groups: Array<string | undefined> = [version];
+  let at = 0;
+  for (const { re, groups: n, optional } of SEGMENTS) {
+    re.lastIndex = at;
+    const m = re.exec(version);
+    if (m) {
+      at = re.lastIndex;
+      groups.push(...m.slice(1));
+    } else if (optional) {
+      groups.push(...new Array<undefined>(n).fill(undefined));
+    } else {
+      return null;
+    }
+  }
+  return at === version.length ? groups : null;
+}
 
 const PRE_SPELLING: Record<string, string> = {
   alpha: 'a',
@@ -115,9 +141,10 @@ function stripPythonSpace(value: string): string {
 
 /** Parses a PEP 440 version, or returns null when it is not one. */
 export function parsePep440(version: string): Pep440Key | null {
-  const m = PEP440.exec(stripPythonSpace(version));
+  const m = matchPep440(stripPythonSpace(version));
   if (!m) return null;
   const [, epoch, release, preLetter, preN, postImplicit, postLetter, postN, devLetter, devN, local] = m;
+  if (release === undefined) return null;
   const post = postNumber(postImplicit, postLetter, postN);
   return {
     epoch: digits(epoch),

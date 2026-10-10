@@ -308,19 +308,23 @@ function rpmSegmentCompare(a: string, b: string): number {
  * any further run. 'both' means each side has the same marker, to be skipped.
  */
 function compareMarkers(a: string | undefined, b: string | undefined): number | 'both' {
-  if (a === '~' || b === '~') {
-    if (a !== '~') return 1;
-    if (b !== '~') return -1;
-    return 'both';
-  }
-  if (a === '^' || b === '^') {
-    if (a === undefined) return -1;
-    if (b === undefined) return 1;
-    if (a !== '^') return 1;
-    if (b !== '^') return -1;
-    return 'both';
-  }
+  if (a === '~' || b === '~') return compareTilde(a, b);
+  if (a === '^' || b === '^') return compareCaret(a, b);
   return 0;
+}
+
+function compareTilde(a: string | undefined, b: string | undefined): number | 'both' {
+  if (a !== '~') return 1;
+  if (b !== '~') return -1;
+  return 'both';
+}
+
+function compareCaret(a: string | undefined, b: string | undefined): number | 'both' {
+  if (a === undefined) return -1;
+  if (b === undefined) return 1;
+  if (a !== '^') return 1;
+  if (b !== '^') return -1;
+  return 'both';
 }
 
 const isDigit = (c: string | undefined): c is string => c !== undefined && /\d/.test(c);
@@ -436,10 +440,15 @@ const MAVEN_RELEASE_KEY = String(MAVEN_QUALIFIERS.indexOf(''));
 const MAVEN_ALIASES: Record<string, string> = { ga: '', final: '', release: '', cr: 'rc' };
 const MAVEN_SHORT_QUALIFIERS: Record<string, string> = { a: 'alpha', b: 'beta', m: 'milestone' };
 
+/** Maven's int / long / BigInteger classes: a wider number always ranks higher. */
+function mavenWidth(length: number): number {
+  if (length <= 9) return 0;
+  return length <= 18 ? 1 : 2;
+}
+
 function mavenNumber(digits: string): MavenNumber {
   const stripped = digits.replace(/^0+/, '') || digits;
-  const width = stripped.length <= 9 ? 0 : stripped.length <= 18 ? 1 : 2;
-  return { kind: 'number', value: BigInt(stripped), width };
+  return { kind: 'number', value: BigInt(stripped), width: mavenWidth(stripped.length) };
 }
 
 function mavenQualifier(text: string, followedByDigit: boolean): MavenQualifier {
@@ -539,7 +548,8 @@ function mavenCompareNumber(item: MavenNumber, other: MavenItem | null): number 
   if (other === null) return item.value === 0n ? 0 : 1;
   if (other.kind !== 'number') return 1;
   if (item.width !== other.width) return sign(item.width, other.width);
-  return item.value === other.value ? 0 : item.value < other.value ? -1 : 1;
+  if (item.value === other.value) return 0;
+  return item.value < other.value ? -1 : 1;
 }
 
 function mavenCompareQualifier(item: MavenQualifier, other: MavenItem | null): number {
