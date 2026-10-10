@@ -1594,9 +1594,9 @@ describe('setup tools', () => {
     stubFetch();
     const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
     ok(!res.isError);
-    ok(res.content[0].text.includes('read -rs HEX_API_KEY && export HEX_API_KEY'), res.content[0].text);
+    ok(res.content[0].text.includes('read -rs HEX_API_KEY   #'), res.content[0].text);
     ok(
-      res.content[0].text.includes("cd './my_lib' && HEX_API_URL=https://dep.example.com/hex/api mix hex.publish\n"),
+      res.content[0].text.includes(`cd './my_lib' && HEX_API_KEY="$HEX_API_KEY" HEX_API_URL=https://dep.example.com/hex/api mix hex.publish; unset HEX_API_KEY\n`),
       res.content[0].text,
     );
     ok(!res.content[0].text.includes('HEX_API_KEY=<token>'), 'no token typed into the command line');
@@ -1820,8 +1820,22 @@ describe('setup tools — publish commands keep tokens out of history and name r
 
   it('pypi reads the password into TWINE_PASSWORD', async () => {
     const t = await text('pypi', './dist/pkg-1.0.0.tar.gz');
-    ok(t.includes('read -rs TWINE_PASSWORD && export TWINE_PASSWORD'), t);
-    ok(t.includes("TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz'"), t);
+    ok(t.includes('read -rs TWINE_PASSWORD   #'), t);
+    ok(t.includes(`TWINE_PASSWORD="$TWINE_PASSWORD" TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz'; unset TWINE_PASSWORD`), t);
+  });
+
+  it('nuget reads the key, passes it to the one push, and unsets it', async () => {
+    const t = await text('nuget', './bin/Pkg.1.0.0.nupkg');
+    ok(t.includes('read -rs NUGET_API_KEY   #'), t);
+    ok(t.includes(`dotnet nuget push './bin/Pkg.1.0.0.nupkg' --source https://dep.example.com/nuget/v3/index.json --api-key "$NUGET_API_KEY"; unset NUGET_API_KEY`), t);
+  });
+
+  it('no publish command exports a secret, and every secret it reads is unset', async () => {
+    for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'cargo', 'hex']) {
+      const t = await text(eco, eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin');
+      ok(!/\bexport\b/.test(t), `${eco}: ${t}`);
+      for (const [, v] of t.matchAll(/read -rs (\w+)/g)) ok(t.includes(`; unset ${v}`), `${eco}: ${v} is not unset`);
+    }
   });
 
   it('rpm lets curl prompt for the password', async () => {

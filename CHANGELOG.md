@@ -58,7 +58,10 @@ All notable changes to this project are documented here. The format follows
 - **`readiness_check` shows why an instance is not ready.** On a 503 it returns the readiness
   body, naming the failing dependencies, instead of a generic server error.
 - **Publish commands no longer put your token on the command line**, where it would land in shell
-  history. PyPI, NuGet and Hex read it with `read -rs`; RPM lets `curl` prompt for it.
+  history. PyPI, NuGet and Hex read it with `read -rs`; RPM lets `curl` prompt for it. The token
+  goes to the one publish command and is unset afterwards, never exported, so later commands in
+  the shell don't inherit it. NuGet's push takes the key only as `--api-key`, so it is visible to
+  `ps` on your machine while the push runs.
 - **`get_publish_command` uses the path you give it.** OCI loads the image tarball with
   `docker load` before tagging, Maven uploads the file with `deploy:deploy-file`, and Cargo
   publishes from the crate's directory.

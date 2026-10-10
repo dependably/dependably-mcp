@@ -236,11 +236,15 @@ function proxyOnly(text: string): ToolResult {
 }
 
 /**
- * A line that reads a secret into an exported variable without echoing it or
- * leaving it in shell history, which a token typed into the command line would.
+ * Reads a secret without echoing it or leaving it in shell history, which a
+ * token typed into the command line would, and hands it to one command only:
+ * the variable is never exported, so later commands in the shell do not
+ * inherit it, and it is unset once the command finishes, whatever its exit
+ * status. `command` must not reference the variable itself; it receives it in
+ * its environment.
  */
-function readSecret(variable: string): string {
-  return `read -rs ${variable} && export ${variable}   # paste your token; it is not echoed or saved to history`;
+function withSecret(variable: string, prefix: string, command: string): string {
+  return `read -rs ${variable}   # paste your token; it is not echoed or saved to history\n${prefix}${variable}="$${variable}" ${command}; unset ${variable}`;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -448,12 +452,16 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
     case 'pypi':
       return fenced(
         'bash',
-        `${readSecret('TWINE_PASSWORD')}\nTWINE_USERNAME=user twine upload --repository-url ${base}/pypi/legacy/ ${p}`,
+        withSecret('TWINE_PASSWORD', '', `TWINE_USERNAME=user twine upload --repository-url ${base}/pypi/legacy/ ${p}`),
       );
     case 'nuget':
+      // dotnet nuget push takes the key only as --api-key, so it is on dotnet's
+      // argv (visible to this machine's ps) while the push runs. The other route,
+      // the source's stored credentials, needs a Basic challenge the server's 401
+      // does not send, and stores the token in plaintext NuGet.Config off Windows.
       return fenced(
         'bash',
-        `${readSecret('NUGET_API_KEY')}\ndotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key "$NUGET_API_KEY"`,
+        `read -rs NUGET_API_KEY   # paste your token; it is not echoed or saved to history\ndotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key "$NUGET_API_KEY"; unset NUGET_API_KEY`,
       );
     case 'maven':
       return fenced(
@@ -493,7 +501,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
     case 'hex':
       return fenced(
         'bash',
-        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${readSecret('HEX_API_KEY')}\ncd ${shq(directoryOf(artifactPath, 'mix.exs'))} && HEX_API_URL=${base}/hex/api mix hex.publish`,
+        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${withSecret('HEX_API_KEY', `cd ${shq(directoryOf(artifactPath, 'mix.exs'))} && `, `HEX_API_URL=${base}/hex/api mix hex.publish`)}`,
       );
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
