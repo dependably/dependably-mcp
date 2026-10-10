@@ -2,6 +2,7 @@ import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { compare, gte, maxVersion } from '../dist/semver.js';
+import { isExactVersion } from '../dist/vuln.js';
 
 describe('compare', () => {
   it('orders release segments numerically, not lexically', () => {
@@ -298,5 +299,69 @@ describe('rpm rpmvercmp-style segment comparison', () => {
   it('the bumpTarget consequence: a tilde pre-release must still clear a plain-release fix', () => {
     ok(gte('1.2.3-1', '1.2.3~rc1-1', 'rpm'), 'the real release clears its own pre-release');
     ok(!gte('1.2.3~rc1-1', '1.2.3-1', 'rpm'), 'and the pre-release has not reached the real release yet');
+  });
+});
+
+describe('maven ComparableVersion ordering', () => {
+  // Every expectation below was confirmed against Maven 3.9.16's own
+  // org.apache.maven.artifact.versioning.ComparableVersion (maven-artifact-3.9.16.jar,
+  // maven:3.9-eclipse-temurin-21), not derived from the documentation.
+  const vectors = [
+    ['1.0-sp1', '1.0', 1],
+    ['1.0.Final', '1.0', 0],
+    ['2.0.0.RELEASE', '2.0.0', 0],
+    ['5.6.15.Final', '5.6.15', 0],
+    ['1.0-ga', '1.0', 0],
+    ['1.0.0', '1', 0],
+    ['1.0-SNAPSHOT', '1.0', -1],
+    ['1.0-SNAPSHOT', '1.0-rc1', 1],
+    ['1.0-rc1', '1.0-cr1', 0],
+    ['1.0-alpha1', '1.0-beta1', -1],
+    ['1.0-beta1', '1.0-milestone1', -1],
+    ['1.0-milestone1', '1.0-rc1', -1],
+    ['1.0-sp1', '1.0-sp2', -1],
+    ['1.0.SP1', '1.0.Final', 1],
+    ['1.0a1', '1.0-alpha-1', 0],
+    ['1.0b2', '1.0-beta-2', 0],
+    ['1.0m3', '1.0-milestone-3', 0],
+    ['1.0-a', '1.0-alpha', 1],
+    ['1.0.0.M1', '1.0.0', -1],
+    ['3.0.0-RC2', '3.0.0', -1],
+    ['1.0-foo', '1.0-sp1', 1],
+    ['1.0-jre', '1.0', 1],
+    ['1.0-FOO', '1.0-foo', 0],
+    ['1.0-bar', '1.0-foo', -1],
+    ['1.0-1', '1.0-sp1', 1],
+    ['1.0.1', '1.0-sp1', 1],
+    ['1.0.0.X1', '1.0.0-X2', -1],
+    ['1.10', '1.9', 1],
+    ['2.0.0.RELEASE', '2.0.1.RELEASE', -1],
+  ];
+
+  for (const [a, b, expected] of vectors) {
+    it(`${a} vs ${b} is ${expected}`, () => {
+      strictEqual(compare(a, b, 'maven'), expected);
+      strictEqual(compare(b, a, 'maven'), expected === 0 ? 0 : -expected);
+    });
+  }
+
+  it('a post-release or release-spelled fix is cleared by the installed version', () => {
+    ok(gte('1.0-sp1', '1.0', 'maven'));
+    ok(gte('2.0.0.RELEASE', '2.0.0', 'maven'));
+    ok(!gte('1.0-rc1', '1.0.Final', 'maven'));
+    strictEqual(maxVersion(['1.0', '1.0-sp1', '1.0.Final'], 'maven'), '1.0-sp1');
+  });
+
+  it('leaves other ecosystems on the generic parser', () => {
+    ok(compare('1.0.Final', '1.0', undefined) > 0);
+    ok(compare('1.0.Final', '1.0', 'pypi') > 0);
+  });
+
+  it('still treats qualifier versions as exact, but not a bare release tag', () => {
+    for (const v of ['1.0-sp1', '1.0.Final', '2.0.0.RELEASE', '1.0-SNAPSHOT', '5.6.15.Final']) {
+      ok(isExactVersion('maven', v), v);
+    }
+    ok(!isExactVersion('maven', 'release'));
+    ok(!isExactVersion('maven', '[1.0,2.0)'));
   });
 });

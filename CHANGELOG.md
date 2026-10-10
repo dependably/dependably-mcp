@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Maven versions are ordered the way Maven orders them.** `1.0-sp1` is now newer than `1.0`,
+  and `1.0.Final`, `1.0-ga` and `2.0.0.RELEASE` equal `1.0` and `2.0.0`, so Spring and
+  Hibernate releases no longer get a bump recommended for a version that is already fixed. The
+  comparison follows Maven's `ComparableVersion` (qualifiers `alpha` < `beta` < `milestone` <
+  `rc` < `snapshot` < release < `sp`, with unknown qualifiers after them).
+
 ### Added
 
 - **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
