@@ -62,7 +62,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         packages: z
           .array(
             z.object({
-              name: z.string().trim().min(1).describe('Package name, e.g. "hono" or "@scope/pkg".'),
+              name: z.string().trim().min(1).max(512).describe('Package name, e.g. "hono" or "@scope/pkg". At most 512 characters.'),
               version: z.string().trim().min(1).describe('Exact installed version, as resolved in the lockfile (e.g. "4.17.21"). A range, tag or git/file spec is reported as unverified.'),
               dev: z
                 .boolean()

@@ -735,6 +735,79 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
 }
 
 /**
+ * What the npm bulk-advisory endpoint will look at. It skips, without saying
+ * so, a name over npm's 214-character limit, a version over 256, and either
+ * with a control character (dependably-community NpmAuditHandler.IsUsableName
+ * / IsUsableVersion). A skipped pair comes back with no advisories, which reads
+ * as clean, so such a pair is reported unverified and never sent. So is a pair
+ * with an unpaired surrogate, which is not valid text and would fail the whole
+ * request.
+ */
+const NPM_MAX_NAME = 214;
+const NPM_MAX_VERSION = 256;
+/** C0, DEL and C1, the characters .NET's char.IsControl matches. */
+function hasControlChar(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return true;
+  }
+  return false;
+}
+
+function npmUnusable(p: InputPackage): string | null {
+  if (p.name.length > NPM_MAX_NAME) return `npm package names are at most ${NPM_MAX_NAME} characters; the advisory endpoint skips longer ones`;
+  if (p.version.length > NPM_MAX_VERSION) return `versions over ${NPM_MAX_VERSION} characters are skipped by the advisory endpoint`;
+  if (hasControlChar(p.name) || hasControlChar(p.version)) return 'a control character in the name or version; the advisory endpoint skips it';
+  if (hasLoneSurrogate(p.name) || hasLoneSurrogate(p.version)) return 'the name or version is not valid text (an unpaired surrogate)';
+  return null;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const c = value.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++;
+        continue;
+      }
+      return true;
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) return true;
+  }
+  return false;
+}
+
+/**
+ * Serialized bytes one bulk request may carry; the endpoint rejects a body over
+ * 4 MiB. ASCII names keep a 5000-pair round near 2.4 MB, but a name may be
+ * non-ASCII (3 UTF-8 bytes per character) or full of escaped characters, so a
+ * round is split rather than sent as one request that could fail whole.
+ */
+const NPM_BULK_BODY_BUDGET = 3 * 1024 * 1024;
+
+/** Split one round into chunks whose JSON body stays under the budget. */
+function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string>> {
+  const chunks: Array<Map<string, string>> = [];
+  let current = new Map<string, string>();
+  let size = 2;
+  for (const [name, version] of round) {
+    // `"name":["version"],` — quoting and punctuation included.
+    const entry = Buffer.byteLength(JSON.stringify(name)) + Buffer.byteLength(JSON.stringify(version)) + 4;
+    if (current.size > 0 && size + entry > NPM_BULK_BODY_BUDGET) {
+      chunks.push(current);
+      current = new Map();
+      size = 2;
+    }
+    current.set(name, version);
+    size += entry;
+  }
+  if (current.size > 0) chunks.push(current);
+  return chunks;
+}
+
+
+/**
  * Check every npm dependency against live OSV data through the instance's npm
  * bulk-advisory endpoint (the one `npm audit` calls). Unlike the registry
  * report, this covers versions the registry has never served.
@@ -750,8 +823,14 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
  * the whole tree, so a failed round leaves that round's dependencies unverified.
  */
 export async function liveCheckNpm(client: DependablyClient, packages: readonly InputPackage[]): Promise<LiveCheck> {
+  const unverified: Unverified[] = [];
   const byName = new Map<string, string[]>();
   for (const p of packages) {
+    const unusable = npmUnusable(p);
+    if (unusable) {
+      unverified.push({ name: p.name, version: p.version, reason: unusable });
+      continue;
+    }
     const versions = byName.get(p.name) ?? [];
     if (!versions.includes(p.version)) versions.push(p.version);
     byName.set(p.name, versions);
@@ -765,9 +844,8 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
   }
 
   const hits: ReportItem[] = [];
-  const unverified: Unverified[] = [];
   let checked = 0;
-  for (const round of rounds) {
+  for (const round of rounds.flatMap(splitByBodyBudget)) {
     const failed = (reason: string) => {
       for (const [name, version] of round) unverified.push({ name, version, reason });
     };
@@ -942,6 +1020,9 @@ export async function liveCoverage(
   return { ...live, hits: fresh, unverified: [...inexactUnverified, ...live.unverified] };
 }
 
+/** Most explicit affected versions compact output lists for an entry that has no ranges. */
+const MAX_COMPACT_VERSIONS = 50;
+
 /**
  * Shape an advisory detail (`GET /api/v1/vulnerabilities/{osvId}`) for reading.
  *
@@ -959,11 +1040,22 @@ export function compactVulnerability(detail: Record<string, unknown>): Record<st
     out.affected = (affected as Record<string, unknown>[]).map((a) => {
       const pkg = (a?.package ?? {}) as Record<string, unknown>;
       const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
-      return {
+      const versions = Array.isArray(a?.versions) ? (a.versions as unknown[]) : [];
+      const entry: Record<string, unknown> = {
         package: { ecosystem: pkg.ecosystem, name: pkg.name },
-        ranges: ranges.map((r) => ({ type: r?.type, ...collapseEvents(r?.events) })),
-        versionCount: Array.isArray(a?.versions) ? a.versions.length : 0,
+        ranges: ranges.map((r) => ({
+          type: r?.type,
+          ...(typeof r?.repo === 'string' && r.repo ? { repo: r.repo } : {}),
+          ...collapseEvents(r?.events),
+        })),
+        versionCount: versions.length,
       };
+      // With no range to read, the explicit list is the only record of what is affected.
+      if (ranges.length === 0 && versions.length > 0) {
+        entry.versions = versions.slice(0, MAX_COMPACT_VERSIONS);
+        if (versions.length > MAX_COMPACT_VERSIONS) entry.versionsTruncated = true;
+      }
+      return entry;
     });
   }
   if (Array.isArray(references)) {

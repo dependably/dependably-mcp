@@ -11,6 +11,7 @@ import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
 import { json, err, withSummary, run, RESULT_CHAR_BUDGET } from '../dist/format.js';
 import { compactAnalysis } from '../dist/tools/projects.js';
+import { liveCheckNpm } from '../dist/vuln.js';
 
 const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -181,6 +182,36 @@ describe('read tools', () => {
     stubFetch(() => detail);
     const full = payload(await call(base, 'get_vulnerability', { osvId: 'GHSA-frmv-pr5f-9mcr', verbosity: 'full' }));
     deepStrictEqual(full, detail);
+  });
+
+  it('get_vulnerability compact keeps explicit versions when an entry has no ranges', async () => {
+    const mk = (n) => ({ id: 'X-1', affected: [{ package: { ecosystem: 'npm', name: 'p' }, versions: Array.from({ length: n }, (_, i) => `1.0.${i}`) }] });
+    stubFetch(() => mk(3));
+    const small = payload(await call(base, 'get_vulnerability', { osvId: 'X-1' }));
+    deepStrictEqual(small.affected, [
+      { package: { ecosystem: 'npm', name: 'p' }, ranges: [], versionCount: 3, versions: ['1.0.0', '1.0.1', '1.0.2'] },
+    ]);
+
+    stubFetch(() => mk(120));
+    const big = payload(await call(base, 'get_vulnerability', { osvId: 'X-1' }));
+    strictEqual(big.affected[0].versionCount, 120);
+    strictEqual(big.affected[0].versions.length, 50);
+    strictEqual(big.affected[0].versions[49], '1.0.49');
+    strictEqual(big.affected[0].versionsTruncated, true);
+  });
+
+  it('get_vulnerability compact keeps repo on a GIT range', async () => {
+    stubFetch(() => ({
+      id: 'X-2',
+      affected: [{
+        package: { ecosystem: 'Go', name: 'm' },
+        ranges: [{ type: 'GIT', repo: 'https://example.com/o/r', events: [{ introduced: '0' }, { fixed: 'abc123' }] }],
+        versions: ['v1.0.0'],
+      }],
+    }));
+    const body = payload(await call(base, 'get_vulnerability', { osvId: 'X-2' }));
+    deepStrictEqual(body.affected[0].ranges, [{ type: 'GIT', repo: 'https://example.com/o/r', introduced: ['0'], fixed: ['abc123'] }]);
+    strictEqual(body.affected[0].versions, undefined);
   });
 
   it('get_vulnerability passes the installed version through', async () => {
@@ -661,6 +692,66 @@ describe('check_dependencies live coverage', () => {
     });
     const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }] }));
     strictEqual(body.findings[0].bumpToPartial, true);
+  });
+
+  it('reports npm pairs the advisory endpoint would skip as unverified, never as clean', async () => {
+    // The server drops a name over 214 characters, a version over 256, or a
+    // control character, and answers with no advisories, which reads as clean.
+    const packages = [
+      { name: 'ok', version: '1.0.0' },
+      { name: 'n'.repeat(215), version: '1.0.0' },
+      { name: 'long-version', version: `1.0.0-${'y'.repeat(251)}` },
+      { name: 'ctl', version: '1.0.0\u0007' },
+    ];
+    const bodies = [];
+    const client = { post: async (_path, body) => { bodies.push(body); return {}; } };
+    const res = await liveCheckNpm(client, packages);
+    deepStrictEqual(bodies, [{ ok: ['1.0.0'] }], 'only the usable pair is sent');
+    strictEqual(res.checked, 1);
+    deepStrictEqual(res.unverified.map((u) => u.name), ['n'.repeat(215), 'long-version', 'ctl']);
+    match(res.unverified[0].reason, /214/);
+    match(res.unverified[1].reason, /256/);
+    match(res.unverified[2].reason, /control character/);
+  });
+
+  it('splits an npm round whose body would pass the 4 MiB cap, and merges the answers', async () => {
+    // 214-character names of a 3-byte character push 5000 pairs past 4 MiB.
+    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `${i}-`.padEnd(214, '界'), version: `1.0.0-${'y'.repeat(250)}` }));
+    const bodies = [];
+    const client = {
+      post: async (_path, body) => {
+        bodies.push(JSON.stringify(body));
+        const out = {};
+        for (const n of [packages[0].name, packages[4999].name]) if (n in body) out[n] = [{ id: `GHSA-${n.slice(0, 4)}`, severity: 'high' }];
+        return out;
+      },
+    };
+    const res = await liveCheckNpm(client, packages);
+    ok(bodies.length > 1, `expected several POSTs, got ${bodies.length}`);
+    ok(bodies.every((b) => Buffer.byteLength(b) <= 3 * 1024 * 1024), 'every body stays under the budget');
+    strictEqual(res.hits.length, 2, 'hits from different chunks are merged');
+    strictEqual(res.unverified.length, 0);
+    strictEqual(res.checked, 5000);
+  });
+
+  it('reports an npm name or version with an unpaired surrogate as unverified', async () => {
+    const bodies = [];
+    const client = { post: async (_path, body) => { bodies.push(body); return {}; } };
+    const res = await liveCheckNpm(client, [
+      { name: 'a\ud800b', version: '1.0.0' },
+      { name: 'v', version: '1.0.0-\udc00' },
+      { name: '😀ok', version: '1.0.0' },
+    ]);
+    deepStrictEqual(bodies, [{ '😀ok': ['1.0.0'] }]);
+    deepStrictEqual(res.unverified.map((u) => u.name), ['a\ud800b', 'v']);
+    ok(res.unverified.every((u) => u.reason === 'the name or version is not valid text (an unpaired surrogate)'));
+  });
+
+  it('rejects a package name over 512 characters with a validation error', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const res = await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'x'.repeat(513), version: '1.0.0' }] });
+    strictEqual(res.isError, true);
+    match(res.content[0].text, /512/);
   });
 
   it('marks a dependency unverified when an advisory for it comes back without an id', async () => {
