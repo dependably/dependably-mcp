@@ -43,6 +43,10 @@ All notable changes to this project are documented here. The format follows
   `1.0^20230101` now sorts after `1.0` and before `1.0.1`, where it used to compare equal to
   `1.0`, so a caret build could be taken as already fixed. A `~` after a separator (`1.0.~rc1`)
   is no longer skipped as one.
+- **PyPI version ordering now honours PEP 440 epochs.** `1!1.0` used to sort below `2.0` because
+  the `1!` prefix was read as part of the release, which mis-stated "already fixed" and the
+  suggested upgrade target for projects that changed their versioning scheme. The epoch is now
+  compared first, with a missing epoch counting as 0. Other ecosystems are unaffected.
 - **`get_install_command` no longer suggests a `.netrc` line pip cannot match for an IPv6 host.**
   For a base URL such as `http://[::1]:8443`, requests looks the entry up by the text before the
   first colon, so the bracketed `machine [::1]` line never matched and pip failed to authenticate

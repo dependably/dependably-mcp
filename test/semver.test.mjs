@@ -4,6 +4,46 @@ import { describe, it } from 'node:test';
 import { compare, gte, maxVersion } from '../dist/semver.js';
 import { isExactVersion } from '../dist/vuln.js';
 
+describe('compare with PEP 440 epochs (pypi)', () => {
+  // Every expectation below was confirmed with packaging 26.3
+  // (packaging.version.Version) before being written down.
+  const vectors = [
+    ['1!1.0', '2.0', 1],
+    ['0!1.0', '1.0', 0],
+    ['1!1.0', '1!1.0.post1', -1],
+    ['2!0.1', '1!9.9', 1],
+    ['1!1.0rc1', '1!1.0', -1],
+    ['1!1.0.dev1', '1!1.0a1', -1],
+    ['1!0.1', '99.0', 1],
+    ['2.0', '1!1.0.dev0', -1],
+    ['10!1.0', '9!5.0', 1],
+    ['1!2.0', '1!10.0', -1],
+  ];
+  for (const [a, b, want] of vectors) {
+    it(`orders ${a} against ${b} as ${want}`, () => {
+      strictEqual(compare(a, b, 'pypi'), want);
+      strictEqual(compare(b, a, 'pypi'), want === 0 ? 0 : -want);
+    });
+  }
+
+  it('lets the epoch outrank a later release in gte and maxVersion', () => {
+    ok(gte('1!1.0', '2.0', 'pypi'));
+    strictEqual(maxVersion(['2.0', '1!1.0', '3.0'], 'pypi'), '1!1.0');
+  });
+
+  it('does not parse an epoch for other ecosystems', () => {
+    strictEqual(compare('1!1.0', '1!1.0', 'npm'), 0);
+    strictEqual(compare('1!1.0', '1!1.0'), 0);
+    // No epoch split: "1!1" stays a lexical release segment, as before.
+    ok(compare('1!1.0', '2.0', 'cargo') < 0);
+  });
+
+  it('accepts an epoch-carrying version as an exact pypi version', () => {
+    ok(isExactVersion('pypi', '1!1.0'));
+    ok(!isExactVersion('pypi', '!=1.0'));
+  });
+});
+
 describe('compare', () => {
   it('orders release segments numerically, not lexically', () => {
     ok(compare('3.1.3', '3.1.6') < 0);
