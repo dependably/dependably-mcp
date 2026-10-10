@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
+  For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
+  publish.
+
+### Changed
+
+- **`check_dependencies` requires `ecosystem`.** A call without it now fails. A pip list sent
+  without one used to be checked as npm and came back clean. A blank name or version is rejected,
+  and `summary.packagesChecked` counts the distinct dependencies that were actually checked.
+- **A base URL with shell metacharacters in its host or path stops the server at startup.**
+  `DEPENDABLY_BASE_URL` is pasted into the setup commands the server returns, so a URL that would
+  change what a shell runs is refused rather than passed through. An IPv6 literal such as
+  `http://[::1]:8080` is accepted.
+- **`get_vulnerability` is compact by default.** It gives each affected range as `introduced` and
+  `fixed` versions instead of listing every affected version, which ran to hundreds for some
+  advisories. `verbosity: "full"` returns the raw OSV record.
+- The README is shorter and gains example prompts and the minimum Dependably version (0.12.2).
+  It drops two inaccuracies: a request-timeout field in the Claude Desktop install dialog, and
+  audit events, which no tool reads. Tool descriptions that return upstream or advisory text now
+  label it as third-party data.
+
 ### Fixed
 
 - **`check_dependencies` checks every dependency, not only versions your registry has served.**
@@ -17,10 +40,8 @@ All notable changes to this project are documented here. The format follows
 - **A range, tag or source spec is reported as unverified, not clean.** Pass exact resolved
   versions, as a lockfile records them. `^4.17.20`, `latest`, a Go branch or commit, a Maven or
   NuGet bracket range, a Gradle dynamic version, a PEP 440 specifier, or a `git+`/`file:` spec
-  now lands in `coverage.unverified` with the reason.
-- **`check_dependencies` requires `ecosystem`.** A pip list sent without one was checked as npm
-  and came back clean. A blank name or version is rejected, and `summary.packagesChecked` counts
-  the distinct dependencies that were actually checked.
+  now lands in `coverage.unverified` with the reason. rpm and apk versions keep their `~` and `^`
+  (`2.0~rc1`), which are exact there.
 - **One flaw is counted once.** A PyPI flaw published as both a GHSA and a PYSEC record is shown
   once, with the other id in `aliases`, so totals and the "unknown" severity count are no longer
   doubled. Two advisories from the same database are never merged, so an incomplete-fix
@@ -35,33 +56,19 @@ All notable changes to this project are documented here. The format follows
 - **`get_publish_command` uses the path you give it.** OCI loads the image tarball with
   `docker load` before tagging, Maven uploads the file with `deploy:deploy-file`, and Cargo
   publishes from the crate's directory.
+- **Cargo and Hex publish from a directory whose name holds a dot.** `target/package/foo-0.1.0`,
+  where `cargo package` leaves a crate, was read as a file, so the command pointed at its parent
+  directory and could publish a different package. Only `Cargo.toml` and `mix.exs` are now taken
+  to be a file in the directory.
 - **Go install commands no longer bypass the proxy.** `GOPROXY` has no `,direct` fallback, and the
   wrong `GONOSUMDB` advice is gone.
 - **pip's `.netrc` line names the host without its port,** which is how pip matches it. Go's keeps
   the port, which is how Go matches it.
-- **Setup output cannot be made to differ from what a shell runs.** An artefact path with control
-  characters is refused, and so is a base URL with shell metacharacters in its host or path.
-- **A lookup's `blockedReason` maps to its policy control,** the `controls` key `get_policies`
-  uses. Older servers spell it in PascalCase (`VulnScore` for `vuln_score`).
-
-### Changed
-
-- **`get_vulnerability` is compact by default.** It gives each affected range as `introduced` and
-  `fixed` versions instead of listing every affected version, which ran to hundreds for some
-  advisories. `verbosity: "full"` returns the raw OSV record.
-
-### Added
-
-- **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
-  For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
-  publish.
-
-### Documentation
-
-- The README is shorter and gains example prompts and the minimum Dependably version (0.12.2).
-  It drops two inaccuracies: a request-timeout field in the Claude Desktop install dialog, and
-  audit events, which no tool reads. Tool descriptions that return upstream or advisory text now
-  label it as third-party data.
+- **An artefact path with control characters is refused,** so setup output cannot differ from
+  what a shell runs.
+- **`lookup_package` and `get_policies` say how a `blockedReason` maps to a policy control,** the
+  `controls` key `get_policies` uses. Older servers spell it in PascalCase (`VulnScore` for
+  `vuln_score`).
 
 ## [1.1.0] - 2026-09-23
 
