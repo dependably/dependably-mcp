@@ -2,7 +2,95 @@ import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { describe, it } from 'node:test';
 
 import { compare, gte, maxVersion } from '../dist/semver.js';
+import { parsePep440 } from '../dist/pep440.js';
 import { isExactVersion } from '../dist/vuln.js';
+
+describe('compare with PEP 440 epochs (pypi)', () => {
+  // Every expectation below was confirmed with packaging 26.3
+  // (packaging.version.Version) before being written down.
+  const vectors = [
+    ['1!1.0', '2.0', 1],
+    ['0!1.0', '1.0', 0],
+    ['1!1.0', '1!1.0.post1', -1],
+    ['2!0.1', '1!9.9', 1],
+    ['1!1.0rc1', '1!1.0', -1],
+    ['1!1.0.dev1', '1!1.0a1', -1],
+    ['1!0.1', '99.0', 1],
+    ['2.0', '1!1.0.dev0', -1],
+    ['10!1.0', '9!5.0', 1],
+    ['1!2.0', '1!10.0', -1],
+  ];
+  for (const [a, b, want] of vectors) {
+    it(`orders ${a} against ${b} as ${want}`, () => {
+      strictEqual(compare(a, b, 'pypi'), want);
+      strictEqual(compare(b, a, 'pypi'), want === 0 ? 0 : -want);
+    });
+  }
+
+  // Also confirmed with packaging 26.3: compound tails, local labels, and
+  // spellings that packaging folds together.
+  const fullVectors = [
+    ['1.0rc1.post1', '1.0rc1', 1],
+    ['1.0.post1.dev0', '1.0.post1', -1],
+    ['1.0.post1.dev0', '1.0', 1],
+    ['1.0a1.dev1', '1.0a1', -1],
+    ['1.0a1.dev1', '1.0.dev9', 1],
+    ['1.0.dev1', '1.0a0', -1],
+    ['1.0.post1', '1.0rc1.post9', 1],
+    ['1.0', '1.0+ubuntu1', -1],
+    ['1.0+5', '1.0+abc', 1],
+    ['1.0+abc.1', '1.0+abc', 1],
+    ['1.0+2', '1.0+10', -1],
+    ['1.0+a', '1.0+b', -1],
+    ['1.0a', '1.0a0', 0],
+    ['1.0-1', '1.0.post1', 0],
+    ['1.0alpha1', '1.0a1', 0],
+    ['1.0c1', '1.0RC1', 0],
+    ['v1.0.0', '1.0', 0],
+    ['1.0_beta_2', '1.0b2', 0],
+    ['1.0.rev3', '1.0-r3', 0],
+    ['1.0+1.2', '1.0+1-2', 0],
+    ['1.0.dev', '1.0.dev0', 0],
+    ['1.0+007', '1.0+7', 0],
+    ['1!1.0+x', '2.0', 1],
+  ];
+  for (const [a, b, want] of fullVectors) {
+    it(`full PEP 440: ${a} against ${b} is ${want}`, () => {
+      strictEqual(compare(a, b, 'pypi'), want);
+      strictEqual(compare(b, a, 'pypi'), want === 0 ? 0 : -want);
+    });
+  }
+
+  it('leaves the other ecosystems on the generic path', () => {
+    // Under semver rules a "+" tail is build metadata and "1.0.post1.dev0"
+    // has no PEP 440 meaning; these results are the pre-change behaviour.
+    strictEqual(compare('1.0', '1.0+ubuntu1', 'npm'), 0);
+    strictEqual(compare('1.0', '1.0+ubuntu1'), 0);
+    strictEqual(compare('1.0-1', '1.0', 'cargo'), -1);
+    strictEqual(compare('1.0.0', '1.0', 'npm'), 0);
+  });
+
+  it('falls back to the generic path for a pypi string that is not PEP 440', () => {
+    ok(compare('1.2.3-beta.2', '1.2.3-beta.10', 'pypi') < 0);
+  });
+
+  it('lets the epoch outrank a later release in gte and maxVersion', () => {
+    ok(gte('1!1.0', '2.0', 'pypi'));
+    strictEqual(maxVersion(['2.0', '1!1.0', '3.0'], 'pypi'), '1!1.0');
+  });
+
+  it('does not parse an epoch for other ecosystems', () => {
+    strictEqual(compare('1!1.0', '1!1.0', 'npm'), 0);
+    strictEqual(compare('1!1.0', '1!1.0'), 0);
+    // No epoch split: "1!1" stays a lexical release segment, as before.
+    ok(compare('1!1.0', '2.0', 'cargo') < 0);
+  });
+
+  it('accepts an epoch-carrying version as an exact pypi version', () => {
+    ok(isExactVersion('pypi', '1!1.0'));
+    ok(!isExactVersion('pypi', '!=1.0'));
+  });
+});
 
 describe('compare', () => {
   it('orders release segments numerically, not lexically', () => {
@@ -365,3 +453,13 @@ describe('maven ComparableVersion ordering', () => {
     ok(!isExactVersion('maven', '[1.0,2.0)'));
   });
 });
+describe('pypi strips the whitespace packaging strips', () => {
+  it('treats U+001C and U+0085 at the ends as space, and U+FEFF as part of the string', () => {
+    strictEqual(compare('1.0\u001c', '1.0', 'pypi'), 0);
+    strictEqual(compare('\u00851.0', '1.0', 'pypi'), 0);
+    strictEqual(compare('\u30001.0\u3000', '1.0', 'pypi'), 0);
+    // packaging rejects a leading BOM as invalid PEP 440, and so does the parser.
+    strictEqual(parsePep440('\ufeff1.0'), null);
+  });
+});
+

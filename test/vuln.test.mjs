@@ -8,6 +8,7 @@ import {
   fetchRemediations,
   fetchReport,
   foldName,
+  isExactVersion,
   mapLimit,
   matchPackages,
   parseNpmLockfile,
@@ -686,5 +687,39 @@ describe('parseNpmLockfile', () => {
     ok(msg.includes('not valid JSON'), msg);
     ok(!msg.includes('SECRET-CONTENT'), `must not echo input: ${msg}`);
     ok(!msg.includes('root:x'), `must not echo input: ${msg}`);
+  });
+});
+
+describe('canonicalVersion folds equal PEP 440 spellings on pypi', () => {
+  // Equalities confirmed with packaging 26.3.
+  const same = [
+    ['1.0', '1.0.0'],
+    ['0!1.0', '1.0'],
+    ['1.0-1', '1.0.post1'],
+    ['v1.0RC1', '1.0c1'],
+    ['1.0.dev', '1.0.dev0'],
+    ['1.0+1.2', '1.0+1-2'],
+  ];
+  for (const [a, b] of same) {
+    it(`${a} and ${b} share a key`, () => {
+      strictEqual(canonicalVersion('pypi', a), canonicalVersion('pypi', b));
+    });
+  }
+
+  it('keeps distinct versions apart, including by epoch and local label', () => {
+    ok(canonicalVersion('pypi', '1!1.0') !== canonicalVersion('pypi', '1.0'));
+    ok(canonicalVersion('pypi', '1.0+a') !== canonicalVersion('pypi', '1.0'));
+    ok(canonicalVersion('pypi', '1.0.post1') !== canonicalVersion('pypi', '1.0'));
+  });
+
+  it('leaves the other ecosystems folding exactly as before', () => {
+    strictEqual(canonicalVersion('npm', '1.0.0+Build'), '1.0.0+build');
+    strictEqual(canonicalVersion('nuget', '4.5.0'), '4.5');
+  });
+
+  it('still treats every valid PEP 440 spelling as an exact pypi version', () => {
+    for (const v of ['1!1.0', '1.0+ubuntu.1', '1.0rc1.post1.dev0', '1.0.POST', 'v1.0-1', '1.0+a_b']) {
+      ok(isExactVersion('pypi', v), v);
+    }
   });
 });

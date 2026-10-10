@@ -18,9 +18,14 @@
  * version is at or above the ceiling, so a project pinned to an RC was told the
  * advisory needed no action.
  *
- * Not modelled, because neither an advisory nor a lockfile has been observed to
- * carry one: PEP 440 epochs (`1!1.0`) and local version labels (`1.0+ubuntu1`,
- * whose `+` tail is dropped as build metadata).
+ * For `'pypi'` a valid PEP 440 version is ordered by `pep440.ts`, a port of
+ * `packaging.version`: epochs, compound pre/post/dev tails and local labels
+ * included. The parsing described above remains the fallback for a pypi string
+ * that is not valid PEP 440, where a leading `N!` epoch is parsed and compared numerically ahead of
+ * the release (absent = 0), so `1!1.0` outranks `2.0`. Other ecosystems never
+ * have an epoch parsed, so `!` keeps whatever meaning it had for them.
+ *
+ * Outside pypi, a `+` tail is dropped as build metadata.
  *
  * PEP 440 also permits several spellings of the same phase — `c`, `pre` and
  * `preview` all mean `rc`; `a` means `alpha`; `b` means `beta`; `r` and `rev`
@@ -42,13 +47,15 @@
  * (caret) post-release markers.
  */
 
+import { comparePep440, parsePep440 } from './pep440.js';
+
 /** dev < pre < release < post, per PEP 440. */
 const DEV = -2;
 const PRE = -1;
 const RELEASE = 0;
 const POST = 1;
 
-type Parsed = { release: string[]; phase: number; prerelease: string[] };
+type Parsed = { epoch: number; release: string[]; phase: number; prerelease: string[] };
 
 /**
  * A PEP 440 pre/post/dev tail, with or without a separator, anchored to the end:
@@ -78,8 +85,18 @@ function phaseOf(marker: string): number {
   return PRE;
 }
 
-function parse(version: string): Parsed {
-  const cleaned = version.trim().replace(/^[vV]/, '').split('+')[0];
+/** A leading PEP 440 `N!` epoch, split off the rest of the version. */
+const PEP440_EPOCH = /^(\d+)!/;
+
+function parse(version: string, pep440 = false): Parsed {
+  const unprefixed = version.trim().replace(/^[vV]/, '').split('+')[0];
+  const epochMatch = pep440 ? PEP440_EPOCH.exec(unprefixed) : null;
+  const epoch = epochMatch ? Number(epochMatch[1]) : 0;
+  const cleaned = epochMatch ? unprefixed.slice(epochMatch[0].length) : unprefixed;
+  return { epoch, ...parseTail(cleaned) };
+}
+
+function parseTail(cleaned: string): Omit<Parsed, 'epoch'> {
 
   // A hyphenated tail is semver's spelling and is already a prerelease; keep that
   // path exactly as it was so existing orderings do not shift underneath callers.
@@ -492,9 +509,16 @@ function compareMaven(a: string, b: string): number {
 export function compare(a: string, b: string, ecosystem?: string): number {
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') return compareMaven(a, b);
-  const pa = parse(a);
-  const pb = parse(b);
+  const pep440 = ecosystem === 'pypi';
+  if (pep440) {
+    const ka = parsePep440(a);
+    const kb = parsePep440(b);
+    if (ka && kb) return comparePep440(ka, kb);
+  }
+  const pa = parse(a, pep440);
+  const pb = parse(b, pep440);
   return (
+    sign(pa.epoch, pb.epoch) ||
     compareRelease(pa.release, pb.release) ||
     sign(pa.phase, pb.phase) ||
     comparePrerelease(pa.prerelease, pb.prerelease)
