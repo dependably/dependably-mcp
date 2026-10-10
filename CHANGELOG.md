@@ -31,6 +31,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **rpm versions order `^` and `~` as rpm does.** A `^` (caret) post-release such as
+  `1.0^20230101` now sorts after `1.0` and before `1.0.1`, where it used to compare equal to
+  `1.0`, so a caret build could be taken as already fixed. A `~` after a separator (`1.0.~rc1`)
+  is no longer skipped as one.
 - **`get_install_command` no longer suggests a `.netrc` line pip cannot match for an IPv6 host.**
   For a base URL such as `http://[::1]:8443`, requests looks the entry up by the text before the
   first colon, so the bracketed `machine [::1]` line never matched and pip failed to authenticate
