@@ -1849,6 +1849,16 @@ describe('setup tools — publish commands keep tokens out of history and name r
     ok((await text('cargo', 'Cargo.toml')).includes("--manifest-path './Cargo.toml'"));
     ok((await text('cargo', '/Cargo.toml')).includes("--manifest-path '/Cargo.toml'"));
   });
+
+  it('a directory name with a dot is the directory, not a file in its parent', async () => {
+    // cargo package leaves the unpacked crate in target/package/<name>-<version>.
+    const t = await text('cargo', './target/package/foo-0.1.0');
+    ok(t.includes("--manifest-path './target/package/foo-0.1.0/Cargo.toml'"), t);
+    ok((await text('cargo', './my.crate.dir/')).includes("--manifest-path './my.crate.dir/Cargo.toml'"));
+    ok((await text('hex', './vendor/my_lib-1.2')).includes("cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', './vendor/my_lib-1.2/mix.exs')).includes("cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', 'mix.exs')).includes("cd '.' && "));
+  });
 });
 
 describe('readiness_check on a 503', () => {

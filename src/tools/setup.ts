@@ -243,21 +243,22 @@ function readSecret(variable: string): string {
   return `read -rs ${variable} && export ${variable}   # paste your token; it is not echoed or saved to history`;
 }
 
-/**
- * The directory a source-built ecosystem publishes from. The path may name the
- * directory itself or a file in it (Cargo.toml, mix.exs); a path whose last
- * segment has an extension is taken to be a file.
- */
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
   while (end > 0 && value[end - 1] === '/') end--;
   return value.slice(0, end);
 }
 
-function directoryOf(path: string): string {
+/**
+ * The directory a source-built ecosystem publishes from. The path names the
+ * directory itself or the ecosystem's manifest in it (Cargo.toml, mix.exs).
+ * Only the manifest is taken to be a file: a directory name can hold a dot,
+ * as `cargo package` leaves target/package/foo-0.1.0.
+ */
+function directoryOf(path: string, manifest: string): string {
   const trimmed = trimTrailingSlashes(path) || '/';
   const last = trimmed.split('/').pop() ?? '';
-  if (!last.includes('.') || last === '.' || last === '..') return trimmed;
+  if (last !== manifest) return trimmed;
   const parent = trimmed.slice(0, trimmed.length - last.length);
   if (parent === '') return '.';
   return trimTrailingSlashes(parent) || '/';
@@ -427,7 +428,6 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
  */
 function publishCommand(base: string, ecosystem: string, artifactPath: string): ToolResult {
   const p = shq(artifactPath);
-  const dir = shq(directoryOf(artifactPath));
   switch (ecosystem) {
     case 'npm':
       return fenced(
@@ -472,7 +472,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       if (artifactPath.endsWith('.crate')) {
         return fenced('bash', `${prereq}\n# cargo publishes from source, not a packaged .crate: run this in the crate's own directory.\ncargo publish --registry dependably`);
       }
-      const manifest = `${directoryOf(artifactPath).replace(/\/$/, '')}/Cargo.toml`;
+      const manifest = `${directoryOf(artifactPath, 'Cargo.toml').replace(/\/$/, '')}/Cargo.toml`;
       return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(manifest)}`);
     }
     case 'apk':
@@ -482,7 +482,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
     case 'hex':
       return fenced(
         'bash',
-        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${readSecret('HEX_API_KEY')}\ncd ${dir} && HEX_API_URL=${base}/hex/api mix hex.publish`,
+        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${readSecret('HEX_API_KEY')}\ncd ${shq(directoryOf(artifactPath, 'mix.exs'))} && HEX_API_URL=${base}/hex/api mix hex.publish`,
       );
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
