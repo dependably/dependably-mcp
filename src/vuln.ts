@@ -942,6 +942,9 @@ export async function liveCoverage(
   return { ...live, hits: fresh, unverified: [...inexactUnverified, ...live.unverified] };
 }
 
+/** Most explicit affected versions compact output lists for an entry that has no ranges. */
+const MAX_COMPACT_VERSIONS = 50;
+
 /**
  * Shape an advisory detail (`GET /api/v1/vulnerabilities/{osvId}`) for reading.
  *
@@ -959,11 +962,22 @@ export function compactVulnerability(detail: Record<string, unknown>): Record<st
     out.affected = (affected as Record<string, unknown>[]).map((a) => {
       const pkg = (a?.package ?? {}) as Record<string, unknown>;
       const ranges = Array.isArray(a?.ranges) ? (a.ranges as Record<string, unknown>[]) : [];
-      return {
+      const versions = Array.isArray(a?.versions) ? (a.versions as unknown[]) : [];
+      const entry: Record<string, unknown> = {
         package: { ecosystem: pkg.ecosystem, name: pkg.name },
-        ranges: ranges.map((r) => ({ type: r?.type, ...collapseEvents(r?.events) })),
-        versionCount: Array.isArray(a?.versions) ? a.versions.length : 0,
+        ranges: ranges.map((r) => ({
+          type: r?.type,
+          ...(typeof r?.repo === 'string' && r.repo ? { repo: r.repo } : {}),
+          ...collapseEvents(r?.events),
+        })),
+        versionCount: versions.length,
       };
+      // With no range to read, the explicit list is the only record of what is affected.
+      if (ranges.length === 0 && versions.length > 0) {
+        entry.versions = versions.slice(0, MAX_COMPACT_VERSIONS);
+        if (versions.length > MAX_COMPACT_VERSIONS) entry.versionsTruncated = true;
+      }
+      return entry;
     });
   }
   if (Array.isArray(references)) {

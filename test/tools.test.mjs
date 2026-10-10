@@ -183,6 +183,36 @@ describe('read tools', () => {
     deepStrictEqual(full, detail);
   });
 
+  it('get_vulnerability compact keeps explicit versions when an entry has no ranges', async () => {
+    const mk = (n) => ({ id: 'X-1', affected: [{ package: { ecosystem: 'npm', name: 'p' }, versions: Array.from({ length: n }, (_, i) => `1.0.${i}`) }] });
+    stubFetch(() => mk(3));
+    const small = payload(await call(base, 'get_vulnerability', { osvId: 'X-1' }));
+    deepStrictEqual(small.affected, [
+      { package: { ecosystem: 'npm', name: 'p' }, ranges: [], versionCount: 3, versions: ['1.0.0', '1.0.1', '1.0.2'] },
+    ]);
+
+    stubFetch(() => mk(120));
+    const big = payload(await call(base, 'get_vulnerability', { osvId: 'X-1' }));
+    strictEqual(big.affected[0].versionCount, 120);
+    strictEqual(big.affected[0].versions.length, 50);
+    strictEqual(big.affected[0].versions[49], '1.0.49');
+    strictEqual(big.affected[0].versionsTruncated, true);
+  });
+
+  it('get_vulnerability compact keeps repo on a GIT range', async () => {
+    stubFetch(() => ({
+      id: 'X-2',
+      affected: [{
+        package: { ecosystem: 'Go', name: 'm' },
+        ranges: [{ type: 'GIT', repo: 'https://example.com/o/r', events: [{ introduced: '0' }, { fixed: 'abc123' }] }],
+        versions: ['v1.0.0'],
+      }],
+    }));
+    const body = payload(await call(base, 'get_vulnerability', { osvId: 'X-2' }));
+    deepStrictEqual(body.affected[0].ranges, [{ type: 'GIT', repo: 'https://example.com/o/r', introduced: ['0'], fixed: ['abc123'] }]);
+    strictEqual(body.affected[0].versions, undefined);
+  });
+
   it('get_vulnerability passes the installed version through', async () => {
     const calls = stubFetch();
     await call(base, 'get_vulnerability', { osvId: 'GHSA-a/b', version: '1.2.3' });
