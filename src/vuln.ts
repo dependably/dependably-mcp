@@ -734,6 +734,29 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
   return [...seen.values()];
 }
 
+/** Serialized bytes a single bulk request may carry; the server rejects bodies over 4 MB. */
+const NPM_BULK_BODY_BUDGET = 3 * 1024 * 1024;
+
+/** Split one round into chunks whose JSON body stays under the budget. */
+function splitByBodyBudget(round: Map<string, string>): Array<Map<string, string>> {
+  const chunks: Array<Map<string, string>> = [];
+  let current = new Map<string, string>();
+  let size = 2;
+  for (const [name, version] of round) {
+    // `"name":["version"],` — quoting and punctuation included.
+    const entry = Buffer.byteLength(JSON.stringify(name)) + Buffer.byteLength(JSON.stringify(version)) + 4;
+    if (current.size > 0 && size + entry > NPM_BULK_BODY_BUDGET) {
+      chunks.push(current);
+      current = new Map();
+      size = 2;
+    }
+    current.set(name, version);
+    size += entry;
+  }
+  if (current.size > 0) chunks.push(current);
+  return chunks;
+}
+
 /**
  * Check every npm dependency against live OSV data through the instance's npm
  * bulk-advisory endpoint (the one `npm audit` calls). Unlike the registry
@@ -767,7 +790,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
   const hits: ReportItem[] = [];
   const unverified: Unverified[] = [];
   let checked = 0;
-  for (const round of rounds) {
+  for (const round of rounds.flatMap(splitByBodyBudget)) {
     const failed = (reason: string) => {
       for (const [name, version] of round) unverified.push({ name, version, reason });
     };

@@ -11,6 +11,7 @@ import { DependablyClient } from '../dist/client.js';
 import { buildServer } from '../dist/server.js';
 import { json, err, withSummary, run, RESULT_CHAR_BUDGET } from '../dist/format.js';
 import { compactAnalysis } from '../dist/tools/projects.js';
+import { liveCheckNpm } from '../dist/vuln.js';
 
 const base = { baseUrl: 'https://dep.example.com', token: 'tok', timeoutMs: 5000 };
 const realFetch = globalThis.fetch;
@@ -691,6 +692,34 @@ describe('check_dependencies live coverage', () => {
     });
     const body = payload(await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'p', version: '1.0.0' }] }));
     strictEqual(body.findings[0].bumpToPartial, true);
+  });
+
+  it('splits an over-budget npm bulk round into several requests and merges the results', async () => {
+    // Long versions push 5000 names past the budget even though each name is within its cap.
+    const packages = Array.from({ length: 5000 }, (_, i) => ({ name: `p${i}-`.padEnd(512, 'x'), version: `1.0.0-${'y'.repeat(200)}` }));
+    const bodies = [];
+    const client = {
+      post: async (path, body) => {
+        strictEqual(path, '/npm/-/npm/v1/security/advisories/bulk');
+        bodies.push(JSON.stringify(body));
+        const out = {};
+        for (const n of [packages[0].name, packages[4999].name]) if (n in body) out[n] = [{ id: `GHSA-${n.slice(0, 5)}`, severity: 'high' }];
+        return out;
+      },
+    };
+    const res = await liveCheckNpm(client, packages);
+    ok(bodies.length > 1, `expected several POSTs, got ${bodies.length}`);
+    ok(bodies.every((b) => Buffer.byteLength(b) <= 3 * 1024 * 1024), 'every body stays under the budget');
+    strictEqual(res.hits.length, 2, 'hits from different chunks are merged');
+    strictEqual(res.unverified.length, 0);
+    strictEqual(res.checked, 5000);
+  });
+
+  it('rejects a package name over 512 characters with a validation error', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const res = await call(base, 'check_dependencies', { ecosystem: 'npm', packages: [{ name: 'x'.repeat(513), version: '1.0.0' }] });
+    strictEqual(res.isError, true);
+    match(res.content[0].text, /512/);
   });
 
   it('marks a dependency unverified when an advisory for it comes back without an id', async () => {
