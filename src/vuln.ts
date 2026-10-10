@@ -1,4 +1,4 @@
-import type { DependablyClient } from './client.js';
+import { DependablyApiError, type DependablyClient } from './client.js';
 import { canonicalPep440 } from './pep440.js';
 import { gte, maxVersion } from './semver.js';
 
@@ -715,7 +715,10 @@ export function parseNpmLockfile(text: string): InputPackage[] {
 /** A dependency no source could vouch for, so the scan cannot call it clean. */
 export type Unverified = { name: string; version: string; reason: string };
 
-export type LiveCheck = { hits: ReportItem[]; unverified: Unverified[]; checked: number };
+/** A dependency no advisory database exists for (a Terraform module): neither checked nor a gap. */
+export type NotApplicable = { name: string; version: string; reason: string };
+
+export type LiveCheck = { hits: ReportItem[]; unverified: Unverified[]; notApplicable: NotApplicable[]; checked: number };
 
 /** Most dependencies a non-npm scan checks one by one against `/api/v1/lookup`. */
 export const MAX_LIVE_LOOKUPS = 100;
@@ -907,7 +910,7 @@ export async function liveCheckNpm(client: DependablyClient, packages: readonly 
     const idless = collectNpmHits(round, res as Record<string, unknown>, hits, unverified);
     checked += round.size - idless;
   }
-  return { hits, unverified, checked };
+  return { hits, unverified, notApplicable: [], checked };
 }
 
 /** Distinct versions per name; a pair the endpoint would skip goes straight to `unverified`. */
@@ -991,6 +994,7 @@ export async function liveCheckByLookup(
   ecosystem: string,
   packages: readonly InputPackage[],
   cap = MAX_LIVE_LOOKUPS,
+  distro?: string,
 ): Promise<LiveCheck> {
   const toCheck = packages.slice(0, cap);
   const unverified: Unverified[] = packages.slice(cap).map((p) => ({
@@ -999,40 +1003,96 @@ export async function liveCheckByLookup(
     reason: `over the ${cap}-dependency live-check limit for one call; check the rest in a second call`,
   }));
   const hits: ReportItem[] = [];
+  const notApplicable: NotApplicable[] = [];
   let checked = 0;
 
   const results = await mapLimit(toCheck, 8, async (p) => {
     try {
-      return { p, res: (await client.get('/api/v1/lookup', { ecosystem, name: p.name, version: p.version })) as Record<string, unknown> | null };
+      const query = { ecosystem, name: p.name, version: p.version, distro };
+      return { p, res: (await client.get('/api/v1/lookup', query)) as Record<string, unknown> | null };
     } catch (e) {
-      return { p, error: shortReason(e) };
+      return { p, error: lookupErrorReason(e) };
     }
   });
 
   for (const r of results) {
-    const skipped = lookupSkipReason(r);
-    if (skipped) {
-      unverified.push({ name: r.p.name, version: r.p.version, reason: skipped });
-      continue;
+    const verdict = classifyLookup(r);
+    if (verdict.kind === 'unverified') {
+      unverified.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
+      // A partial answer (an image scan with gaps) still reports what it found.
+      if ('res' in r && r.res) hits.push(...lookupHits(r.p, r.res));
+    } else if (verdict.kind === 'notApplicable') {
+      notApplicable.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
+    } else {
+      checked++;
+      hits.push(...lookupHits(r.p, (r as { res: Record<string, unknown> }).res));
     }
-    checked++;
-    hits.push(...lookupHits(r.p, (r as { res: Record<string, unknown> }).res));
   }
-  return { hits, unverified, checked };
+  return { hits, unverified, notApplicable, checked };
 }
 
-/** Why a lookup answer cannot vouch for its dependency, or null when it can. */
-function lookupSkipReason(r: { error: string } | { res: Record<string, unknown> | null }): string | null {
-  if ('error' in r) return `live lookup failed: ${r.error}`;
-  if (r.res?.found === false) return 'not found upstream';
-  const vulns = (r.res?.vulnerabilities ?? null) as { available?: unknown } | null;
-  if (!vulns || vulns.available === false) return 'the advisory source was unavailable';
-  return null;
+/** A failed lookup's reason: the server's own explanation for a 422, else the first sentence of the error. */
+function lookupErrorReason(e: unknown): string {
+  if (e instanceof DependablyApiError && e.status === 422) {
+    const detail = problemDetail(e.body);
+    if (detail) return `the server rejected this lookup: ${detail.slice(0, 300)}`;
+  }
+  return `live lookup failed: ${shortReason(e)}`;
 }
+
+function problemDetail(body: string | undefined): string | null {
+  try {
+    const parsed = JSON.parse(body ?? '') as { detail?: unknown } | null;
+    return typeof parsed?.detail === 'string' && parsed.detail.length > 0 ? parsed.detail : null;
+  } catch {
+    return null;
+  }
+}
+
+/** What an `advisorySource.reason` means for the person reading the result. */
+const ADVISORY_UNAVAILABLE_REASONS: Record<string, string> = {
+  osv_unreachable: 'the advisory source (OSV) could not be reached from the instance; try again later',
+  distro_required:
+    'no distro release is known for this lookup, so no advisory feed was asked; pass `distro` (apk: "v3.20"; rpm: "Rocky Linux:9", "AlmaLinux:9" or "Red Hat:enterprise_linux:9::baseos")',
+  no_osv_coverage: 'the advisory source has no coverage for this distro release, so an empty answer would prove nothing',
+  origin_unknown:
+    'Alpine files advisories under the origin package, not the subpackage, and this name is not known to the feed; pass the origin package name (for example "openssl" rather than "libssl3")',
+  no_scan_result: 'this image digest has no scan result on this instance yet, so it cannot be called clean',
+  scan_incomplete: 'the scan of this image digest on this instance is not complete, so it cannot be called clean',
+};
+
+const NO_ADVISORY_SOURCE_NOTE = 'no advisory database covers this ecosystem, so there is nothing to check it against';
+
+type LookupVerdict = { kind: 'checked' } | { kind: 'unverified' | 'notApplicable'; reason: string };
+
+/**
+ * How one lookup answer counts: checked, unverified (with why), or not
+ * applicable. A server that sends `advisorySource` is believed only for the two
+ * statuses that vouch for something, `checked` and `not_applicable`; anything
+ * else, including a status added after this was written, is unverified. An
+ * older server without it is judged by `vulnerabilities.available` as before.
+ */
+function classifyLookup(r: { error: string } | { res: Record<string, unknown> | null }): LookupVerdict {
+  if ('error' in r) return { kind: 'unverified', reason: r.error };
+  if (r.res?.found === false) return { kind: 'unverified', reason: 'not found upstream' };
+  const vulns = (r.res?.vulnerabilities ?? null) as { available?: unknown } | null;
+  const vulnsAvailable = vulns !== null && vulns.available !== false;
+  const source = (r.res?.advisorySource ?? null) as { status?: unknown; reason?: unknown } | null;
+  if (source === null) {
+    return vulnsAvailable ? { kind: 'checked' } : { kind: 'unverified', reason: UNAVAILABLE_FALLBACK };
+  }
+  if (source.status === 'not_applicable') return { kind: 'notApplicable', reason: NO_ADVISORY_SOURCE_NOTE };
+  if (source.status === 'checked' && vulnsAvailable) return { kind: 'checked' };
+  const known = typeof source.reason === 'string' ? ADVISORY_UNAVAILABLE_REASONS[source.reason] : undefined;
+  return { kind: 'unverified', reason: known ?? UNAVAILABLE_FALLBACK };
+}
+
+const UNAVAILABLE_FALLBACK = 'the advisory source was unavailable';
 
 /** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
 function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[] {
-  const vulns = res.vulnerabilities as { scored?: unknown; unscored?: unknown };
+  // A not-found answer, or an older server's, may carry no vulnerabilities block.
+  const vulns = (res.vulnerabilities ?? {}) as { scored?: unknown; unscored?: unknown };
   // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
   // under malware.advisoryIds, never in scored or unscored.
   const malware = (res.malware ?? null) as { advisoryIds?: unknown } | null;
@@ -1088,31 +1148,34 @@ export async function liveCoverage(
   packages: readonly InputPackage[],
   reportHits: readonly ReportItem[],
   lookupEcosystems: readonly string[],
+  distro?: string,
 ): Promise<LiveCheck> {
   const all = uniquePackages(packages, ecosystem);
-  // A range, tag or git/file/alias spec cannot be checked: the server matches
+  const lookupable = lookupEcosystems.includes(ecosystem);
+  // A range, tag or source spec cannot be checked: the server matches
   // advisories against one exact version, and answers a string it cannot parse
-  // with "no advisories", which would read as clean.
-  const inexact = all.filter((p) => !isExactVersion(ecosystem, p.version));
-  const unique = all.filter((p) => isExactVersion(ecosystem, p.version));
-  const inexactUnverified: Unverified[] = inexact.map((p) => ({
-    name: p.name,
-    version: p.version,
-    reason: 'not an exact version (a range, tag, or git/file/alias spec); pass the resolved version from the lockfile',
-  }));
+  // with "no advisories", which would read as clean. The lookup-only
+  // ecosystems also need their full form (an image digest, a release), which
+  // the server would refuse with a 422.
+  const problems = all.map((p) => ({ p, problem: versionProblem(ecosystem, p.version, lookupable) }));
+  const unique = problems.filter((x) => !x.problem).map((x) => x.p);
+  const inexactUnverified: Unverified[] = problems.flatMap((x) =>
+    x.problem ? [{ name: x.p.name, version: x.p.version, reason: x.problem }] : [],
+  );
   const keyOf = (name: string, version: string) => `${foldName(ecosystem, name)}@${canonicalVersion(ecosystem, version)}`;
   const reported = new Set(reportHits.map((h) => keyOf(h.packageName, h.version)));
 
   let live: LiveCheck;
   if (ecosystem === 'npm') {
     live = await liveCheckNpm(client, unique);
-  } else if (lookupEcosystems.includes(ecosystem)) {
-    live = await liveCheckByLookup(client, ecosystem, unique.filter((p) => !reported.has(keyOf(p.name, p.version))));
+  } else if (lookupable) {
+    live = await liveCheckByLookup(client, ecosystem, unique.filter((p) => !reported.has(keyOf(p.name, p.version))), MAX_LIVE_LOOKUPS, distro);
   } else {
     const reason = `no live advisory source for ${ecosystem}; only versions this registry has served are covered`;
     live = {
       hits: [],
       unverified: unique.filter((p) => !reported.has(keyOf(p.name, p.version))).map((p) => ({ name: p.name, version: p.version, reason })),
+      notApplicable: [],
       checked: 0,
     };
   }
@@ -1120,6 +1183,31 @@ export async function liveCoverage(
   const seen = new Set(reportHits.map((h) => `${keyOf(h.packageName, h.version)}#${h.osvId}`));
   const fresh = live.hits.filter((h) => !seen.has(`${keyOf(h.packageName, h.version)}#${h.osvId}`));
   return { ...live, hits: fresh, unverified: [...inexactUnverified, ...live.unverified] };
+}
+
+/** An image digest: `<algorithm>:<hex>`, as the server's lookup requires. */
+const OCI_DIGEST = /^[a-z0-9]+(?:[+._-][a-z0-9]+)*:[0-9a-fA-F]{32,}$/;
+/** An rpm version-release with an optional epoch, the shape the server's lookup accepts. */
+const RPM_EVR = /^(?:\d+:)?[^\s:-]+-[^\s:-]+$/;
+/** An apk version with its `-rN` package revision. */
+const APK_REVISION = /-r\d+$/;
+
+/** Why `version` cannot be checked, or null when it can; the lookup-only forms apply when the instance looks the ecosystem up. */
+function versionProblem(ecosystem: string, version: string, lookupable: boolean): string | null {
+  if (lookupable && ecosystem === 'oci') {
+    return OCI_DIGEST.test(version) ? null : 'an image is checked by its digest (`sha256:` and 64 hex characters); pass the image digest, not a tag';
+  }
+  if (!isExactVersion(ecosystem, version)) {
+    return 'not an exact version (a range, tag, or git/file/alias spec); pass the resolved version from the lockfile';
+  }
+  if (!lookupable) return null;
+  if (ecosystem === 'rpm' && !RPM_EVR.test(version)) {
+    return 'an rpm version needs its release to be checked; pass the full version-release (for example "1:2.3-4.el9")';
+  }
+  if (ecosystem === 'apk' && !APK_REVISION.test(version)) {
+    return 'an apk version needs its revision to be checked; pass the full version with its -rN revision (for example "3.1.4-r5")';
+  }
+  return null;
 }
 
 /** Most explicit affected versions compact output lists for an entry that has no ranges. */

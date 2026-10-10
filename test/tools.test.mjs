@@ -2291,3 +2291,268 @@ describe('local file surface', () => {
     ok(!names.includes('import_manifest'));
   });
 });
+
+describe('lookup of apk, rpm, oci and terraform', () => {
+  const emptyReport = { items: [], total: 0 };
+  const REGISTRY = ['npm', 'pypi', 'nuget', 'maven', 'golang', 'cargo', 'hex', 'rpm', 'apk', 'oci', 'terraform'];
+  const planes = { registry: REGISTRY, lookup: REGISTRY, setup: ['npm'] };
+  const DIGEST = `sha256:${'a'.repeat(64)}`;
+
+  async function callWith(name, args) {
+    const server = buildServer(new DependablyClient(base), base, planes);
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'unit', version: '0.0.0' });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    try {
+      return await client.callTool({ name, arguments: args });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  function stubRoutes(routes) {
+    const calls = [];
+    globalThis.fetch = async (url, init) => {
+      const u = new URL(String(url));
+      calls.push({ path: u.pathname, query: u.searchParams });
+      const handler = routes[u.pathname] ?? routes['*'];
+      const out = handler ? handler(u, init) : {};
+      const status = out && typeof out === 'object' && 'status' in out ? out.status : 200;
+      const body = out && typeof out === 'object' && 'status' in out ? out.body : out;
+      return new Response(JSON.stringify(body ?? {}), { status, headers: { 'content-type': 'application/json' } });
+    };
+    return calls;
+  }
+
+  const answer = (advisorySource) => ({
+    found: true,
+    vulnerabilities: { available: advisorySource.status === 'checked', scored: [], unscored: [] },
+    advisorySource,
+  });
+  const lookups = (calls) => calls.filter((c) => c.path === '/api/v1/lookup');
+  const checkedAnswer = () => answer({ status: 'checked', source: 'osv', reason: null });
+
+  it('passes distro through to the lookup on both tools', async () => {
+    const calls = stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/api/v1/lookup': checkedAnswer });
+    await callWith('check_dependencies', { ecosystem: 'apk', distro: 'v3.20', packages: [{ name: 'busybox', version: '1.36.1-r5' }] });
+    await callWith('lookup_package', { ecosystem: 'rpm', name: 'bash', version: '5.1.8-6.el9', distro: 'Rocky Linux:9' });
+    deepStrictEqual(lookups(calls).map((c) => c.query.get('distro')), ['v3.20', 'Rocky Linux:9']);
+  });
+
+  it('omits distro when none is given', async () => {
+    const calls = stubRoutes({ '/api/v1/lookup': checkedAnswer });
+    await callWith('lookup_package', { ecosystem: 'npm', name: 'x', version: '1.0.0' });
+    strictEqual(lookups(calls)[0].query.has('distro'), false);
+  });
+
+  it('rejects an over-long distro', async () => {
+    stubRoutes({});
+    const res = await callWith('lookup_package', { ecosystem: 'apk', name: 'x', version: '1-r0', distro: 'v'.repeat(129) });
+    strictEqual(res.isError, true);
+  });
+
+  it('counts a checked answer with no advisories as clean', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/api/v1/lookup': checkedAnswer });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'apk', packages: [{ name: 'busybox', version: '1.36.1-r5' }] }));
+    strictEqual(body.clean, true);
+    deepStrictEqual(body.coverage, { liveChecked: 1, unverified: 0 });
+    strictEqual(body.summary.packagesChecked, 1);
+  });
+
+  const reasons = {
+    osv_unreachable: /could not be reached/,
+    distro_required: /pass `distro`.*v3\.20.*Rocky Linux:9/,
+    no_osv_coverage: /no coverage for this distro release/,
+    origin_unknown: /origin package.*openssl/,
+    no_scan_result: /no scan result/,
+    scan_incomplete: /not complete/,
+  };
+  for (const [reason, pattern] of Object.entries(reasons)) {
+    it(`reports an unavailable answer (${reason}) as unverified with a human reason`, async () => {
+      stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/api/v1/lookup': () => answer({ status: 'unavailable', source: null, reason }) });
+      const body = payload(await callWith('check_dependencies', { ecosystem: 'rpm', packages: [{ name: 'bash', version: '5.1.8-6.el9' }] }));
+      strictEqual(body.clean, false);
+      strictEqual(body.coverage.liveChecked, 0);
+      strictEqual(body.summary.packagesChecked, 0);
+      match(body.coverage.unverifiedPackages[0].reason, pattern);
+    });
+  }
+
+  it('lists a not-applicable terraform module apart, without blocking clean or counting it as checked', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => answer({ status: 'not_applicable', source: null, reason: 'no_advisory_source' }),
+    });
+    const tf = payload(await callWith('check_dependencies', { ecosystem: 'terraform', packages: [{ name: 'hashicorp/consul', version: '1.2.3' }] }));
+    strictEqual(tf.clean, true);
+    strictEqual(tf.coverage.liveChecked, 0);
+    strictEqual(tf.coverage.unverified, 0);
+    strictEqual(tf.coverage.notApplicable, 1);
+    deepStrictEqual(tf.coverage.notApplicablePackages.map((p) => [p.name, p.version]), [['hashicorp/consul', '1.2.3']]);
+    match(tf.coverage.notApplicablePackages[0].reason, /no advisory database/);
+    strictEqual(tf.summary.packagesChecked, 0);
+  });
+
+  it('keeps an unverified dependency blocking clean next to a not-applicable one', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) =>
+        u.searchParams.get('name') === 'a/a'
+          ? answer({ status: 'not_applicable', source: null, reason: 'no_advisory_source' })
+          : { status: 422, body: { title: 'Unprocessable', detail: 'Bad module.' } },
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'terraform', packages: [{ name: 'a/a', version: '1.0.0' }, { name: 'b/b', version: '1.0.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.notApplicable, 1);
+    strictEqual(body.coverage.unverified, 1);
+  });
+
+  it('surfaces the server problem detail of a 422 instead of a generic failure', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({ status: 422, body: { title: 'Unprocessable Entity', detail: 'The distro "foo" is not a known release.' } }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'apk', distro: 'foo', packages: [{ name: 'busybox', version: '1.36.1-r5' }] }));
+    const reason = body.coverage.unverifiedPackages[0].reason;
+    match(reason, /The distro "foo" is not a known release\./);
+    ok(!/live lookup failed/.test(reason), reason);
+  });
+
+  it('classifies an unusable oci, rpm or apk version without calling lookup', async () => {
+    const calls = stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/api/v1/lookup': checkedAnswer });
+    const oci = payload(await callWith('check_dependencies', { ecosystem: 'oci', packages: [{ name: 'library/nginx', version: 'latest' }, { name: 'library/nginx', version: '1.27' }, { name: 'library/nginx', version: 'sha256:abc' }] }));
+    strictEqual(oci.coverage.unverified, 3);
+    ok(oci.coverage.unverifiedPackages.every((u) => /pass the image digest, not a tag/.test(u.reason)));
+    const rpm = payload(await callWith('check_dependencies', { ecosystem: 'rpm', packages: [{ name: 'bash', version: '5.1.8' }] }));
+    match(rpm.coverage.unverifiedPackages[0].reason, /full version-release/);
+    const apk = payload(await callWith('check_dependencies', { ecosystem: 'apk', packages: [{ name: 'busybox', version: '1.36.1' }] }));
+    match(apk.coverage.unverifiedPackages[0].reason, /-rN revision/);
+    strictEqual(lookups(calls).length, 0);
+  });
+
+  it('checks an oci digest and an rpm version-release', async () => {
+    const calls = stubRoutes({ '/api/v1/vuln-report': () => emptyReport, '/api/v1/lookup': checkedAnswer });
+    const oci = payload(await callWith('check_dependencies', { ecosystem: 'oci', packages: [{ name: 'library/nginx', version: DIGEST }] }));
+    strictEqual(oci.clean, true);
+    const rpm = payload(await callWith('check_dependencies', { ecosystem: 'rpm', packages: [{ name: 'bash', version: '1:5.1.8-6.el9' }] }));
+    strictEqual(rpm.clean, true);
+    strictEqual(lookups(calls).length, 2);
+  });
+
+  it('an advisorySource status it does not know is unverified, even with available advisories', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: { available: true, scored: [], unscored: [] },
+        advisorySource: { status: 'partial', source: 'osv', reason: null },
+      }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'x', version: '1.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.summary.packagesChecked, 0);
+  });
+
+  it('reports the findings of a partial image scan and still leaves the image unverified', async () => {
+    const digest = `sha256:${'a'.repeat(64)}`;
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: {
+          available: true,
+          scored: [{ id: 'CVE-2024-1', cvssScore: 9.8, severity: 'CRITICAL', isKev: false, epss: null, summary: 'rce', aliases: [], fixedVersion: null }],
+          unscored: [],
+        },
+        advisorySource: { status: 'unavailable', source: 'oci_scan', reason: 'scan_incomplete' },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'oci', packages: [{ name: 'library/app', version: digest }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.findings.length, 1);
+    strictEqual(body.findings[0].advisories[0].osvId, 'CVE-2024-1');
+  });
+
+  it('a not-found answer with no vulnerabilities block is unverified, not a crash', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) =>
+        u.searchParams.get('name') === 'typo'
+          ? { found: false, ecosystem: 'pypi', name: 'typo', version: '1.0' }
+          : { found: true },
+    });
+    const res = await callWith('check_dependencies', {
+      ecosystem: 'pypi',
+      packages: [{ name: 'typo', version: '1.0' }, { name: 'bare', version: '1.0' }],
+    });
+    ok(!res.isError, res.content[0].text);
+    const body = payload(res);
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 2);
+  });
+
+  it('a checked status with the advisory source reported unavailable is unverified', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': () => ({
+        found: true,
+        vulnerabilities: { available: false, scored: [], unscored: [] },
+        advisorySource: { status: 'checked', source: 'osv', reason: null },
+      }),
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'x', version: '1.0' }] }));
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.unverified, 1);
+  });
+
+  it('on an older server without advisorySource, behaves as before', async () => {
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) =>
+        u.searchParams.get('name') === 'down'
+          ? { found: true, vulnerabilities: { available: false } }
+          : { found: true, vulnerabilities: { available: true, scored: [], unscored: [] } },
+    });
+    const body = payload(await callWith('check_dependencies', { ecosystem: 'apk', packages: [{ name: 'ok', version: '1-r0' }, { name: 'down', version: '1-r0' }] }));
+    strictEqual(body.coverage.liveChecked, 1);
+    strictEqual(body.coverage.notApplicable, undefined);
+    strictEqual(body.coverage.unverified, 1);
+    strictEqual(body.coverage.unverifiedPackages[0].reason, 'the advisory source was unavailable');
+  });
+
+  it('keeps an ecosystem the instance cannot look up unverified', async () => {
+    stubRoutes({ '/api/v1/vuln-report': () => emptyReport });
+    const body = payload(await call(base, 'check_dependencies', { ecosystem: 'apk', packages: [{ name: 'busybox', version: '1.36.1-r5' }] }));
+    match(body.coverage.unverifiedPackages[0].reason, /no live advisory source for apk/);
+  });
+
+  for (const [ecosystem, name, installed, fixes, expected] of [
+    ['apk', 'openssl', '3.1.4-r5', ['3.1.4-r6', '3.1.4-r10'], '3.1.4-r10'],
+    ['rpm', 'openssl', '1:3.0.7-9.el9', ['1:3.0.7-10.el9', '1:3.0.7-9.el9_1'], '1:3.0.7-10.el9'],
+  ]) {
+    it(`gives a ${ecosystem} hit its bumpTo from the native ordering`, async () => {
+      const advisory = (id, fixedVersion, aliases) => ({ id, severity: 'HIGH', cvssScore: 7.5, epss: null, isKev: false, summary: 'flaw', aliases, fixedVersion });
+      stubRoutes({
+        '/api/v1/vuln-report': () => emptyReport,
+        '/api/v1/lookup': () => ({
+          found: true,
+          advisorySource: { status: 'checked', source: 'osv', reason: null },
+          vulnerabilities: {
+            available: true,
+            scored: [advisory('ADV-1', fixes[0], ['CVE-2024-1']), advisory('ADV-2', fixes[1], ['CVE-2024-2'])],
+            unscored: [],
+          },
+        }),
+        '*': () => ({ status: 404, body: {} }),
+      });
+      const body = payload(await callWith('check_dependencies', { ecosystem, packages: [{ name, version: installed }] }));
+      strictEqual(body.findings.length, 1);
+      strictEqual(body.findings[0].bumpTo, expected);
+      strictEqual(body.findings[0].advisories.length, 2, 'distinct flaws stay separate');
+    });
+  }
+});

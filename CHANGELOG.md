@@ -27,6 +27,18 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`check_dependencies` and `lookup_package` cover apk, rpm, oci and Terraform, and take a
+  `distro`.** When the instance can look these up (a newer Dependably), they are checked like any
+  other ecosystem, so a clean apk, rpm or image dependency can now come back `clean`. apk and rpm
+  take an optional `distro` (`v3.20`, `Rocky Linux:9`, `Red Hat:enterprise_linux:9::baseos`); the
+  instance infers the release from its upstreams when they all name the same one. An image is
+  checked by its digest, an rpm by its full version-release and an apk by its `-rN` revision, and
+  anything else is listed as unverified with that reason instead of being sent. A dependency whose
+  advisory source was not consulted (no release, unreachable, no coverage, an image without a
+  complete scan) is unverified with the reason, and the server's own message is shown when it
+  rejects a lookup. Terraform has no advisory database, so its providers appear in the new
+  `coverage.notApplicable` list: they do not block `clean` and are not counted in
+  `summary.packagesChecked`. An older instance behaves as before.
 - **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
   For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
   publish.
@@ -95,9 +107,10 @@ All notable changes to this project are documented here. The format follows
   could not be checked, and `clean` is never true while that list has entries. When the server
   returns each advisory's aliases and fixed version with the live answer, these findings get a
   `bumpTo` and fold aliases like any other, with no extra request per advisory. An ecosystem the
-  instance cannot look up (rpm, apk, oci and terraform today) has no live source, so its
-  dependencies the report does not flag are listed as unverified and `clean` is never true for
-  it; the tool description says so.
+  instance cannot look up (rpm, apk, oci and terraform on an older Dependably) has no live
+  source, so its dependencies the report does not flag are listed as unverified and `clean` is
+  never true for it; the tool description says so. A newer Dependably looks all four up (see
+  Added).
 - **A range, tag or source spec is reported as unverified, not clean.** Pass exact resolved
   versions, as a lockfile records them. `^4.17.20`, `latest`, a Go branch or commit, a Maven or
   NuGet bracket range, a Gradle dynamic version, a PEP 440 specifier, or a `git+`/`file:` spec
