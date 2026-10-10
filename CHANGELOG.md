@@ -39,7 +39,8 @@ All notable changes to this project are documented here. The format follows
   command line, and unsets it afterwards. IPv4 and DNS hosts, and Go, are unchanged.
 - **`check_dependencies` no longer reports an npm dependency clean when the advisory endpoint
   skipped it.** The endpoint ignores a name over npm's 214-character limit, a version over 256
-  characters, or either with a control character, and answers with no advisories. Such a
+  characters, or either with a control character, and answers with no advisories; a name or
+  version that is not valid text would fail its whole request. Such a
   dependency is now listed in `coverage.unverified` with the reason. A name over 512 characters is
   rejected in every ecosystem, and a long npm list is split across requests so none passes the
   endpoint's 4 MiB limit.

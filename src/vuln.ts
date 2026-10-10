@@ -739,8 +739,8 @@ export function uniquePackages(packages: readonly InputPackage[], ecosystem: str
  * so, a name over npm's 214-character limit, a version over 256, and either
  * with a control character (dependably-community NpmAuditHandler.IsUsableName
  * / IsUsableVersion). A skipped pair comes back with no advisories, which reads
- * as clean, so such a pair is reported unverified and never sent. So is a name
- * with an unpaired surrogate, which is not valid text and could fail the whole
+ * as clean, so such a pair is reported unverified and never sent. So is a pair
+ * with an unpaired surrogate, which is not valid text and would fail the whole
  * request.
  */
 const NPM_MAX_NAME = 214;
@@ -758,7 +758,7 @@ function npmUnusable(p: InputPackage): string | null {
   if (p.name.length > NPM_MAX_NAME) return `npm package names are at most ${NPM_MAX_NAME} characters; the advisory endpoint skips longer ones`;
   if (p.version.length > NPM_MAX_VERSION) return `versions over ${NPM_MAX_VERSION} characters are skipped by the advisory endpoint`;
   if (hasControlChar(p.name) || hasControlChar(p.version)) return 'a control character in the name or version; the advisory endpoint skips it';
-  if (hasLoneSurrogate(p.name)) return 'the name is not valid text (an unpaired surrogate)';
+  if (hasLoneSurrogate(p.name) || hasLoneSurrogate(p.version)) return 'the name or version is not valid text (an unpaired surrogate)';
   return null;
 }
 

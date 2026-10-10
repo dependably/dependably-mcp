@@ -734,12 +734,17 @@ describe('check_dependencies live coverage', () => {
     strictEqual(res.checked, 5000);
   });
 
-  it('reports an npm name with an unpaired surrogate as unverified', async () => {
+  it('reports an npm name or version with an unpaired surrogate as unverified', async () => {
     const bodies = [];
     const client = { post: async (_path, body) => { bodies.push(body); return {}; } };
-    const res = await liveCheckNpm(client, [{ name: 'a\ud800b', version: '1.0.0' }, { name: '😀ok', version: '1.0.0' }]);
+    const res = await liveCheckNpm(client, [
+      { name: 'a\ud800b', version: '1.0.0' },
+      { name: 'v', version: '1.0.0-\udc00' },
+      { name: '😀ok', version: '1.0.0' },
+    ]);
     deepStrictEqual(bodies, [{ '😀ok': ['1.0.0'] }]);
-    deepStrictEqual(res.unverified.map((u) => u.reason), ['the name is not valid text (an unpaired surrogate)']);
+    deepStrictEqual(res.unverified.map((u) => u.name), ['a\ud800b', 'v']);
+    ok(res.unverified.every((u) => u.reason === 'the name or version is not valid text (an unpaired surrogate)'));
   });
 
   it('rejects a package name over 512 characters with a validation error', async () => {
