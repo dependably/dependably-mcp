@@ -246,6 +246,18 @@ export async function mapLimit<T, R>(
 /** Most advisory-detail lookups one check_dependencies call makes for fixed versions. */
 export const MAX_REMEDIATION_LOOKUPS = 200;
 
+/** One advisory to resolve for one installed package version. */
+export type RemediationPair = { osvId: string; name?: string; version?: string };
+
+/**
+ * The cache key for one advisory's remediation. The package is part of it:
+ * one advisory can affect several packages, each with its own fix, so two
+ * packages at the same version must not share an answer.
+ */
+export function remediationKey(osvId: string, name: string | undefined, version: string | undefined): string {
+  return `${osvId}@@${name ?? ''}@@${version ?? ''}`;
+}
+
 /**
  * The (advisory, version) pairs to resolve, most severe first, capped. Past the
  * cap a finding keeps its advisory but reports no fixed version, which the
@@ -255,17 +267,17 @@ export const MAX_REMEDIATION_LOOKUPS = 200;
 export function remediationPairs(
   hits: readonly ReportItem[],
   cap = MAX_REMEDIATION_LOOKUPS,
-): { pairs: Array<{ osvId: string; version: string }>; skipped: number } {
+): { pairs: RemediationPair[]; skipped: number } {
   const distinct = new Map<string, ReportItem>();
   for (const h of hits) {
-    const key = `${h.osvId}@@${h.version}`;
+    const key = remediationKey(h.osvId, h.packageName, h.version);
     if (!distinct.has(key)) distinct.set(key, h);
   }
   const ordered = [...distinct.values()].sort(
     (a, b) => severityRank(b.severity) - severityRank(a.severity) || (b.cvssScore ?? 0) - (a.cvssScore ?? 0),
   );
   return {
-    pairs: ordered.slice(0, cap).map((h) => ({ osvId: h.osvId, version: h.version })),
+    pairs: ordered.slice(0, cap).map((h) => ({ osvId: h.osvId, name: h.packageName, version: h.version })),
     skipped: Math.max(0, ordered.length - cap),
   };
 }
@@ -292,18 +304,20 @@ export type RemediationLookup = {
  */
 export async function fetchRemediations(
   client: DependablyClient,
-  pairs: ReadonlyArray<{ osvId: string; version?: string }>,
+  pairs: readonly RemediationPair[],
+  ecosystem?: string,
   concurrency = 8,
 ): Promise<Map<string, RemediationLookup>> {
-  const seen = new Map<string, { osvId: string; version?: string }>();
-  for (const p of pairs) seen.set(`${p.osvId}@@${p.version ?? ''}`, p);
+  const seen = new Map<string, RemediationPair>();
+  for (const p of pairs) seen.set(remediationKey(p.osvId, p.name, p.version), p);
   const unique = [...seen.entries()];
 
   const results = await mapLimit(unique, concurrency, async ([, p]) => {
     try {
-      const detail = (await client.get(`/api/v1/vulnerabilities/${encodeURIComponent(p.osvId)}`, {
-        version: p.version,
-      })) as Record<string, unknown> | null;
+      const detail = (await client.get(
+        `/api/v1/vulnerabilities/${encodeURIComponent(p.osvId)}`,
+        advisoryDetailQuery(ecosystem, p.name, p.version),
+      )) as Record<string, unknown> | null;
       return summarizeRemediation(detail);
     } catch {
       // A detail lookup can 404 when the advisory does not touch the org, or
@@ -316,6 +330,28 @@ export async function fetchRemediations(
   const out = new Map<string, RemediationLookup>();
   unique.forEach(([key], i) => out.set(key, results[i]));
   return out;
+}
+
+/**
+ * The query for `GET /api/v1/vulnerabilities/{osvId}`. Naming the package does
+ * two things on newer servers: the fix is resolved against that package
+ * rather than the first one the advisory's stored row records, and an
+ * advisory the org has never stored is served from the upstream OSV record
+ * instead of a 404 (that fallback needs ecosystem, name and version together).
+ * The server rejects one of ecosystem and name without the other, so they are
+ * sent as a pair or not at all; older servers ignore both.
+ */
+export function advisoryDetailQuery(
+  ecosystem: string | undefined,
+  name: string | undefined,
+  version: string | undefined,
+): Record<string, string | undefined> {
+  return ecosystem && name ? { version, ecosystem, name } : { version };
+}
+
+/** Why an `ecosystem`/`name` pair cannot be sent, or null: the server rejects one without the other. */
+export function packagePairProblem(args: { ecosystem?: string; name?: string }): string | null {
+  return Boolean(args.ecosystem) === Boolean(args.name) ? null : 'ecosystem and name must be given together, or neither';
 }
 
 export function summarizeRemediation(detail: Record<string, unknown> | null): RemediationLookup {
@@ -410,7 +446,7 @@ export function buildFindings(
       bumpTo: null,
       advisories: [],
     };
-    const rem = remediations.get(`${hit.osvId}@@${hit.version}`);
+    const rem = remediations.get(remediationKey(hit.osvId, hit.packageName, hit.version));
     // Newer servers list each report row's OSV aliases; the advisory detail
     // carries them too, but its lookup can 404 for an advisory the org's
     // registry does not record.

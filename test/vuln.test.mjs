@@ -12,6 +12,7 @@ import {
   mapLimit,
   matchPackages,
   parseNpmLockfile,
+  remediationKey,
   summarize,
   summarizeRemediation,
 } from '../dist/vuln.js';
@@ -357,8 +358,8 @@ describe('fetchRemediations', () => {
       { osvId: 'A', version: '2.0.0' },
     ]);
     strictEqual(client.calls.length, 2, 'the duplicate pair must be collapsed');
-    strictEqual(map.get('A@@1.0.0').fixedVersion, 'A-1.0.0');
-    strictEqual(map.get('A@@2.0.0').fixedVersion, 'A-2.0.0');
+    strictEqual(map.get(remediationKey('A', undefined, '1.0.0')).fixedVersion, 'A-1.0.0');
+    strictEqual(map.get(remediationKey('A', undefined, '2.0.0')).fixedVersion, 'A-2.0.0');
   });
 
   it('url-encodes the advisory id', async () => {
@@ -376,14 +377,44 @@ describe('fetchRemediations', () => {
       { osvId: 'BAD', version: '1' },
       { osvId: 'GOOD', version: '1' },
     ]);
-    strictEqual(map.get('BAD@@1').fixedVersion, null);
-    strictEqual(map.get('GOOD@@1').fixedVersion, '1.2.3');
+    strictEqual(map.get(remediationKey('BAD', undefined, '1')).fixedVersion, null);
+    strictEqual(map.get(remediationKey('GOOD', undefined, '1')).fixedVersion, '1.2.3');
+  });
+
+  it('names the package to the server, and keys one advisory per package', async () => {
+    const client = stubClient((path, q) => ({ remediation: { fixedVersion: `${q.name}-fix` } }));
+    const map = await fetchRemediations(
+      client,
+      [
+        { osvId: 'A', name: 'next', version: '1.0.0' },
+        { osvId: 'A', name: 'eslint-config-next', version: '1.0.0' },
+      ],
+      'npm',
+    );
+    strictEqual(client.calls.length, 2, 'two packages at one version are two questions');
+    deepStrictEqual(client.calls.map((c) => [c.query.ecosystem, c.query.name, c.query.version]), [
+      ['npm', 'next', '1.0.0'],
+      ['npm', 'eslint-config-next', '1.0.0'],
+    ]);
+    strictEqual(map.get(remediationKey('A', 'next', '1.0.0')).fixedVersion, 'next-fix');
+    strictEqual(map.get(remediationKey('A', 'eslint-config-next', '1.0.0')).fixedVersion, 'eslint-config-next-fix');
+  });
+
+  it('sends neither ecosystem nor name when it lacks either one', async () => {
+    const client = stubClient(() => ({}));
+    await fetchRemediations(client, [{ osvId: 'A', name: 'next', version: '1.0.0' }]);
+    await fetchRemediations(client, [{ osvId: 'B', version: '1.0.0' }], 'npm');
+    for (const c of client.calls) {
+      strictEqual(c.query.ecosystem, undefined);
+      strictEqual(c.query.name, undefined);
+      strictEqual(c.query.version, '1.0.0');
+    }
   });
 
   it('handles an advisory with no version', async () => {
     const client = stubClient(() => ({ remediation: { fixedVersion: '9.9.9' } }));
     const map = await fetchRemediations(client, [{ osvId: 'A' }]);
-    strictEqual(map.get('A@@').fixedVersion, '9.9.9');
+    strictEqual(map.get(remediationKey('A', undefined, undefined)).fixedVersion, '9.9.9');
   });
 });
 
@@ -399,8 +430,8 @@ describe('buildFindings', () => {
       hits,
       new Map([['fast-uri@3.1.3', false]]),
       new Map([
-        ['A@@3.1.3', rem('3.1.4')],
-        ['B@@3.1.3', rem('3.1.6')],
+        [remediationKey('A', 'fast-uri', '3.1.3'), rem('3.1.4')],
+        [remediationKey('B', 'fast-uri', '3.1.3'), rem('3.1.6')],
       ]),
     );
     strictEqual(finding.bumpTo, '3.1.6', 'the lowest fix would leave the follow-up advisory open');
@@ -412,7 +443,7 @@ describe('buildFindings', () => {
     const [finding] = buildFindings(
       [reportItem({ packageName: 'x', version: '2.0.0', osvId: 'C' })],
       new Map([['x@2.0.0', true]]),
-      new Map([['C@@2.0.0', rem('1.9.0')]]),
+      new Map([[remediationKey('C', 'x', '2.0.0'), rem('1.9.0')]]),
     );
     strictEqual(finding.bumpTo, null);
     strictEqual(finding.dev, true);
@@ -422,7 +453,7 @@ describe('buildFindings', () => {
     const [finding] = buildFindings(
       [reportItem({ packageName: 'x', version: '1.0.0', osvId: 'C' })],
       new Map([['x@1.0.0', false]]),
-      new Map([['C@@1.0.0', rem(null)]]),
+      new Map([[remediationKey('C', 'x', '1.0.0'), rem(null)]]),
     );
     strictEqual(finding.bumpTo, null);
     strictEqual(finding.advisories[0].fixedVersion, null);
@@ -460,7 +491,7 @@ describe('buildFindings', () => {
     const [finding] = buildFindings(
       [reportItem({ packageName: 'x', version: '1.0.0', osvId: 'A' })],
       new Map([['x@1.0.0', false]]),
-      new Map([['A@@1.0.0', rem('2.0.0', { cwes: ['CWE-20'], owasp: ['A01:2025'], skills: ['fix-ssrf'] })]]),
+      new Map([[remediationKey('A', 'x', '1.0.0'), rem('2.0.0', { cwes: ['CWE-20'], owasp: ['A01:2025'], skills: ['fix-ssrf'] })]]),
     );
     deepStrictEqual(finding.advisories[0].cwes, ['CWE-20']);
     deepStrictEqual(finding.advisories[0].owasp, ['A01:2025']);
@@ -534,7 +565,7 @@ describe('buildFindings orders rpm version-release strings correctly (B4)', () =
     const [finding] = buildFindings(
       [reportItem({ packageName: 'openssl', version: '1.2.3-4', osvId: 'A' })],
       new Map([['openssl@1.2.3-4', false]]),
-      new Map([['A@@1.2.3-4', { fixedVersion: '1.2.3', cwes: [], owasp: [], skills: [] }]]),
+      new Map([[remediationKey('A', 'openssl', '1.2.3-4'), { fixedVersion: '1.2.3', cwes: [], owasp: [], skills: [] }]]),
       'rpm',
     );
     strictEqual(finding.bumpTo, null, '1.2.3-4 already clears a fix pinned to the bare release 1.2.3');
@@ -544,7 +575,7 @@ describe('buildFindings orders rpm version-release strings correctly (B4)', () =
     const [finding] = buildFindings(
       [reportItem({ packageName: 'openssl', version: '1.2.3-4', osvId: 'A' })],
       new Map([['openssl@1.2.3-4', false]]),
-      new Map([['A@@1.2.3-4', { fixedVersion: '1.2.3-10', cwes: [], owasp: [], skills: [] }]]),
+      new Map([[remediationKey('A', 'openssl', '1.2.3-4'), { fixedVersion: '1.2.3-10', cwes: [], owasp: [], skills: [] }]]),
       'rpm',
     );
     strictEqual(finding.bumpTo, '1.2.3-10');
