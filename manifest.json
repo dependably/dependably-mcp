@@ -76,7 +76,7 @@
     },
     {
       "name": "get_publish_command",
-      "description": "Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs), prompted for, or kept in a config file the comments name."
+      "description": "Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs, in bash or zsh), prompted for, or kept in a config file the notes name. Shell blocks hold commands only; explanations come as prose outside the code fence."
     },
     {
       "name": "get_remediation",

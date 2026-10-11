@@ -51,6 +51,12 @@ async function withServer(cfg, fn) {
 const call = (cfg, name, args = {}) => withServer(cfg, (c) => c.callTool({ name, arguments: args }));
 const payload = (res) => JSON.parse(res.content[0].text);
 
+/** Bodies of the code fences of one language in a tool answer. */
+const fenceBodies = (text, lang = 'bash') =>
+  [...text.matchAll(new RegExp('```' + lang + '\\n([\\s\\S]*?)\\n```', 'g'))].map((m) => m[1]);
+/** Every line of every shell fence: what a user would paste into a terminal. */
+const shellLines = (text) => fenceBodies(text).flatMap((b) => b.split('\n'));
+
 describe('format helpers', () => {
   it('json stringifies objects compactly (no pretty-print indent) and passes strings through', () => {
     strictEqual(json({ a: 1 }).content[0].text, '{"a":1}');
@@ -1960,11 +1966,9 @@ describe('setup tools', () => {
     stubFetch();
     const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
     ok(!res.isError);
-    ok(res.content[0].text.includes('read -rs HEX_API_KEY   #'), res.content[0].text);
-    ok(
-      res.content[0].text.includes(`cd './my_lib' && HEX_API_KEY="$HEX_API_KEY" HEX_API_URL=https://dep.example.com/hex/api mix hex.publish; unset HEX_API_KEY\n`),
-      res.content[0].text,
-    );
+    deepStrictEqual(shellLines(res.content[0].text), [
+      `( cd './my_lib' && read -rs HEX_API_KEY && HEX_API_KEY="$HEX_API_KEY" HEX_API_URL=https://dep.example.com/hex/api mix hex.publish )`,
+    ]);
     ok(!res.content[0].text.includes('HEX_API_KEY=<token>'), 'no token typed into the command line');
     ok(!res.content[0].text.includes('--yes'), 'the user should confirm the publish interactively');
   });
@@ -2008,9 +2012,10 @@ describe('setup tools — apk, terraform and hex install shapes', () => {
     });
     strictEqual(
       res.content[0].text,
-      '```hcl\n' +
-        '# In ~/.terraformrc: provider_installation { network_mirror { url = "https://user:<token>@dep.example.com/terraform/" } }\n' +
-        '# Then declare the provider and run terraform init:\n' +
+      'Set the network mirror once in ~/.terraformrc:\n\n' +
+        '```hcl\n' +
+        'provider_installation {\n  network_mirror {\n    url = "https://user:<token>@dep.example.com/terraform/"\n  }\n}\n```\n\n' +
+        'Then declare the provider and run terraform init:\n\n```hcl\n' +
         'terraform {\n  required_providers {\n    aws = {\n      source  = "registry.terraform.io/hashicorp/aws"\n      version = "5.70.0"\n    }\n  }\n}\n```',
     );
   });
@@ -2033,8 +2038,8 @@ describe('setup tools — apk, terraform and hex install shapes', () => {
     stubFetch();
     const pinnedRes = await call(base, 'get_install_command', { ecosystem: 'hex', package: 'jason', version: '1.4.4' });
     const text = pinnedRes.content[0].text;
-    ok(text.startsWith('```elixir\n'), text);
-    ok(text.includes('mix hex.repo add dependably https://dep.example.com/hex --public-key dependably-hex.pem --auth-key <token>'), text);
+    ok(text.includes('mix hex.repo add dependably https://dep.example.com/hex --public-key dependably-hex.pem --auth-key "$HEX_AUTH_KEY" )'), text);
+    ok(!text.includes('--auth-key <token>'), 'the key is read, not typed into the line');
     ok(text.includes('{:jason, "~> 1.4.4", repo: :dependably}'), text);
     const unpinned = await call(base, 'get_install_command', { ecosystem: 'hex', package: 'jason' });
     ok(unpinned.content[0].text.includes('{:jason, ">= 0.0.0", repo: :dependably}'), unpinned.content[0].text);
@@ -2089,7 +2094,7 @@ describe('setup tools — command injection hardening', () => {
     const res = await call(base, 'get_install_command', { ecosystem: 'npm', package: '@scope/name', version: '1.2.3' });
     strictEqual(
       res.content[0].text,
-      "```bash\nnpm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'\n```",
+      "```bash\nnpm install --registry=https://dep.example.com/npm/ --@scope:registry=https://dep.example.com/npm/ '@scope/name@1.2.3'\n```",
     );
   });
 
@@ -2098,7 +2103,8 @@ describe('setup tools — command injection hardening', () => {
     const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
     strictEqual(
       res.content[0].text,
-      "```bash\n# docker login dep.example.com first\ndocker pull dep.example.com/'library/nginx':'1.27'\n```",
+      'Log in first; docker prompts for the username and password (paste your token as the password):\n\n```bash\ndocker login dep.example.com\n```\n\n' +
+        "Then pull:\n\n```bash\ndocker pull dep.example.com/'library/nginx':'1.27'\n```",
     );
   });
 });
@@ -2109,8 +2115,9 @@ describe('setup tools — maven artifact coordinate', () => {
     const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api' });
     strictEqual(
       res.content[0].text,
-      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
-        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:LATEST'\n# pin a version in production\n```",
+      'Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then run:\n\n' +
+        "```bash\nmvn dependency:get -Dartifact='org.slf4j:slf4j-api:LATEST'\n```\n\n" +
+        'No version was pinned, so this takes LATEST: pin a version in production.',
     );
   });
 
@@ -2119,20 +2126,21 @@ describe('setup tools — maven artifact coordinate', () => {
     const res = await call(base, 'get_install_command', { ecosystem: 'maven', package: 'org.slf4j:slf4j-api', version: '2.0.9' });
     strictEqual(
       res.content[0].text,
-      "```bash\n# Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then:\n" +
-        "mvn dependency:get -Dartifact='org.slf4j:slf4j-api:2.0.9'\n```",
+      'Add https://dep.example.com/maven/ as a <repository> in your pom.xml or settings.xml, then run:\n\n' +
+        "```bash\nmvn dependency:get -Dartifact='org.slf4j:slf4j-api:2.0.9'\n```",
     );
   });
 });
 
 describe('setup tools — cargo config hint', () => {
-  it('emits valid TOML for the registry config, split across comment lines', async () => {
+  it('puts the registry config in its own TOML fence, not in shell comments', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'cargo', package: 'serde', version: '1.0.0' });
     strictEqual(
       res.content[0].text,
-      '```bash\n# In ~/.cargo/config.toml:\n#   [registries.dependably]\n#   index = "sparse+https://dep.example.com/cargo/"\n' +
-        "cargo add 'serde@1.0.0' --registry dependably\n```",
+      'Register the registry in ~/.cargo/config.toml:\n\n' +
+        '```toml\n[registries.dependably]\nindex = "sparse+https://dep.example.com/cargo/"\n```\n\n' +
+        "Then add the crate:\n\n```bash\ncargo add 'serde@1.0.0' --registry dependably\n```",
     );
   });
 });
@@ -2141,7 +2149,7 @@ describe('setup tools — credential prerequisites', () => {
   it('tells pypi installers to put their token in ~/.netrc, since --index-url would override pip.conf', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
-    ok(res.content[0].text.includes('# Put your token in ~/.netrc for dep.example.com (machine dep.example.com login user password <token>) first'), res.content[0].text);
+    ok(res.content[0].text.includes('Put your token in ~/.netrc for dep.example.com first: machine dep.example.com login user password <token>'), res.content[0].text);
     ok(!res.content[0].text.includes('pip.conf'), res.content[0].text);
     ok(res.content[0].text.includes('--index-url https://dep.example.com/simple/'), res.content[0].text);
   });
@@ -2149,19 +2157,25 @@ describe('setup tools — credential prerequisites', () => {
   it('tells nuget installers to add the authenticated source first', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'nuget', package: 'Newtonsoft.Json', version: '13.0.3' });
-    ok(res.content[0].text.includes('# dotnet nuget add source https://dep.example.com/nuget/v3/index.json --name dependably --username user --password <token> first'), res.content[0].text);
+    const t = res.content[0].text;
+    deepStrictEqual(fenceBodies(t), [
+      '( read -rs NUGET_TOKEN && dotnet nuget add source https://dep.example.com/nuget/v3/index.json --name dependably --username user --password "$NUGET_TOKEN" --store-password-in-clear-text )',
+      "dotnet add package 'Newtonsoft.Json' --version '13.0.3' --source https://dep.example.com/nuget/v3/index.json",
+    ]);
+    ok(t.includes('--store-password-in-clear-text, which writes the token to NuGet.Config in plain text'), t);
+    ok(!/--password <token>/.test(t), 'no token typed on the argv');
   });
 
   it('tells oci installers to docker login first', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'oci', package: 'nginx', version: 'latest' });
-    ok(res.content[0].text.includes('# docker login dep.example.com first'), res.content[0].text);
+    deepStrictEqual(fenceBodies(res.content[0].text), ['docker login dep.example.com', "docker pull dep.example.com/'nginx':'latest'"]);
   });
 
   it('tells golang installers to configure netrc, and never falls back around the proxy', async () => {
     stubFetch();
     const res = await call(base, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(res.content[0].text.includes('(machine dep.example.com login user password <token>)'), res.content[0].text);
+    ok(res.content[0].text.includes('machine dep.example.com login user password <token>'), res.content[0].text);
     ok(res.content[0].text.includes('GOPROXY=https://dep.example.com/go go get'), res.content[0].text);
     ok(!res.content[0].text.includes(',direct'), 'a ,direct fallback would fetch refused modules around the proxy');
     ok(!res.content[0].text.includes('GONOSUMDB'), 'GONOSUMDB takes module paths, not a host; the sumdb is proxied');
@@ -2179,29 +2193,68 @@ describe('setup tools — publish commands keep tokens out of history and name r
   it('never types a token into a command line', async () => {
     for (const eco of ['pypi', 'nuget', 'rpm', 'hex', 'maven', 'npm', 'cargo', 'oci']) {
       const t = await text(eco, eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin');
-      const commandLines = t.split('\n').filter((l) => !l.startsWith('#') && !l.startsWith('```'));
-      for (const line of commandLines) ok(!line.includes('<token>'), `${eco}: ${line}`);
+      for (const line of shellLines(t)) ok(!line.includes('<token>'), `${eco}: ${line}`);
     }
   });
 
-  it('pypi reads the password into TWINE_PASSWORD', async () => {
+  it('pypi reads the password into TWINE_PASSWORD on one subshell line', async () => {
     const t = await text('pypi', './dist/pkg-1.0.0.tar.gz');
-    ok(t.includes('read -rs TWINE_PASSWORD   #'), t);
-    ok(t.includes(`TWINE_PASSWORD="$TWINE_PASSWORD" TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz'; unset TWINE_PASSWORD`), t);
+    deepStrictEqual(shellLines(t), [
+      `( read -rs TWINE_PASSWORD && TWINE_PASSWORD="$TWINE_PASSWORD" TWINE_USERNAME=user twine upload --repository-url https://dep.example.com/pypi/legacy/ './dist/pkg-1.0.0.tar.gz' )`,
+    ]);
   });
 
-  it('nuget reads the key, passes it to the one push, and unsets it', async () => {
+  it('nuget reads the key and passes it to the one push on one subshell line', async () => {
     const t = await text('nuget', './bin/Pkg.1.0.0.nupkg');
-    ok(t.includes('read -rs NUGET_API_KEY   #'), t);
-    ok(t.includes(`dotnet nuget push './bin/Pkg.1.0.0.nupkg' --source https://dep.example.com/nuget/v3/index.json --api-key "$NUGET_API_KEY"; unset NUGET_API_KEY`), t);
+    deepStrictEqual(shellLines(t), [
+      `( read -rs NUGET_API_KEY && dotnet nuget push './bin/Pkg.1.0.0.nupkg' --source https://dep.example.com/nuget/v3/index.json --api-key "$NUGET_API_KEY" )`,
+    ]);
   });
 
-  it('no publish command exports a secret, and every secret it reads is unset', async () => {
+  it('no emitted shell line is a comment or carries a trailing one, since interactive zsh would run the words', async () => {
+    stubFetch();
+    const everything = [];
+    for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'golang', 'cargo', 'apk', 'terraform', 'hex']) {
+      const pkg = { golang: 'example.com/pkg', maven: 'g:a', terraform: 'hashicorp/aws', oci: 'library/nginx' }[eco] ?? 'pkg';
+      for (const version of ['1.0.0', undefined]) {
+        everything.push((await call(base, 'get_install_command', { ecosystem: eco, package: pkg, version })).content[0].text);
+      }
+      everything.push((await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin' })).content[0].text);
+      everything.push((await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: './x.crate' })).content[0].text);
+    }
+    for (const t of everything) {
+      for (const line of shellLines(t)) ok(!/(^|\s)#(\s|$)/.test(line), `a comment in a shell fence: ${line}`);
+    }
+  });
+
+  it('no publish command exports a secret, and every read is the last line of its fence inside a subshell', async () => {
     for (const eco of ['npm', 'pypi', 'nuget', 'maven', 'rpm', 'oci', 'cargo', 'hex']) {
       const t = await text(eco, eco === 'cargo' || eco === 'hex' ? './crate' : './dist/a.bin');
       ok(!/\bexport\b/.test(t), `${eco}: ${t}`);
-      for (const [, v] of t.matchAll(/read -rs (\w+)/g)) ok(t.includes(`; unset ${v}`), `${eco}: ${v} is not unset`);
+      ok(!/\bunset\b/.test(t), `${eco}: a subshell needs no unset`);
+      for (const body of fenceBodies(t)) {
+        const lines = body.split('\n');
+        lines.forEach((line, i) => {
+          if (!line.includes('read -rs')) return;
+          ok(/^\( .*read -rs \w+ && .* \)$/.test(line), `${eco}: read is not one subshell line: ${line}`);
+          strictEqual(i, lines.length - 1, `${eco}: read must be the last line of its fence`);
+        });
+      }
     }
+  });
+
+  it('hex publishes from inside the subshell, so the caller\'s directory is untouched', async () => {
+    const t = await text('hex', './my_lib');
+    ok(/^\( cd '\.\/my_lib' && read -rs HEX_API_KEY/m.test(t), t);
+    ok(!/^cd /m.test(t), 'no top-level cd');
+  });
+
+  it('expands a leading ~/ in an artefact path through $HOME instead of quoting it literally', async () => {
+    ok((await text('npm', '~/dist/a.tgz')).includes(`npm publish --registry=https://dep.example.com/npm/ "$HOME"/'dist/a.tgz'`));
+    ok((await text('hex', '~/src/my_lib')).includes(`( cd "$HOME"/'src/my_lib' && read -rs`));
+    ok((await text('hex', '~')).includes(`( cd "$HOME" && read -rs`));
+    ok((await text('cargo', '~/crate')).includes(`--manifest-path "$HOME"/'crate/Cargo.toml'`));
+    ok((await text('npm', '~other/a.tgz')).includes(`'~other/a.tgz'`), 'only ~ and ~/ are expanded');
   });
 
   it('rpm lets curl prompt for the password', async () => {
@@ -2235,9 +2288,9 @@ describe('setup tools — publish commands keep tokens out of history and name r
     const t = await text('cargo', './target/package/foo-0.1.0');
     ok(t.includes("--manifest-path './target/package/foo-0.1.0/Cargo.toml'"), t);
     ok((await text('cargo', './my.crate.dir/')).includes("--manifest-path './my.crate.dir/Cargo.toml'"));
-    ok((await text('hex', './vendor/my_lib-1.2')).includes("cd './vendor/my_lib-1.2' && "));
-    ok((await text('hex', './vendor/my_lib-1.2/mix.exs')).includes("cd './vendor/my_lib-1.2' && "));
-    ok((await text('hex', 'mix.exs')).includes("cd '.' && "));
+    ok((await text('hex', './vendor/my_lib-1.2')).includes("( cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', './vendor/my_lib-1.2/mix.exs')).includes("( cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', 'mix.exs')).includes("( cd '.' && "));
   });
 });
 
@@ -2277,8 +2330,9 @@ describe('setup tools — netrc and artefact path hygiene', () => {
     const v6 = { baseUrl: 'http://[::1]:8443', token: 'tok', timeoutMs: 5000 };
     const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
     ok(!t.includes('machine'), t);
-    ok(t.includes('read -rs PIP_TOKEN'), t);
-    ok(t.includes('PIP_INDEX_URL="http://user:${PIP_TOKEN}@[::1]:8443/simple/" pip install \'requests==1.0.0\'; unset PIP_TOKEN'), t);
+    deepStrictEqual(shellLines(t), [
+      `( read -rs PIP_TOKEN && PIP_TOKEN="$PIP_TOKEN" PIP_INDEX_URL="http://user:\${PIP_TOKEN}@[::1]:8443/simple/" pip install 'requests==1.0.0' )`,
+    ]);
     ok(!t.includes('export PIP_TOKEN') && !t.includes('--index-url'), 'the token stays out of the environment and argv');
     ok(!t.includes('user:tok'), t);
   });
@@ -2289,12 +2343,13 @@ describe('setup tools — netrc and artefact path hygiene', () => {
     const t = (await call(v6, 'get_install_command', { ecosystem: 'pypi', package: 'requests' })).content[0].text;
     ok(!t.includes('machine'), t);
     ok(t.includes('PIP_INDEX_URL="https://user:${PIP_TOKEN}@[2001:db8::1]/simple/" pip install'), t);
+    ok(!t.includes('unset'), t);
   });
 
   it('leaves the pip output for a DNS host byte-identical', async () => {
     stubFetch();
     const t = (await call(ported, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '1.0.0' })).content[0].text;
-    ok(t.includes("# Put your token in ~/.netrc for dep.example.com (machine dep.example.com login user password <token>) first\npip install --index-url https://dep.example.com:8443/simple/ 'requests==1.0.0'"), t);
+    ok(t.includes("Put your token in ~/.netrc for dep.example.com first: machine dep.example.com login user password <token>\n\n```bash\npip install --index-url https://dep.example.com:8443/simple/ 'requests==1.0.0'\n```"), t);
   });
 
   it('keeps the port in Go\'s netrc line, since Go matches netrc on host:port', async () => {
@@ -2305,7 +2360,8 @@ describe('setup tools — netrc and artefact path hygiene', () => {
 
   it('refuses control characters in an artefact path', async () => {
     stubFetch();
-    for (const bad of ['./a\rb.tgz', './a\tb.tgz', './a\x1bb.tgz', './a\x7fb.tgz', './a\x00b.tgz']) {
+    const c1AndBidi = ['\x80', '\x85', '\x9b', '\x9f', '\u202a', '\u202d', '\u202e', '\u2066', '\u2068', '\u2069'].map((c) => `./a${c}b.tgz`);
+    for (const bad of ['./a\rb.tgz', './a\tb.tgz', './a\x1bb.tgz', './a\x7fb.tgz', './a\x00b.tgz', ...c1AndBidi]) {
       const res = await call(base, 'get_publish_command', { ecosystem: 'npm', artifact_path: bad });
       ok(res.isError, JSON.stringify(bad));
     }
@@ -2318,7 +2374,7 @@ describe('setup tools — path-prefixed base URL', () => {
   it('warns about OCI and a URL path prefix when the base URL has one', async () => {
     stubFetch();
     const res = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
-    ok(res.content[0].text.includes('# Note: OCI registries cannot live under a URL path; use the instance host directly'), res.content[0].text);
+    ok(res.content[0].text.includes('Note: OCI registries cannot live under a URL path; use the instance host directly.'), res.content[0].text);
   });
 
   it('omits the warning when the base URL has no path component', async () => {
@@ -2330,20 +2386,20 @@ describe('setup tools — path-prefixed base URL', () => {
   it('keeps host-only destinations bare even when the base URL carries a path prefix', async () => {
     stubFetch();
     const oci = await call(prefixed, 'get_install_command', { ecosystem: 'oci', package: 'library/nginx', version: '1.27' });
-    ok(oci.content[0].text.includes('# docker login host.example.com first'), oci.content[0].text);
+    ok(oci.content[0].text.includes('```bash\ndocker login host.example.com\n```'), oci.content[0].text);
     ok(!oci.content[0].text.includes('docker login host.example.com/dependably'), oci.content[0].text);
 
     const ociPublish = await call(prefixed, 'get_publish_command', { ecosystem: 'oci', artifact_path: './image.tar' });
-    ok(ociPublish.content[0].text.includes('docker login host.example.com\n'), ociPublish.content[0].text);
+    ok(ociPublish.content[0].text.includes('```bash\ndocker login host.example.com\n```'), ociPublish.content[0].text);
     ok(!ociPublish.content[0].text.includes('docker login host.example.com/dependably'), ociPublish.content[0].text);
 
     const golang = await call(prefixed, 'get_install_command', { ecosystem: 'golang', package: 'github.com/foo/bar', version: 'v1.2.3' });
-    ok(golang.content[0].text.includes('(machine host.example.com login user password <token>)'), golang.content[0].text);
+    ok(golang.content[0].text.includes('machine host.example.com login user password <token>'), golang.content[0].text);
     // GOPROXY is a URL, not a bare host, so it keeps the path prefix.
     ok(golang.content[0].text.includes('GOPROXY=https://host.example.com/dependably/go go get'), golang.content[0].text);
 
     const pypi = await call(prefixed, 'get_install_command', { ecosystem: 'pypi', package: 'requests', version: '2.31.0' });
-    ok(pypi.content[0].text.includes('# Put your token in ~/.netrc for host.example.com (machine host.example.com login user password <token>) first'), pypi.content[0].text);
+    ok(pypi.content[0].text.includes('Put your token in ~/.netrc for host.example.com first: machine host.example.com login user password <token>'), pypi.content[0].text);
     // --index-url is a URL, not a bare host, so it keeps the path prefix.
     ok(pypi.content[0].text.includes('--index-url https://host.example.com/dependably/simple/'), pypi.content[0].text);
   });
@@ -2386,7 +2442,7 @@ describe('setup tools — per-ecosystem package validation', () => {
   }
 
   const legitCases = [
-    ['npm', '@scope/name', "npm install --registry=https://dep.example.com/npm/ '@scope/name@1.2.3'"],
+    ['npm', '@scope/name', "npm install --registry=https://dep.example.com/npm/ --@scope:registry=https://dep.example.com/npm/ '@scope/name@1.2.3'"],
     ['npm', 'JSONStream', "npm install --registry=https://dep.example.com/npm/ 'JSONStream@1.2.3'"],
     ['pypi', 'zope.interface', "pip install --index-url https://dep.example.com/simple/ 'zope.interface==1.2.3'"],
     ['nuget', 'Microsoft.Extensions.Logging', "dotnet add package 'Microsoft.Extensions.Logging' --version '1.2.3' --source https://dep.example.com/nuget/v3/index.json"],

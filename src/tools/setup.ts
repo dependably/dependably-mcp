@@ -137,12 +137,17 @@ function isSafeArtifactPath(path: string): boolean {
   if (path.length === 0 || path.startsWith('-')) return false;
   for (const ch of path) {
     const code = ch.codePointAt(0) ?? 0;
-    if (code <= 0x1f || code === 0x7f || ARTIFACT_PATH_FORBIDDEN.has(ch)) return false;
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f) || isBidiControl(code) || ARTIFACT_PATH_FORBIDDEN.has(ch)) return false;
   }
   return true;
 }
+
+/** Bidi embeddings, overrides and isolates: they reorder how a pasted path is displayed, not what it is. */
+function isBidiControl(code: number): boolean {
+  return (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069);
+}
 const ARTIFACT_PATH_MESSAGE =
-  'Artefact path must not contain shell metacharacters (; | & $ ` < > ( ) or newlines), control characters, shell glob characters (* ? [ ] { }), or start with -. Spaces are fine, but name one file — globs are not expanded.';
+  'Artefact path must not contain shell metacharacters (; | & $ ` < > ( ) or newlines), control characters (including C1 controls and bidirectional overrides), shell glob characters (* ? [ ] { }), or start with -. Spaces are fine, but name one file — globs are not expanded.';
 
 /** `""`/whitespace-only means "unpinned", the same as omitting the field entirely. */
 const versionField = z
@@ -167,9 +172,51 @@ function shq(value: string): string {
   return `'${escaped}'`;
 }
 
-function fenced(lang: string, body: string): ToolResult {
-  return { content: [{ type: 'text', text: `\`\`\`${lang}\n${body}\n\`\`\`` }] };
+/**
+ * Quote a value for a shell word only when it needs it. A URL or host made of
+ * the characters below passes through untouched, so ordinary output stays
+ * readable; anything else, notably the `[...]` of an IPv6 literal, which zsh
+ * and bash read as a glob (zsh aborts with "no matches found"), is
+ * single-quoted by {@link shq}.
+ */
+function word(value: string): string {
+  return /^[A-Za-z0-9_./:@%+,-]+$/.test(value) ? value : shq(value);
 }
+
+/**
+ * A path as one shell word. A leading `~` is expanded by the shell only when it
+ * is unquoted, and {@link shq} would make it a literal directory named `~`, so
+ * `~` and `~/rest` become `"$HOME"` and `"$HOME"/'rest'`.
+ */
+function pathWord(path: string): string {
+  if (path === '~') return '"$HOME"';
+  if (path.startsWith('~/')) return `"$HOME"/${shq(path.slice(2))}`;
+  return shq(path);
+}
+
+type Part = string | { lang: string; body: string };
+
+/**
+ * Prose and fences, in order, separated by blank lines. A shell fence holds
+ * commands only. A `#` comment line is not safe in one: interactive zsh has
+ * interactive_comments off by default, so it runs `#` as a command ("command
+ * not found: #") or, trailing a command, hands the words to it as arguments.
+ * Explanations are prose parts outside the fence. A command that waits for
+ * typed input (a {@link withSecret} read, `docker login`) is the last line of
+ * its fence, because a shell without bracketed paste would otherwise feed the
+ * next pasted line to it as the answer.
+ */
+function render(parts: Part[]): ToolResult {
+  const text = parts.map((p) => (typeof p === 'string' ? p : '```' + p.lang + '\n' + p.body + '\n```')).join('\n\n');
+  return { content: [{ type: 'text', text }] };
+}
+
+function fenced(lang: string, body: string): ToolResult {
+  return render([{ lang, body }]);
+}
+
+const SECRET_NOTE =
+  'The command waits silently for your token: paste it and press Enter. It is not echoed, not saved to history and not left in your shell afterwards. Run it in bash or zsh (read -s is not POSIX sh).';
 
 export function registerSetupTools(server: McpServer, cfg: Config, planes: EcosystemPlanes): RegisteredTool[] {
   const ecosystem = enumOf(offeredSetupEcosystems(planes.setup), FALLBACK_SETUP_ECOSYSTEMS).describe(
@@ -217,7 +264,7 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
     'get_publish_command',
     {
       title: 'Publish command',
-      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs), prompted for, or kept in a config file the comments name.',
+      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs, in bash or zsh), prompted for, or kept in a config file the notes name. Shell blocks hold commands only; explanations come as prose outside the code fence.',
       annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: z.object({
         ecosystem,
@@ -236,15 +283,22 @@ function proxyOnly(text: string): ToolResult {
 }
 
 /**
- * Reads a secret without echoing it or leaving it in shell history, which a
- * token typed into the command line would, and hands it to one command only:
- * the variable is never exported, so later commands in the shell do not
- * inherit it, and it is unset once the command finishes, whatever its exit
- * status. `command` must not reference the variable itself; it receives it in
- * its environment.
+ * Reads a secret without echoing it and hands it to one command only, on a
+ * single line run in a subshell. The variable lives and dies in the subshell,
+ * so nothing needs unsetting and an interrupt (Ctrl-C) cannot leave it behind;
+ * it is never exported, so later commands do not inherit it. One line, because
+ * with `read` and the command on separate lines a shell without bracketed paste
+ * (macOS /bin/bash 3.2) would feed the command line to `read` as the token and
+ * then run the real token as a command, saving it to history. `command` must
+ * not reference the variable itself when `inEnv` is set (the default): it
+ * receives the secret in its environment. Pass `inEnv: false` when the command
+ * line itself names the variable (`--password "$VAR"`), which is the only route
+ * some clients offer. `before` runs ahead of the read (a `cd`), in the same
+ * subshell.
  */
-function withSecret(variable: string, prefix: string, command: string): string {
-  return `read -rs ${variable}   # paste your token; it is not echoed or saved to history\n${prefix}${variable}="$${variable}" ${command}; unset ${variable}`;
+function withSecret(variable: string, command: string, opts: { before?: string; inEnv?: boolean } = {}): string {
+  const { before = '', inEnv = true } = opts;
+  return `( ${before}read -rs ${variable} && ${inEnv ? `${variable}="$${variable}" ` : ''}${command} )`;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -337,65 +391,82 @@ function terraformInstall(base: string, pkg: string, ver: string | undefined): T
   const localName = pkg.split('/').pop();
   const version = ver ? `\n      version = "${ver}"` : '';
   const mirror = `${new URL(base).protocol}//user:<token>@${stripScheme(base)}/terraform/`;
-  const note = base.startsWith('http://')
-    ? '\n# Note: Terraform refuses an http:// network mirror; serve this instance over HTTPS'
-    : '';
-  return fenced(
-    'hcl',
-    `# In ~/.terraformrc: provider_installation { network_mirror { url = "${mirror}" } }${note}\n# Then declare the provider and run terraform init:\nterraform {\n  required_providers {\n    ${localName} = {\n      source  = "${pkg}"${version}\n    }\n  }\n}`,
+  const parts: Part[] = [
+    'Set the network mirror once in ~/.terraformrc:',
+    { lang: 'hcl', body: `provider_installation {\n  network_mirror {\n    url = "${mirror}"\n  }\n}` },
+  ];
+  if (base.startsWith('http://')) parts.push('Terraform refuses an http:// network mirror; serve this instance over HTTPS.');
+  parts.push(
+    'Then declare the provider and run terraform init:',
+    { lang: 'hcl', body: `terraform {\n  required_providers {\n    ${localName} = {\n      source  = "${pkg}"${version}\n    }\n  }\n}` },
   );
+  return render(parts);
 }
 
 function installCommand(base: string, ecosystem: string, pkg: string, ver: string | undefined): ToolResult {
   switch (ecosystem) {
-    case 'npm':
-      return fenced('bash', `npm install --registry=${base}/npm/ ${shq(pinned(pkg, '@', ver))}`);
+    case 'npm': {
+      // npm resolves a scoped package through `@scope:registry` ahead of
+      // --registry, so a user's own scope mapping would send the install
+      // elsewhere; naming the scope on the command line takes precedence.
+      const registry = word(`${base}/npm/`);
+      const scope = pkg.startsWith('@') ? pkg.slice(0, pkg.indexOf('/')) : undefined;
+      const scoped = scope ? ` --${scope}:registry=${registry}` : '';
+      return fenced('bash', `npm install --registry=${registry}${scoped} ${shq(pinned(pkg, '@', ver))}`);
+    }
     case 'pypi': {
       if (new URL(base).hostname.startsWith('[')) {
         // requests splits the netloc on ':' to find the netrc entry, which cuts a
         // bracketed IPv6 host to '[', so no machine line can match. Userinfo in the
         // index URL needs no netrc. PIP_INDEX_URL, set for the one command, keeps
-        // the token out of pip's argv, and the variable is unset afterwards.
+        // the token out of pip's argv.
         const indexUrl = base.replace('://', '://user:${PIP_TOKEN}@');
-        return fenced(
-          'bash',
-          `# pip cannot match a .netrc entry for an IPv6 host, so the token goes in the index URL instead.\n# It must be URL-safe (percent-encode any reserved characters).\nread -rs PIP_TOKEN\nPIP_INDEX_URL="${indexUrl}/simple/" pip install ${shq(pinned(pkg, '==', ver))}; unset PIP_TOKEN`,
-        );
+        return render([
+          'pip cannot match a .netrc entry for an IPv6 host, so the token goes in the index URL instead. It must be URL-safe (percent-encode any reserved characters).',
+          SECRET_NOTE,
+          { lang: 'bash', body: withSecret('PIP_TOKEN', `PIP_INDEX_URL="${indexUrl}/simple/" pip install ${shq(pinned(pkg, '==', ver))}`) },
+        ]);
       }
       const host = netrcHost(base);
-      return fenced(
-        'bash',
-        `# Put your token in ~/.netrc for ${host} (machine ${host} login user password <token>) first\npip install --index-url ${base}/simple/ ${shq(pinned(pkg, '==', ver))}`,
-      );
+      return render([
+        `Put your token in ~/.netrc for ${host} first: machine ${host} login user password <token>`,
+        { lang: 'bash', body: `pip install --index-url ${word(`${base}/simple/`)} ${shq(pinned(pkg, '==', ver))}` },
+      ]);
     }
     case 'nuget':
-      return fenced(
-        'bash',
-        `# dotnet nuget add source ${base}/nuget/v3/index.json --name dependably --username user --password <token> first\ndotnet add package ${shq(pkg)}${flag(' --version ', ver)} --source ${base}/nuget/v3/index.json`,
-      );
+      // Off Windows NuGet refuses to store a source password without
+      // --store-password-in-clear-text; it is on dotnet's argv while the command
+      // runs, the same exposure as the publish side's --api-key.
+      return render([
+        'Add the authenticated source once. dotnet takes the password only as an argument, so it is visible to ps on this machine while the command runs, and off Windows it needs --store-password-in-clear-text, which writes the token to NuGet.Config in plain text (on Windows, drop that flag).',
+        SECRET_NOTE,
+        { lang: 'bash', body: withSecret('NUGET_TOKEN', `dotnet nuget add source ${word(`${base}/nuget/v3/index.json`)} --name dependably --username user --password "$NUGET_TOKEN" --store-password-in-clear-text`, { inEnv: false }) },
+        'Then add the package:',
+        { lang: 'bash', body: `dotnet add package ${shq(pkg)}${flag(' --version ', ver)} --source ${word(`${base}/nuget/v3/index.json`)}` },
+      ]);
     case 'maven': {
       const artifact = ver ? `${pkg}:${ver}` : `${pkg}:LATEST`;
-      const note = ver ? '' : '\n# pin a version in production';
-      return fenced(
-        'bash',
-        `# Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then:\nmvn dependency:get -Dartifact=${shq(artifact)}${note}`,
-      );
+      return render([
+        `Add ${base}/maven/ as a <repository> in your pom.xml or settings.xml, then run:`,
+        { lang: 'bash', body: `mvn dependency:get -Dartifact=${shq(artifact)}` },
+        ...(ver ? [] : ['No version was pinned, so this takes LATEST: pin a version in production.']),
+      ]);
     }
     case 'rpm':
-      return fenced(
-        'bash',
-        `# Add ${base}/rpm/ as a dnf repo (baseurl) first, then:\ndnf install ${shq(pinned(pkg, '-', ver))}`,
-      );
+      return render([
+        `Add ${base}/rpm/ as a dnf repo (baseurl) first, then run:`,
+        { lang: 'bash', body: `dnf install ${shq(pinned(pkg, '-', ver))}` },
+      ]);
     case 'oci': {
       const loginHost = hostOnly(base);
       const pullHost = stripScheme(base);
-      const note = hasPathPrefix(base)
-        ? '\n# Note: OCI registries cannot live under a URL path; use the instance host directly'
-        : '';
-      return fenced(
-        'bash',
-        `# docker login ${loginHost} first\ndocker pull ${pullHost}/${shq(pkg)}:${orLatest(ver)}${note}`,
-      );
+      return render([
+        'Log in first; docker prompts for the username and password (paste your token as the password):',
+        { lang: 'bash', body: `docker login ${word(loginHost)}` },
+        ...(hasPathPrefix(base) ? ['Note: OCI registries cannot live under a URL path; use the instance host directly.'] : []),
+        'Then pull:',
+        { lang: 'bash', body: `docker pull ${word(pullHost)}/${shq(pkg)}:${orLatest(ver)}` },
+      ]);
     }
     case 'golang': {
       // No `,direct` fallback: Go falls through to the origin on a 404 or 410,
@@ -403,33 +474,41 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       // database is proxied under /go/sumdb/, so GONOSUMDB is not needed.
       // Go matches a netrc machine on host:port, so the port stays.
       const host = hostOnly(base);
-      return fenced(
-        'bash',
-        `# Add credentials to ~/.netrc first (machine ${host} login user password <token>), then, inside your module:\nGOPROXY=${base}/go go get ${shq(pkg)}@${orLatest(ver)}`,
-      );
+      return render([
+        `Add credentials to ~/.netrc first: machine ${host} login user password <token>. Then, inside your module, run:`,
+        { lang: 'bash', body: `GOPROXY=${word(`${base}/go`)} go get ${shq(pkg)}@${orLatest(ver)}` },
+      ]);
     }
     case 'cargo':
-      return fenced(
-        'bash',
-        `# In ~/.cargo/config.toml:\n#   [registries.dependably]\n#   index = "sparse+${base}/cargo/"\ncargo add ${shq(pinned(pkg, '@', ver))} --registry dependably`,
-      );
+      return render([
+        'Register the registry in ~/.cargo/config.toml:',
+        { lang: 'toml', body: `[registries.dependably]\nindex = "sparse+${base}/cargo/"` },
+        'Then add the crate:',
+        { lang: 'bash', body: `cargo add ${shq(pinned(pkg, '@', ver))} --registry dependably` },
+      ]);
     case 'apk':
       // The repository line needs an Alpine release and repo (v3.22/main) that
       // only the user knows, so it is described rather than written out.
-      return fenced(
-        'bash',
-        `# Add ${base}/apk/<release>/<repo> lines (e.g. v3.22/main) to /etc/apk/repositories,\n# with user:<token>@ in the URL, then:\napk update\napk add ${shq(pinned(pkg, '=', ver))}`,
-      );
+      return render([
+        `Add ${base}/apk/<release>/<repo> lines (e.g. v3.22/main) to /etc/apk/repositories, with user:<token>@ in the URL, then run:`,
+        { lang: 'bash', body: `apk update\napk add ${shq(pinned(pkg, '=', ver))}` },
+      ]);
     case 'terraform':
       return terraformInstall(base, pkg, ver);
     case 'hex': {
       // The dependency names the repository, not a URL: the registry signs its
       // index under the name "dependably" and Hex refuses any other.
       const requirement = ver ? `~> ${ver}` : '>= 0.0.0';
-      return fenced(
-        'elixir',
-        `# Register the repository once:\n#   curl -sSf ${base}/hex/public_key -o dependably-hex.pem\n#   mix hex.repo add dependably ${base}/hex --public-key dependably-hex.pem --auth-key <token>\n# Then add to deps in mix.exs and run mix deps.get:\n{:${pkg}, "${requirement}", repo: :dependably}`,
-      );
+      return render([
+        'Register the repository once. mix takes the key only as an argument, so it is visible to ps on this machine while the command runs.',
+        SECRET_NOTE,
+        {
+          lang: 'bash',
+          body: `curl -sSf ${word(`${base}/hex/public_key`)} -o dependably-hex.pem\n${withSecret('HEX_AUTH_KEY', `mix hex.repo add dependably ${word(`${base}/hex`)} --public-key dependably-hex.pem --auth-key "$HEX_AUTH_KEY"`, { inEnv: false })}`,
+        },
+        'Then add to deps in mix.exs and run mix deps.get:',
+        { lang: 'elixir', body: `{:${pkg}, "${requirement}", repo: :dependably}` },
+      ]);
     }
     default:
       throw new Error(`Unsupported ecosystem: ${ecosystem}`);
@@ -442,44 +521,50 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
  * content, and it does not belong inline in a registration.
  */
 function publishCommand(base: string, ecosystem: string, artifactPath: string): ToolResult {
-  const p = shq(artifactPath);
+  const p = pathWord(artifactPath);
   switch (ecosystem) {
     case 'npm':
-      return fenced(
-        'bash',
-        `# Requires .npmrc with //${stripScheme(base)}/npm/:_authToken=<token>\nnpm publish --registry=${base}/npm/ ${p}`,
-      );
+      return render([
+        `Requires .npmrc with //${stripScheme(base)}/npm/:_authToken=<token>. For a scoped package (@scope/name), npm prefers an @scope:registry setting in your npm config, or a registry in the package's publishConfig, over --registry, so a scoped publish can go to the wrong registry unless you also pass --@scope:registry=${base}/npm/ with the package's own scope (or fix that setting).`,
+        { lang: 'bash', body: `npm publish --registry=${word(`${base}/npm/`)} ${p}` },
+      ]);
     case 'pypi':
-      return fenced(
-        'bash',
-        withSecret('TWINE_PASSWORD', '', `TWINE_USERNAME=user twine upload --repository-url ${base}/pypi/legacy/ ${p}`),
-      );
+      return render([
+        SECRET_NOTE,
+        { lang: 'bash', body: withSecret('TWINE_PASSWORD', `TWINE_USERNAME=user twine upload --repository-url ${word(`${base}/pypi/legacy/`)} ${p}`) },
+      ]);
     case 'nuget':
       // dotnet nuget push takes the key only as --api-key, so it is on dotnet's
       // argv (visible to this machine's ps) while the push runs. The other route,
       // the source's stored credentials, needs a Basic challenge the server's 401
       // does not send, and stores the token in plaintext NuGet.Config off Windows.
-      return fenced(
-        'bash',
-        `read -rs NUGET_API_KEY   # paste your token; it is not echoed or saved to history\ndotnet nuget push ${p} --source ${base}/nuget/v3/index.json --api-key "$NUGET_API_KEY"; unset NUGET_API_KEY`,
-      );
+      return render([
+        'dotnet takes the key only as --api-key, so it is visible to ps on this machine while the push runs.',
+        SECRET_NOTE,
+        { lang: 'bash', body: withSecret('NUGET_API_KEY', `dotnet nuget push ${p} --source ${word(`${base}/nuget/v3/index.json`)} --api-key "$NUGET_API_KEY"`, { inEnv: false }) },
+      ]);
     case 'maven':
-      return fenced(
-        'bash',
-        `# Add <server><id>dependably</id> with user / <token> to ~/.m2/settings.xml, then upload the file\n# (or run mvn deploy with ${base}/maven/ as the distributionManagement repository):\nmvn deploy:deploy-file -Dfile=${p} -Durl=${base}/maven/ -DrepositoryId=dependably -DgroupId=<groupId> -DartifactId=<artifactId> -Dversion=<version>`,
-      );
+      return render([
+        `Add <server><id>dependably</id> with user / <token> to ~/.m2/settings.xml, then upload the file (or run mvn deploy with ${base}/maven/ as the distributionManagement repository). Replace the <groupId>, <artifactId> and <version> placeholders.`,
+        { lang: 'bash', body: `mvn deploy:deploy-file -Dfile=${p} -Durl=${word(`${base}/maven/`)} -DrepositoryId=dependably -DgroupId=<groupId> -DartifactId=<artifactId> -Dversion=<version>` },
+      ]);
     case 'rpm':
       // `-u user` with no password makes curl prompt for it.
-      return fenced('bash', `# curl prompts for the password: paste your token\ncurl -u user --upload-file ${p} ${base}/rpm/upload`);
+      return render([
+        'curl prompts for the password: paste your token.',
+        { lang: 'bash', body: `curl -u user --upload-file ${p} ${word(`${base}/rpm/upload`)}` },
+      ]);
     case 'oci': {
       // The artefact is an image tarball (docker save); a path is not an image
       // reference, so it is loaded first and the loaded name is tagged.
       const loginHost = hostOnly(base);
-      const refHost = stripScheme(base);
-      return fenced(
-        'bash',
-        `docker login ${loginHost}\ndocker load -i ${p}   # prints "Loaded image: <name>:<tag>"\ndocker tag <name>:<tag> ${refHost}/<image>:<tag>\ndocker push ${refHost}/<image>:<tag>`,
-      );
+      const refHost = word(stripScheme(base));
+      return render([
+        'Log in first; docker prompts for the username and password (paste your token as the password):',
+        { lang: 'bash', body: `docker login ${word(loginHost)}` },
+        'docker load prints "Loaded image: <name>:<tag>"; use that name and tag, and replace <image> and <tag> with the repository and tag to publish under:',
+        { lang: 'bash', body: `docker load -i ${p}\ndocker tag <name>:<tag> ${refHost}/<image>:<tag>\ndocker push ${refHost}/<image>:<tag>` },
+      ]);
     }
     case 'golang':
       return proxyOnly('Go is proxy-only — there is no hosted publish/upload endpoint. Publish by pushing a version tag to the module\'s VCS repo; the proxy fetches it on first request.');
@@ -487,24 +572,28 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       // cargo publishes from source: the path names the crate's directory or
       // its Cargo.toml. A packaged .crate does not sit beside its source, so
       // no manifest path can be derived from one.
-      const prereq = '# Requires [registries.dependably] in ~/.cargo/config.toml, and cargo login --registry dependably.';
+      const prereq = 'Requires [registries.dependably] in ~/.cargo/config.toml, and cargo login --registry dependably.';
       if (artifactPath.endsWith('.crate')) {
-        return fenced('bash', `${prereq}\n# cargo publishes from source, not a packaged .crate: run this in the crate's own directory.\ncargo publish --registry dependably`);
+        return render([
+          `${prereq} cargo publishes from source, not a packaged .crate: run this in the crate's own directory.`,
+          { lang: 'bash', body: 'cargo publish --registry dependably' },
+        ]);
       }
       const manifest = `${directoryOf(artifactPath, 'Cargo.toml').replace(/\/$/, '')}/Cargo.toml`;
-      return fenced('bash', `${prereq}\ncargo publish --registry dependably --manifest-path ${shq(manifest)}`);
+      return render([prereq, { lang: 'bash', body: `cargo publish --registry dependably --manifest-path ${pathWord(manifest)}` }]);
     }
     case 'apk':
       return proxyOnly('apk is proxy-only — there is no hosted publish/upload endpoint. Packages are fetched from the configured Alpine upstream on first request.');
     case 'terraform':
       return proxyOnly('Terraform is proxy-only — there is no hosted publish/upload endpoint. Providers are fetched from their upstream registry on first request.');
     case 'hex': {
-      const cd = `cd ${shq(directoryOf(artifactPath, 'mix.exs'))} && `;
-      const publish = withSecret('HEX_API_KEY', cd, `HEX_API_URL=${base}/hex/api mix hex.publish`);
-      return fenced(
-        'bash',
-        `# Requires the dependably repository registered with mix hex.repo add (see get_install_command).\n${publish}`,
-      );
+      // The cd happens inside the subshell, so the user's own directory is left alone.
+      const publish = withSecret('HEX_API_KEY', `HEX_API_URL=${word(`${base}/hex/api`)} mix hex.publish`, { before: `cd ${pathWord(directoryOf(artifactPath, 'mix.exs'))} && ` });
+      return render([
+        'Requires the dependably repository registered with mix hex.repo add (see get_install_command).',
+        SECRET_NOTE,
+        { lang: 'bash', body: publish },
+      ]);
     }
   }
   throw new Error(`Unsupported ecosystem: ${ecosystem}`);
