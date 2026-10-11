@@ -157,6 +157,22 @@ const versionField = z
   .refine((v) => v === undefined || VERSION_PATTERN.test(v), { message: VERSION_MESSAGE })
   .describe('Optional pinned version. An empty string is treated as unpinned.');
 
+/** An optional publish input that is checked against `pattern`; an empty or whitespace-only string means "not supplied". */
+function publishField(pattern: RegExp, message: string, max: number, description: string) {
+  return z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v))
+    .refine((v) => v === undefined || (v.length <= max && pattern.test(v)), { message })
+    .describe(description);
+}
+
+const MAVEN_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
+// The OCI distribution spec's repository grammar, the same one NAME_RULES.oci enforces.
+const OCI_REPOSITORY_PATTERN = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*$/;
+const OCI_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+const MAVEN_ID_MESSAGE = 'Maven groupId and artifactId are letters, digits, . _ - only, at most 128 characters.';
+
 const artifactPath = z
   .string()
   .refine(isSafeArtifactPath, { message: ARTIFACT_PATH_MESSAGE })
@@ -264,14 +280,47 @@ export function registerSetupTools(server: McpServer, cfg: Config, planes: Ecosy
     'get_publish_command',
     {
       title: 'Publish command',
-      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs, in bash or zsh), prompted for, or kept in a config file the notes name. Shell blocks hold commands only; explanations come as prose outside the code fence.',
+      description: 'Build the shell command that publishes an artefact through this Dependably instance. Returns the command as text only; nothing is executed. No command carries the token itself: it is read without echo (read -rs, in bash or zsh), prompted for, or kept in a config file the notes name. For maven (groupId, artifactId, version) and oci (image, tag) the command is complete only once those inputs are supplied; without them the reply names what is missing instead of a command with placeholders. Shell blocks hold commands only; explanations come as prose outside the code fence.',
       annotations: LOCAL_READ_ANNOTATIONS,
       inputSchema: z.object({
         ecosystem,
         artifact_path: artifactPath,
+        groupId: publishField(MAVEN_ID_PATTERN, MAVEN_ID_MESSAGE, 128, 'maven only: the groupId to publish under. Required for a runnable maven command.'),
+        artifactId: publishField(MAVEN_ID_PATTERN, MAVEN_ID_MESSAGE, 128, 'maven only: the artifactId to publish under. Required for a runnable maven command.'),
+        version: publishField(VERSION_PATTERN, VERSION_MESSAGE, 256, 'maven only: the version to publish. Required for a runnable maven command. An empty string is treated as not supplied.'),
+        image: publishField(
+          OCI_REPOSITORY_PATTERN,
+          'OCI repository names are lowercase path segments (e.g. team/app), at most 255 characters.',
+          255,
+          'oci only: the repository path to publish under on this instance (e.g. team/app). Required for a runnable oci command.',
+        ),
+        tag: publishField(OCI_TAG_PATTERN, 'OCI tags are letters, digits, _ . - only, at most 128 characters, and do not start with . or -.', 128, 'oci only: the tag to publish under (e.g. 1.0.0). Required for a runnable oci command.'),
       }).strict(),
     },
-    async (args) => publishCommand(cfg.baseUrl, args.ecosystem, args.artifact_path),
+    // Which inputs apply is checked here, not in the schema, for the same
+    // reason `package` is above: an object-level refinement would hide every
+    // field from the advertised JSON Schema.
+    async (args) => {
+      const supplied: Array<[string, string, string | undefined]> = [
+        ['maven', 'groupId', args.groupId],
+        ['maven', 'artifactId', args.artifactId],
+        ['maven', 'version', args.version],
+        ['oci', 'image', args.image],
+        ['oci', 'tag', args.tag],
+      ];
+      const misplaced = supplied.filter(([eco, , value]) => value !== undefined && eco !== args.ecosystem);
+      if (misplaced.length > 0) {
+        const detail = misplaced.map(([eco, name]) => `${name} (${eco} only)`).join(', ');
+        return err(`These inputs do not apply to ${args.ecosystem}: ${detail}. Omit them.`);
+      }
+      return publishCommand(cfg.baseUrl, args.ecosystem, args.artifact_path, {
+        groupId: args.groupId,
+        artifactId: args.artifactId,
+        version: args.version,
+        image: args.image,
+        tag: args.tag,
+      });
+    },
   ));
 
   return tools;
@@ -522,7 +571,19 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
  * the same reason as {@link installCommand}: the per-ecosystem branching is the
  * content, and it does not belong inline in a registration.
  */
-function publishCommand(base: string, ecosystem: string, artifactPath: string): ToolResult {
+interface PublishInputs {
+  groupId?: string;
+  artifactId?: string;
+  version?: string;
+  image?: string;
+  tag?: string;
+}
+
+function missingInputs(inputs: Array<[string, string | undefined]>): string[] {
+  return inputs.filter(([, value]) => value === undefined).map(([name]) => name);
+}
+
+function publishCommand(base: string, ecosystem: string, artifactPath: string, inputs: PublishInputs = {}): ToolResult {
   const p = pathWord(artifactPath);
   switch (ecosystem) {
     case 'npm':
@@ -545,11 +606,20 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
         SECRET_NOTE,
         { lang: 'bash', body: withSecret('NUGET_API_KEY', `dotnet nuget push ${p} --source ${word(`${base}/nuget/v3/index.json`)} --api-key "$NUGET_API_KEY"`, { inEnv: false }) },
       ]);
-    case 'maven':
+    case 'maven': {
+      const settings = 'Add a <server> entry with <id>dependably</id>, your username and the token as the password to ~/.m2/settings.xml first.';
+      const { groupId, artifactId, version } = inputs;
+      if (groupId === undefined || artifactId === undefined || version === undefined) {
+        const missing = missingInputs([['groupId', groupId], ['artifactId', artifactId], ['version', version]]).join(', ');
+        return render([
+          `${settings} The upload needs the artefact's coordinates, and no command is given without them. Missing: ${missing}. Call get_publish_command again with ${missing} for a command you can run as it is.`,
+        ]);
+      }
       return render([
-        `Add <server><id>dependably</id> with user / <token> to ~/.m2/settings.xml, then upload the file (or run mvn deploy with ${base}/maven/ as the distributionManagement repository). Replace the <groupId>, <artifactId> and <version> placeholders.`,
-        { lang: 'bash', body: `mvn deploy:deploy-file -Dfile=${p} -Durl=${word(`${base}/maven/`)} -DrepositoryId=dependably -DgroupId=<groupId> -DartifactId=<artifactId> -Dversion=<version>` },
+        `${settings} The command uploads the file with mvn deploy:deploy-file. To deploy from a project instead, run mvn deploy with ${base}/maven/ as the distributionManagement repository.`,
+        { lang: 'bash', body: `mvn deploy:deploy-file -Dfile=${p} -Durl=${word(`${base}/maven/`)} -DrepositoryId=dependably -DgroupId=${word(groupId)} -DartifactId=${word(artifactId)} -Dversion=${word(version)}` },
       ]);
+    }
     case 'rpm':
       // `-u user` with no password makes curl prompt for it.
       return render([
@@ -558,14 +628,29 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       ]);
     case 'oci': {
       // The artefact is an image tarball (docker save); a path is not an image
-      // reference, so it is loaded first and the loaded name is tagged.
+      // reference, so it is loaded first and the loaded reference is tagged.
       const loginHost = hostOnly(base);
       const refHost = word(stripScheme(base));
-      return render([
+      const login: Part[] = [
         'Log in first; docker prompts for the username and password (paste your token as the password):',
         { lang: 'bash', body: `docker login ${word(loginHost)}` },
-        'docker load prints "Loaded image: <name>:<tag>"; use that name and tag, and replace <image> and <tag> with the repository and tag to publish under:',
-        { lang: 'bash', body: `docker load -i ${p}\ndocker tag <name>:<tag> ${refHost}/<image>:<tag>\ndocker push ${refHost}/<image>:<tag>` },
+      ];
+      const { image, tag } = inputs;
+      if (image === undefined || tag === undefined) {
+        const missing = missingInputs([['image', image], ['tag', tag]]).join(', ');
+        return render([
+          ...login,
+          `Publishing also needs the repository and tag to publish under, and no command is given without them. Missing: ${missing}. Call get_publish_command again with ${missing} for the load, tag and push commands.`,
+        ]);
+      }
+      const target = `${refHost}/${shq(image)}:${shq(tag)}`;
+      // docker load prints "Loaded image: name:tag", or "Loaded image ID: sha256:..." for an untagged image; docker tag
+      // accepts both. An empty capture stops the chain before anything is tagged or pushed.
+      const load = `IMG=$(docker load -i ${p} | sed -n 's/^Loaded image\\( ID\\)\\{0,1\\}: //p' | head -n 1)`;
+      return render([
+        ...login,
+        `The next command loads the tarball, takes the first image reference docker load reports, and tags and pushes it as ${image}:${tag}. It runs in a subshell, and stops without pushing if no image was loaded. A tarball holding several images publishes only the first.`,
+        { lang: 'bash', body: `( ${load} && test -n "$IMG" && docker tag "$IMG" ${target} && docker push ${target} )` },
       ]);
     }
     case 'golang':
