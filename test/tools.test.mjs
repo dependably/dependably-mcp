@@ -221,6 +221,30 @@ describe('read tools', () => {
     strictEqual(new URL(calls[0].url).searchParams.get('version'), '1.2.3');
   });
 
+  it('get_vulnerability names the package so the server can resolve it and answer an unrecorded advisory', async () => {
+    const calls = stubFetch();
+    await call(base, 'get_vulnerability', { osvId: 'GHSA-a', version: '1.2.3', ecosystem: 'npm', name: 'next' });
+    const q = new URL(calls[0].url).searchParams;
+    deepStrictEqual([q.get('ecosystem'), q.get('name'), q.get('version')], ['npm', 'next', '1.2.3']);
+  });
+
+  it('get_vulnerability refuses ecosystem without name (and the reverse) before calling the server', async () => {
+    const calls = stubFetch();
+    const onlyEco = await call(base, 'get_vulnerability', { osvId: 'GHSA-a', ecosystem: 'npm' });
+    const onlyName = await call(base, 'get_vulnerability', { osvId: 'GHSA-a', name: 'next' });
+    strictEqual(onlyEco.isError, true);
+    strictEqual(onlyName.isError, true);
+    match(onlyEco.content[0].text, /ecosystem and name must be given together/);
+    strictEqual(calls.length, 0);
+  });
+
+  it('get_vulnerability sends neither ecosystem nor name when none is given', async () => {
+    const calls = stubFetch();
+    await call(base, 'get_vulnerability', { osvId: 'GHSA-a', version: '1.2.3' });
+    const q = new URL(calls[0].url).searchParams;
+    ok(!q.has('ecosystem') && !q.has('name'));
+  });
+
   it('get_license_policy and lookup_package hit their endpoints', async () => {
     const calls = stubFetch();
     await call(base, 'get_license_policy');
@@ -426,6 +450,39 @@ describe('check_dependencies', () => {
     strictEqual(body.summary.packagesChecked, 1);
     strictEqual(body.findings[0].bumpTo, '4.13.5');
     strictEqual(body.reportSize, 3);
+  });
+
+  it('resolves each package\'s own fix when one advisory hits several packages at one version', async () => {
+    const shared = {
+      items: [
+        { packageName: 'next', version: '15.0.0', osvId: 'GHSA-n', severity: 'HIGH', cvssScore: 7.5 },
+        { packageName: '@next/swc', version: '15.0.0', osvId: 'GHSA-n', severity: 'HIGH', cvssScore: 7.5 },
+      ],
+      total: 2,
+    };
+    const fixes = { next: '15.0.4', '@next/swc': '15.0.9' };
+    const calls = stubFetch((url) => {
+      const u = new URL(url);
+      if (u.pathname === '/api/v1/vuln-report') return u.searchParams.get('page') === '1' ? shared : { items: [], total: 2 };
+      if (u.pathname === '/npm/-/npm/v1/security/advisories/bulk') return {};
+      // Without the package the server resolves against its stored row's first package.
+      return { remediation: { fixedVersion: fixes[u.searchParams.get('name')] ?? fixes.next } };
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'npm',
+        packages: [
+          { name: 'next', version: '15.0.0' },
+          { name: '@next/swc', version: '15.0.0' },
+        ],
+      }),
+    );
+    const bump = Object.fromEntries(body.findings.map((f) => [f.package, f.bumpTo]));
+    deepStrictEqual(bump, { next: '15.0.4', '@next/swc': '15.0.9' });
+    const detail = calls.map((c) => new URL(c.url)).filter((u) => u.pathname.startsWith('/api/v1/vulnerabilities/'));
+    strictEqual(detail.length, 2);
+    for (const u of detail) strictEqual(u.searchParams.get('ecosystem'), 'npm');
+    deepStrictEqual(detail.map((u) => u.searchParams.get('name')).sort(), ['@next/swc', 'next']);
   });
 
   it('reports a clean tree when nothing matches', async () => {
@@ -1219,6 +1276,23 @@ describe('get_remediation', () => {
     strictEqual(body.advisories[0].severity, 'HIGH');
     deepStrictEqual(body.advisories[0].skills, ['fix-x']);
     ok(!('installed' in body.advisories[1]), 'no version passed means none echoed');
+  });
+
+  it('passes each advisory\'s package through, and refuses a half-named one in place', async () => {
+    const calls = stubFetch((url) => ({ remediation: { fixedVersion: `${new URL(url).searchParams.get('name')}-fix` } }));
+    const body = payload(
+      await call(base, 'get_remediation', {
+        advisories: [
+          { osvId: 'A', version: '1.0.0', ecosystem: 'npm', name: 'next' },
+          { osvId: 'A', version: '1.0.0', ecosystem: 'npm' },
+        ],
+      }),
+    );
+    strictEqual(calls.length, 1, 'the half-named advisory never reaches the server');
+    const q = new URL(calls[0].url).searchParams;
+    deepStrictEqual([q.get('ecosystem'), q.get('name'), q.get('version')], ['npm', 'next', '1.0.0']);
+    strictEqual(body.advisories[0].fixedVersion, 'next-fix');
+    match(body.advisories[1].error, /ecosystem and name must be given together/);
   });
 
   it('reports a per-advisory failure without sinking the batch', async () => {

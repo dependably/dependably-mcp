@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Advisory detail names the package it is for.** One advisory can cover several packages, each
+  with its own fix, and without the package the instance resolved the fix against whichever one
+  it recorded first. `check_dependencies` now sends each finding's ecosystem and name, and keeps
+  one answer per package, so two packages at the same version hit by one advisory each get their
+  own `bumpTo`. Before, they shared one, which could name the other package's fix.
+  `get_vulnerability` and `get_remediation` take an optional `ecosystem` and `name` (both or
+  neither). With a version as well, a newer instance answers for an advisory a live check found
+  but the registry has not recorded, instead of a 404.
 - **NuGet prerelease labels compare without regard to case.** `1.0.0-RC1` is now newer than
   `1.0.0-beta2`, as NuGet.Versioning orders them, and `1.0.0-ALPHA` equals `1.0.0-alpha`. Before,
   uppercase sorted below lowercase, so a project on `1.0.0-beta2` could read as already past a

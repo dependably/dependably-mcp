@@ -9,7 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { DependablyClient } from '../dist/client.js';
 import { compare, gte, maxVersion } from '../dist/semver.js';
-import { buildFindings, parseNpmLockfile } from '../dist/vuln.js';
+import { buildFindings, parseNpmLockfile, remediationKey } from '../dist/vuln.js';
 import { FALLBACK_LOOKUP_ECOSYSTEMS, FALLBACK_REGISTRY_ECOSYSTEMS, FALLBACK_SETUP_ECOSYSTEMS } from '../dist/ecosystems.js';
 import { buildServer } from '../dist/server.js';
 
@@ -101,8 +101,8 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   ];
   const devOf = new Map([['fast-uri@3.1.3', false]]);
   const rem = new Map([
-    ['A@@3.1.3', { fixedVersion: '3.1.4', cwes: [], owasp: [], skills: [] }],
-    ['B@@3.1.3', { fixedVersion: '3.1.6', cwes: [], owasp: [], skills: [] }],
+    [remediationKey('A', 'fast-uri', '3.1.3'), { fixedVersion: '3.1.4', cwes: [], owasp: [], skills: [] }],
+    [remediationKey('B', 'fast-uri', '3.1.3'), { fixedVersion: '3.1.6', cwes: [], owasp: [], skills: [] }],
   ]);
   const [finding] = buildFindings(hits, devOf, rem);
   deepStrictEqual(finding.bumpTo, '3.1.6', 'bumpTo takes the highest fix, not the first');
@@ -111,7 +111,7 @@ deepStrictEqual(await toolNames(base), CORE_TOOLS, 'the whole tool surface');
   const already = buildFindings(
     [{ packageName: 'x', version: '2.0.0', osvId: 'C', severity: 'LOW' }],
     new Map([['x@2.0.0', true]]),
-    new Map([['C@@2.0.0', { fixedVersion: '1.9.0', cwes: [], owasp: [], skills: [] }]]),
+    new Map([[remediationKey('C', 'x', '2.0.0'), { fixedVersion: '1.9.0', cwes: [], owasp: [], skills: [] }]]),
   );
   deepStrictEqual(already[0].bumpTo, null, 'no bump when installed already exceeds the fix');
 }
