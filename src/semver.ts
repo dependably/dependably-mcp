@@ -133,7 +133,8 @@ function parseTail(cleaned: string, ecosystem?: string): Omit<Parsed, 'epoch'> {
       return {
         release: head.split('.'),
         phase: phaseOf(marker),
-        prerelease: [marker, ...(tail[2] ? [tail[2]] : [])],
+        // The number is a PEP 440 integer, so `01` is 1 (not SemVer's alphanumeric `01`).
+        prerelease: [marker, ...(tail[2] ? [tail[2].replace(/^0+(?=\d)/, '')] : [])],
       };
     }
   }
@@ -758,15 +759,39 @@ function compareApk(a: string, b: string): number {
   return apkCompareEnds(ca, cb);
 }
 
+/**
+ * Longer than any real Maven version; beyond it the nested-list comparison
+ * could exhaust the stack, so the strings are ordered as plain text instead.
+ */
+const MAVEN_MAX_LENGTH = 1024;
+
 /** -1 if a < b, 0 if equal, 1 if a > b. */
 export function compare(a: string, b: string, ecosystem?: string): number {
+  // pypi strips Python's own whitespace set in parsePep440 (which differs from trim() on U+FEFF).
+  if (ecosystem !== 'pypi') {
+    a = a.trim();
+    b = b.trim();
+  }
   if (ecosystem === 'rpm') return compareRpm(a, b);
-  if (ecosystem === 'maven') return compareMaven(a, b);
+  if (ecosystem === 'maven') {
+    // A total order: an over-long string ranks below every bounded one, and two over-long ones compare as text.
+    const aLong = a.length > MAVEN_MAX_LENGTH;
+    const bLong = b.length > MAVEN_MAX_LENGTH;
+    if (aLong && bLong) return sign(a, b);
+    if (aLong) return -1;
+    if (bLong) return 1;
+    return compareMaven(a, b);
+  }
   if (ecosystem === 'apk') return compareApk(a, b);
   if (ecosystem === 'pypi') {
     const ka = parsePep440(a);
     const kb = parsePep440(b);
     if (ka && kb) return comparePep440(ka, kb);
+    // A version PEP 440 rejects ranks below every valid one (packaging's old
+    // LegacyVersion did), which keeps the order transitive; two invalid ones
+    // fall through to the generic comparison.
+    if (ka) return 1;
+    if (kb) return -1;
   }
   const pa = parse(a, ecosystem);
   const pb = parse(b, ecosystem);

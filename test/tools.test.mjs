@@ -2630,3 +2630,28 @@ describe('lookup of apk, rpm, oci and terraform', () => {
     });
   }
 });
+
+describe('input length bounds', () => {
+  const cases = [
+    ['check_dependencies', { ecosystem: 'npm', packages: [{ name: 'a', version: '1'.repeat(257) }] }, /256/],
+    ['lookup_package', { ecosystem: 'npm', name: 'a', version: '1'.repeat(257) }, /256/],
+    ['lookup_package', { ecosystem: 'npm', name: 'a'.repeat(513) }, /512/],
+    ['get_package', { ecosystem: 'npm', name: 'a'.repeat(513) }, /512/],
+    ['list_vulnerabilities', { name: 'a'.repeat(513) }, /512/],
+    ['get_vulnerability', { osvId: 'x'.repeat(257) }, /256/],
+    ['get_vulnerability', { osvId: 'GHSA-1', version: '1'.repeat(257) }, /256/],
+    ['get_vulnerability', { osvId: 'GHSA-1', ecosystem: 'npm', name: 'a'.repeat(513) }, /512/],
+    ['get_remediation', { advisories: [{ osvId: 'x'.repeat(257) }] }, /256/],
+    ['get_remediation', { advisories: [{ osvId: 'GHSA-1', version: '1'.repeat(257) }] }, /256/],
+    ['get_remediation', { advisories: [{ osvId: 'GHSA-1', ecosystem: 'npm', name: 'a'.repeat(513) }] }, /512/],
+  ];
+  for (const [tool, args, pattern] of cases) {
+    it(`${tool} rejects an over-long field (${pattern}) without a request`, async () => {
+      const calls = stubFetch();
+      const res = await call(base, tool, args);
+      strictEqual(res.isError, true);
+      ok(pattern.test(res.content[0].text), res.content[0].text);
+      strictEqual(calls.length, 0);
+    });
+  }
+});

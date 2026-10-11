@@ -132,11 +132,19 @@ function postNumber(implicit: string | undefined, letter: string | undefined, n:
  * Python's str.isspace set, which packaging's `^\s*…\s*$` strips: unlike JS
  * `trim()` it includes U+001C–U+001F and U+0085, and excludes U+FEFF.
  */
-const PY_SPACE = '[\\t\\n\\v\\f\\r \\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
-const PY_SPACE_ENDS = new RegExp(`^${PY_SPACE}+|${PY_SPACE}+$`, 'g');
+const PY_SPACE = new Set<number>([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x1c, 0x1d, 0x1e, 0x1f, 0x85, 0xa0, 0x1680,
+  0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a,
+  0x2028, 0x2029, 0x202f, 0x205f, 0x3000,
+]);
 
+/** Strips Python whitespace from both ends in one linear pass (a regex here backtracks quadratically). */
 function stripPythonSpace(value: string): string {
-  return value.replace(PY_SPACE_ENDS, '');
+  let start = 0;
+  let end = value.length;
+  while (start < end && PY_SPACE.has(value.charCodeAt(start))) start++;
+  while (end > start && PY_SPACE.has(value.charCodeAt(end - 1))) end--;
+  return value.slice(start, end);
 }
 
 /** Parses a PEP 440 version, or returns null when it is not one. */
