@@ -1967,7 +1967,7 @@ describe('setup tools', () => {
     const res = await call(base, 'get_publish_command', { ecosystem: 'hex', artifact_path: './my_lib' });
     ok(!res.isError);
     deepStrictEqual(shellLines(res.content[0].text), [
-      `( cd './my_lib' && read -rs HEX_API_KEY && HEX_API_KEY="$HEX_API_KEY" HEX_API_URL=https://dep.example.com/hex/api mix hex.publish )`,
+      `( read -rs HEX_API_KEY && cd './my_lib' && HEX_API_KEY="$HEX_API_KEY" HEX_API_URL=https://dep.example.com/hex/api mix hex.publish )`,
     ]);
     ok(!res.content[0].text.includes('HEX_API_KEY=<token>'), 'no token typed into the command line');
     ok(!res.content[0].text.includes('--yes'), 'the user should confirm the publish interactively');
@@ -2223,7 +2223,7 @@ describe('setup tools — publish commands keep tokens out of history and name r
       everything.push((await call(base, 'get_publish_command', { ecosystem: eco, artifact_path: './x.crate' })).content[0].text);
     }
     for (const t of everything) {
-      for (const line of shellLines(t)) ok(!/(^|\s)#(\s|$)/.test(line), `a comment in a shell fence: ${line}`);
+      for (const line of shellLines(t)) ok(!/(^|\s)#/.test(line.replace(/'[^']*'/g, '').replace(/"[^"]*"/g, '')), `a comment in a shell fence: ${line}`);
     }
   });
 
@@ -2236,7 +2236,7 @@ describe('setup tools — publish commands keep tokens out of history and name r
         const lines = body.split('\n');
         lines.forEach((line, i) => {
           if (!line.includes('read -rs')) return;
-          ok(/^\( .*read -rs \w+ && .* \)$/.test(line), `${eco}: read is not one subshell line: ${line}`);
+          ok(/^\( read -rs \w+ && .* \)$/.test(line), `${eco}: read is not one subshell line: ${line}`);
           strictEqual(i, lines.length - 1, `${eco}: read must be the last line of its fence`);
         });
       }
@@ -2245,14 +2245,14 @@ describe('setup tools — publish commands keep tokens out of history and name r
 
   it('hex publishes from inside the subshell, so the caller\'s directory is untouched', async () => {
     const t = await text('hex', './my_lib');
-    ok(/^\( cd '\.\/my_lib' && read -rs HEX_API_KEY/m.test(t), t);
+    ok(/^\( read -rs HEX_API_KEY && cd '\.\/my_lib' && /m.test(t), t);
     ok(!/^cd /m.test(t), 'no top-level cd');
   });
 
   it('expands a leading ~/ in an artefact path through $HOME instead of quoting it literally', async () => {
     ok((await text('npm', '~/dist/a.tgz')).includes(`npm publish --registry=https://dep.example.com/npm/ "$HOME"/'dist/a.tgz'`));
-    ok((await text('hex', '~/src/my_lib')).includes(`( cd "$HOME"/'src/my_lib' && read -rs`));
-    ok((await text('hex', '~')).includes(`( cd "$HOME" && read -rs`));
+    ok((await text('hex', '~/src/my_lib')).includes(`( read -rs HEX_API_KEY && cd "$HOME"/'src/my_lib' && `));
+    ok((await text('hex', '~')).includes(`( read -rs HEX_API_KEY && cd "$HOME" && `));
     ok((await text('cargo', '~/crate')).includes(`--manifest-path "$HOME"/'crate/Cargo.toml'`));
     ok((await text('npm', '~other/a.tgz')).includes(`'~other/a.tgz'`), 'only ~ and ~/ are expanded');
   });
@@ -2288,9 +2288,9 @@ describe('setup tools — publish commands keep tokens out of history and name r
     const t = await text('cargo', './target/package/foo-0.1.0');
     ok(t.includes("--manifest-path './target/package/foo-0.1.0/Cargo.toml'"), t);
     ok((await text('cargo', './my.crate.dir/')).includes("--manifest-path './my.crate.dir/Cargo.toml'"));
-    ok((await text('hex', './vendor/my_lib-1.2')).includes("( cd './vendor/my_lib-1.2' && "));
-    ok((await text('hex', './vendor/my_lib-1.2/mix.exs')).includes("( cd './vendor/my_lib-1.2' && "));
-    ok((await text('hex', 'mix.exs')).includes("( cd '.' && "));
+    ok((await text('hex', './vendor/my_lib-1.2')).includes("&& cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', './vendor/my_lib-1.2/mix.exs')).includes("&& cd './vendor/my_lib-1.2' && "));
+    ok((await text('hex', 'mix.exs')).includes("&& cd '.' && "));
   });
 });
 

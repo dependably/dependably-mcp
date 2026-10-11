@@ -112,7 +112,7 @@ describe('setup tools — what a user pastes runs in interactive zsh', () => {
   it('puts every explanation outside the shell fences', async () => {
     for (const eco of ecosystems) {
       for (const text of [await install(base, eco, pkgFor[eco] ?? 'pkg', '1.0.0'), await publish(base, eco, artifactFor(eco)), await publish(base, eco, './x.crate')]) {
-        for (const line of shellLines(text)) ok(!/(^|\s)#(\s|$)/.test(line), `${eco}: comment in a shell fence: ${line}`);
+        for (const line of shellLines(text)) ok(!/(^|\s)#/.test(unquoted(line)), `${eco}: comment in a shell fence: ${line}`);
       }
     }
   });
@@ -124,6 +124,6 @@ describe('setup tools — what a user pastes runs in interactive zsh', () => {
     }
     const reads = lines.filter((l) => l.includes('read -rs'));
     ok(reads.length >= 5, `found only ${reads.length} reads`);
-    for (const line of reads) ok(/^\( .*read -rs \w+ && .* \)$/.test(line), line);
+    for (const line of reads) ok(/^\( read -rs \w+ && .* \)$/.test(line), line);
   });
 });

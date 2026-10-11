@@ -293,12 +293,14 @@ function proxyOnly(text: string): ToolResult {
  * not reference the variable itself when `inEnv` is set (the default): it
  * receives the secret in its environment. Pass `inEnv: false` when the command
  * line itself names the variable (`--password "$VAR"`), which is the only route
- * some clients offer. `before` runs ahead of the read (a `cd`), in the same
- * subshell.
+ * some clients offer. `after` runs between the read and the command (a `cd`), in the
+ * same subshell. Nothing may run before the read: if a step ahead of it failed,
+ * the subshell would exit without reading and the token the user then pastes
+ * would run as a command and land in history.
  */
-function withSecret(variable: string, command: string, opts: { before?: string; inEnv?: boolean } = {}): string {
-  const { before = '', inEnv = true } = opts;
-  return `( ${before}read -rs ${variable} && ${inEnv ? `${variable}="$${variable}" ` : ''}${command} )`;
+function withSecret(variable: string, command: string, opts: { after?: string; inEnv?: boolean } = {}): string {
+  const { after = '', inEnv = true } = opts;
+  return `( read -rs ${variable} && ${after}${inEnv ? `${variable}="$${variable}" ` : ''}${command} )`;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -588,7 +590,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string): 
       return proxyOnly('Terraform is proxy-only — there is no hosted publish/upload endpoint. Providers are fetched from their upstream registry on first request.');
     case 'hex': {
       // The cd happens inside the subshell, so the user's own directory is left alone.
-      const publish = withSecret('HEX_API_KEY', `HEX_API_URL=${word(`${base}/hex/api`)} mix hex.publish`, { before: `cd ${pathWord(directoryOf(artifactPath, 'mix.exs'))} && ` });
+      const publish = withSecret('HEX_API_KEY', `HEX_API_URL=${word(`${base}/hex/api`)} mix hex.publish`, { after: `cd ${pathWord(directoryOf(artifactPath, 'mix.exs'))} && ` });
       return render([
         'Requires the dependably repository registered with mix hex.repo add (see get_install_command).',
         SECRET_NOTE,
