@@ -774,7 +774,12 @@ export function compare(a: string, b: string, ecosystem?: string): number {
   }
   if (ecosystem === 'rpm') return compareRpm(a, b);
   if (ecosystem === 'maven') {
-    if (a.length > MAVEN_MAX_LENGTH || b.length > MAVEN_MAX_LENGTH) return sign(a, b);
+    // A total order: an over-long string ranks below every bounded one, and two over-long ones compare as text.
+    const aLong = a.length > MAVEN_MAX_LENGTH;
+    const bLong = b.length > MAVEN_MAX_LENGTH;
+    if (aLong && bLong) return sign(a, b);
+    if (aLong) return -1;
+    if (bLong) return 1;
     return compareMaven(a, b);
   }
   if (ecosystem === 'apk') return compareApk(a, b);

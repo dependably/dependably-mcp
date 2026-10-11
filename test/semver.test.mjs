@@ -684,6 +684,19 @@ describe('version input bounds and comparator consistency', () => {
     strictEqual(compare('1.0rc00', '1.0rc0', 'npm'), 0);
   });
 
+  it('keeps maven order total when one version is over-long', () => {
+    const long = '1.5' + '.0'.repeat(600);
+    const triple = [long, '1.9', '1.10'];
+    const orders = [triple, [...triple].reverse(), [triple[1], triple[0], triple[2]], [triple[1], triple[2], triple[0]]];
+    const winners = new Set(orders.map((o) => maxVersion(o, 'maven')));
+    deepStrictEqual([...winners], ['1.10']);
+    strictEqual(compare(long, '1.9', 'maven'), -1);
+    strictEqual(compare('1.9', long, 'maven'), 1);
+    strictEqual(compare(long, '1.10', 'maven'), -1);
+    strictEqual(gte('1.9', long, 'maven'), true);
+    strictEqual(compare(long, long + '.1', 'maven'), -1);
+  });
+
   it('does not throw on a deeply nested maven version', () => {
     const deep = '1' + 'a1'.repeat(3000);
     strictEqual(compare(deep, deep + 'z', 'maven'), -1);
