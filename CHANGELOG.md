@@ -43,7 +43,34 @@ All notable changes to this project are documented here. The format follows
   or version differently no longer mark the finding partial when every one of them was looked up.
 - **The upgrade skill is listed.** `get_remediation` and the `skills` on a finding now include
   the remediation's `upgradeSkillId` (`fix-vulnerable-dependency`), once.
-
+- **The install and publish commands paste cleanly into zsh and bash.** The token prompt was a
+  `read -rs VAR   # paste your token...` line followed by the command. Interactive zsh, the macOS
+  default, does not treat `#` as a comment, so it read the comment words as variable names
+  (`not an identifier: #`) and the command never ran; a shell without bracketed paste (macOS
+  `/bin/bash` 3.2) fed the command line to `read` as the token and then ran the real token as a
+  command, leaving it in history. Every token read is now one line in a subshell, `( read -rs VAR
+  && VAR="$VAR" command )`, so nothing needs unsetting and Ctrl-C cannot leave the token behind.
+  Shell fences hold commands only: the explanations (config files to edit, where to paste the
+  token, pins and caveats) moved to prose outside the fence, and file contents such as the cargo
+  and Terraform config each get their own fence. Prompting commands (`docker login`) sit in
+  their own fence. The commands need bash or zsh, since `read -s` is not POSIX sh.
+- **IPv6 base URLs no longer abort in zsh.** The brackets of `http://[::1]:8443` are glob
+  characters, and zsh refuses an unquoted word that matches nothing (`no matches found`), so
+  every registry, proxy, host and upload URL the setup tools interpolate is now quoted when it
+  needs it. Ordinary DNS hosts come out unchanged.
+- **Scoped npm packages install from this instance.** npm prefers a user's `@scope:registry`
+  setting over `--registry`, so `get_install_command` now also passes `--@scope:registry` for the
+  package's scope. `get_publish_command` cannot know the scope of a tarball, so it now says,
+  outside the command, that a scoped publish needs `--@scope:registry` as well.
+- **`get_install_command` no longer asks for a token on the command line** for NuGet
+  (`dotnet nuget add source ... --password`) and Hex (`mix hex.repo add ... --auth-key`). Both
+  read the token without echo, as the publish commands do, and note that the client still
+  receives it as an argument while it runs.
+- **Hex publish leaves your working directory alone**, running its `cd` inside the same subshell,
+  and a leading `~/` in an artefact path now expands through `$HOME` instead of being quoted
+  into a literal `~` directory.
+- **Artefact paths reject C1 control characters and bidirectional overrides** (U+0080 to U+009F,
+  U+202A to U+202E, U+2066 to U+2069), which can make a pasted path read as something else.
 - **Advisory detail names the package it is for.** One advisory can cover several packages, each
   with its own fix, and without the package the instance resolved the fix against whichever one
   it recorded first. `check_dependencies` now sends each finding's ecosystem and name, and keeps

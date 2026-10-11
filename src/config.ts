@@ -81,7 +81,10 @@ function parseBaseUrl(raw: string): string {
   // The base URL, host and path alike, is pasted into the install and publish
   // commands the setup tools emit for the user to run, so a character a shell
   // would interpret is refused here rather than quoted at every call site.
-  // An IPv6 literal's brackets delimit the address; they are not shell input.
+  // An IPv6 literal's brackets delimit the address, so they are not rejected
+  // here. They stay in the returned base, and they are glob characters: zsh
+  // aborts an unquoted `[::1]` with "no matches found". The setup tools quote
+  // every URL and host they interpolate for that reason.
   const hostname = parsed.hostname.replace(/^\[(.*)\]$/, '$1');
   if (SHELL_SIGNIFICANT.test(hostname) || SHELL_SIGNIFICANT.test(path)) {
     throw new Error(`DEPENDABLY_BASE_URL must not contain shell metacharacters: ${raw}`);
