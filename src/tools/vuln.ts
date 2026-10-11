@@ -72,7 +72,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
           .array(
             z.object({
               name: z.string().trim().min(1).max(512).describe('Package name, e.g. "hono" or "@scope/pkg". At most 512 characters.'),
-              version: z.string().trim().min(1).describe('Exact installed version, as resolved in the lockfile (e.g. "4.17.21"). A range, tag or git/file spec is reported as unverified.'),
+              version: z.string().trim().min(1).max(256).describe('Exact installed version, as resolved in the lockfile (e.g. "4.17.21"). At most 256 characters. A range, tag or git/file spec is reported as unverified.'),
               dev: z
                 .boolean()
                 .optional()
@@ -153,14 +153,15 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
         advisories: z
           .array(
             z.object({
-              osvId: z.string().min(1).describe('Advisory id, e.g. "GHSA-xxxx-..." or "CVE-2024-...".'),
-              version: z.string().optional().describe('Your installed version, so the fix names the right release line.'),
+              osvId: z.string().min(1).max(256).describe('Advisory id, e.g. "GHSA-xxxx-..." or "CVE-2024-...".'),
+              version: z.string().max(256).optional().describe('Your installed version, so the fix names the right release line.'),
               ecosystem: ecosystem
                 .optional()
                 .describe('Ecosystem of the affected package. Give it with `name`, or neither.'),
               name: z
                 .string()
                 .min(1)
+                .max(512)
                 .optional()
                 .describe(
                   'The affected package. One advisory can cover several packages, each with its own fix, so naming yours resolves the fix for it; with `version` too, newer instances also answer for an advisory the registry has not recorded. Give it with `ecosystem`, or neither.',

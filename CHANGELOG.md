@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Version inputs are bounded and compare consistently.** A pypi version padded with tens of
+  thousands of spaces made the PEP 440 parser backtrack for seconds before rejecting it; it now
+  trims in a single pass. `check_dependencies`, `get_vulnerability` and `get_remediation` cap
+  versions at 256 characters and package names at 512. apk and maven comparisons ignore
+  surrounding whitespace, as the other ecosystems already did. In pypi, a version PEP 440
+  rejects ranks below every valid one, so the highest of a mixed list no longer depends on input
+  order. A PEP 440 prerelease number with leading zeros (`1.0rc01`) compares by value again under
+  npm, and a maven version over 1,024 characters compares as plain text instead of overflowing
+  the stack.
 - **Advisory detail names the package it is for.** One advisory can cover several packages, each
   with its own fix, and without the package the instance resolved the fix against whichever one
   it recorded first. `check_dependencies` now sends each finding's ecosystem and name, and keeps

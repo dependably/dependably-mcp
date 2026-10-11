@@ -442,7 +442,8 @@ describe('maven ComparableVersion ordering', () => {
 
   it('leaves other ecosystems on the generic parser', () => {
     ok(compare('1.0.Final', '1.0', undefined) > 0);
-    ok(compare('1.0.Final', '1.0', 'pypi') > 0);
+    // Not PEP 440, so it ranks below the valid 1.0 rather than above it as maven would.
+    ok(compare('1.0.Final', '1.0', 'pypi') < 0);
   });
 
   it('still treats qualifier versions as exact, but not a bare release tag', () => {
@@ -646,5 +647,47 @@ describe('compare: SemVer prerelease identifiers', () => {
   it('lets an alphanumeric prerelease fix clear a numeric one, not the reverse', () => {
     ok(gte('1.0.0-alpha', '1.0.0-1'));
     ok(!gte('1.0.0-1', '1.0.0-alpha'));
+  });
+});
+
+describe('version input bounds and comparator consistency', () => {
+  it('parses a very long whitespace run in linear time', () => {
+    const started = performance.now();
+    strictEqual(parsePep440('1' + ' '.repeat(100000) + 'x'), null);
+    ok(parsePep440(' '.repeat(100000) + '1.0' + ' '.repeat(100000)) !== null);
+    ok(performance.now() - started < 200, 'whitespace stripping must not backtrack');
+  });
+
+  it('trims surrounding whitespace for apk and maven like the other comparators', () => {
+    strictEqual(compare(' 1.0-r1', '1.0-r0', 'apk'), 1);
+    strictEqual(compare('1.0-r1 ', '1.0-r1', 'apk'), 0);
+    strictEqual(compare('1.0.0', '1.0.0 ', 'maven'), 0);
+    strictEqual(compare(' 1.0.0', '1.0.0', 'maven'), 0);
+    strictEqual(gte('1.0.0 ', '1.0.0', 'maven'), true);
+  });
+
+  it('ranks a version PEP 440 rejects below every valid one, in any input order', () => {
+    const triple = ['1.0.0-SNAPSHOT', '1.0-1', '1.0'];
+    const orders = [triple, [...triple].reverse(), [triple[1], triple[0], triple[2]], [triple[2], triple[0], triple[1]]];
+    const winners = new Set(orders.map((order) => maxVersion(order, 'pypi')));
+    strictEqual(winners.size, 1);
+    ok(!winners.has('1.0.0-SNAPSHOT'));
+    strictEqual(compare('1.0.0-SNAPSHOT', '1.0', 'pypi'), -1);
+    strictEqual(compare('1.0', '1.0.0-SNAPSHOT', 'pypi'), 1);
+    strictEqual(compare('1.0.0-SNAPSHOT', '1.0-1', 'pypi'), -1);
+  });
+
+  it('compares a PEP 440 prerelease number by value even with leading zeros', () => {
+    strictEqual(compare('1.0rc01', '1.0rc2', 'npm'), -1);
+    strictEqual(compare('1.0rc2', '1.0rc01', 'npm'), 1);
+    strictEqual(compare('1.0rc01', '1.0rc1', 'npm'), 0);
+    strictEqual(compare('1.0rc00', '1.0rc0', 'npm'), 0);
+  });
+
+  it('does not throw on a deeply nested maven version', () => {
+    const deep = '1' + 'a1'.repeat(3000);
+    strictEqual(compare(deep, deep + 'z', 'maven'), -1);
+    strictEqual(compare(deep, deep, 'maven'), 0);
+    strictEqual(compare(deep + 'z', deep, 'maven'), 1);
   });
 });
