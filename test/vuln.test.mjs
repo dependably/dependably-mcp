@@ -216,7 +216,7 @@ describe('summarizeRemediation upgrade skill', () => {
 });
 
 describe('foldName', () => {
-  it('lower-cases every ecosystem', () => {
+  it('lower-cases the case-insensitive ecosystems', () => {
     strictEqual(foldName('npm', 'Hono'), 'hono');
     strictEqual(foldName('nuget', 'Newtonsoft.Json'), 'newtonsoft.json');
     strictEqual(foldName(undefined, 'Hono'), 'hono');

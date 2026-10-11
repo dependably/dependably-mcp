@@ -1150,18 +1150,21 @@ const UNAVAILABLE_FALLBACK = 'the advisory source was unavailable';
 /** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
 function lookupHits(p: InputPackage, res: Record<string, unknown>): { hits: ReportItem[]; malformed: boolean } {
   // A not-found answer, or an older server's, may carry no vulnerabilities block.
-  const vulns = (res.vulnerabilities ?? {}) as { scored?: unknown; unscored?: unknown };
+  const block = res.vulnerabilities ?? {};
+  const unreadableBlock = typeof block !== 'object' || Array.isArray(block);
+  const vulns = (unreadableBlock ? {} : block) as { scored?: unknown; unscored?: unknown };
   // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
   // under malware.advisoryIds, never in scored or unscored.
   const malware = (res.malware ?? null) as { advisoryIds?: unknown } | null;
   const malwareIds = (Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []).filter(
     (id): id is string => typeof id === 'string',
   );
-  // A list that is present but not an array, or an entry with no id, is an answer
+  // A block or list that is present but not the expected shape, or an entry with no id, is an answer
   // this cannot read in full; it must not pass as "no advisories".
   const lists = [vulns.scored, vulns.unscored];
   const all = lists.flatMap((l) => (Array.isArray(l) ? l : [])) as LookupAdvisory[];
   const malformed =
+    unreadableBlock ||
     lists.some((l) => l !== undefined && l !== null && !Array.isArray(l)) ||
     all.some((a) => typeof a?.id !== 'string');
   const hits = [

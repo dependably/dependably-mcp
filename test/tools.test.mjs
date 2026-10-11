@@ -972,7 +972,7 @@ describe('check_dependencies live coverage', () => {
     deepStrictEqual(body2.findings[0].advisories[0].cwes, ['CWE-79']);
   });
 
-  it('a lookup answer with an advisory lacking an id, or a non-array list, is unverified, not clean', async () => {
+  it('a lookup answer with an advisory lacking an id, a non-array list or a non-object block is unverified, not clean', async () => {
     const bodies = {
       idless: { scored: [], unscored: [{ summary: 'x' }] },
       scoredNotArray: { scored: { id: 'GHSA-z' }, unscored: [] },
@@ -980,18 +980,22 @@ describe('check_dependencies live coverage', () => {
     };
     stubRoutes({
       '/api/v1/vuln-report': () => emptyReport,
-      '/api/v1/lookup': (u) => ({ found: true, advisorySource: { status: 'checked' }, vulnerabilities: { available: true, ...bodies[u.searchParams.get('name')] } }),
+      '/api/v1/lookup': (u) => {
+        const name = u.searchParams.get('name');
+        const vulnerabilities = name === 'blockNotObject' ? 'none' : { available: true, ...bodies[name] };
+        return { found: true, advisorySource: { status: 'checked' }, vulnerabilities };
+      },
       '*': () => ({ status: 404, body: {} }),
     });
     const body = payload(
       await call(base, 'check_dependencies', {
         ecosystem: 'pypi',
-        packages: Object.keys(bodies).map((name) => ({ name, version: '1.0' })),
+        packages: [...Object.keys(bodies), 'blockNotObject'].map((name) => ({ name, version: '1.0' })),
       }),
     );
     strictEqual(body.clean, false);
     strictEqual(body.coverage.liveChecked, 0);
-    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => u.name).sort(), ['idless', 'mixed', 'scoredNotArray']);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => u.name).sort(), ['blockNotObject', 'idless', 'mixed', 'scoredNotArray']);
     match(body.coverage.unverifiedPackages[0].reason, /could not read/);
     deepStrictEqual(body.findings.map((f) => f.package), ['mixed'], 'the readable advisory is still reported');
   });

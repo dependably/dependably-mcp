@@ -22,7 +22,8 @@ All notable changes to this project are documented here. The format follows
   versions compare as text) instead of overflowing the stack.
 
 - **A lookup answer the client cannot read in full is unverified, not clean.** An advisory with
-  no id, or a `scored` or `unscored` list that is not an array, used to drop out silently and
+  no id, a `scored` or `unscored` list that is not an array, or a `vulnerabilities` block that is
+  not an object, used to drop out silently and
   leave the dependency counted as checked with no findings. It is now listed as unverified with
   a reason, and any readable advisories in the same answer are still reported.
 - **Go modules, Cargo crates and Maven coordinates that differ only in case are separate
