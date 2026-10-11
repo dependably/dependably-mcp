@@ -168,7 +168,11 @@ function publishField(pattern: RegExp, message: string, max: number, description
 }
 
 const MAVEN_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
-// The OCI distribution spec's repository grammar, the same one NAME_RULES.oci enforces.
+// The repository grammar Dependably's OCI routes accept, the same one
+// NAME_RULES.oci enforces. It is a subset of the distribution spec's: the spec
+// also allows `__` and a run of `-` between name parts, but the server answers
+// those with NAME_INVALID (dependably-community#817), so they are refused here
+// with a clear message rather than handed out as a command that fails later.
 const OCI_REPOSITORY_PATTERN = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*$/;
 const OCI_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
 const MAVEN_ID_MESSAGE = 'Maven groupId and artifactId are letters, digits, . _ - only, at most 128 characters.';
