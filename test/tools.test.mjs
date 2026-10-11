@@ -2183,9 +2183,9 @@ describe('setup tools — credential prerequisites', () => {
 });
 
 describe('setup tools — publish commands keep tokens out of history and name real inputs', () => {
-  const text = async (ecosystem, artifact_path) => {
+  const text = async (ecosystem, artifact_path, extra = {}) => {
     stubFetch();
-    const res = await call(base, 'get_publish_command', { ecosystem, artifact_path });
+    const res = await call(base, 'get_publish_command', { ecosystem, artifact_path, ...extra });
     ok(!res.isError, res.content[0].text);
     return res.content[0].text;
   };
@@ -2263,14 +2263,14 @@ describe('setup tools — publish commands keep tokens out of history and name r
   });
 
   it('oci loads the image tarball rather than tagging a file path', async () => {
-    const t = await text('oci', './image.tar');
+    const t = await text('oci', './image.tar', { image: 'team/app', tag: '1' });
     ok(t.includes("docker load -i './image.tar'"), t);
     ok(!t.includes("docker tag './image.tar'"), t);
   });
 
   it('maven uploads the named file with deploy:deploy-file', async () => {
-    const t = await text('maven', './target/app-1.0.jar');
-    ok(t.includes("mvn deploy:deploy-file -Dfile='./target/app-1.0.jar' -Durl=https://dep.example.com/maven/ -DrepositoryId=dependably"), t);
+    const t = await text('maven', './target/app-1.0.jar', { groupId: 'com.acme', artifactId: 'app', version: '1.0' });
+    ok(t.includes("mvn deploy:deploy-file -Dfile='./target/app-1.0.jar' -Durl=https://dep.example.com/maven/ -DrepositoryId=dependably -DgroupId=com.acme -DartifactId=app -Dversion=1.0"), t);
   });
 
   it('cargo publishes from the crate directory, given the directory or its Cargo.toml', async () => {

@@ -6,6 +6,52 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`check_dependencies` and `lookup_package` cover apk, rpm, oci and Terraform, and take a
+  `distro`.** When the instance can look these up (a newer Dependably), they are checked like any
+  other ecosystem, so a clean apk, rpm or image dependency can now come back `clean`. apk and rpm
+  take an optional `distro` (`v3.20`, `Rocky Linux:9`, `Red Hat:enterprise_linux:9::baseos`); the
+  instance infers the release from its upstreams when they all name the same one. An image is
+  checked by its digest, an rpm by its full version-release and an apk by its `-rN` revision, and
+  anything else is listed as unverified with that reason instead of being sent. A dependency whose
+  advisory source was not consulted (no release, unreachable, no coverage, an image without a
+  complete scan) is unverified with the reason, and the server's own message is shown when it
+  rejects a lookup. Terraform has no advisory database, so its providers appear in the new
+  `coverage.notApplicable` list: they do not block `clean` and are not counted in
+  `summary.packagesChecked`. An older instance behaves as before.
+- **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
+  For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
+  publish.
+- **`get_publish_command` takes the maven coordinates and the oci repository and tag.** For
+  maven pass `groupId`, `artifactId` and `version`; for oci pass `image` and `tag`. With them the
+  command has no `<placeholder>` left to edit: the maven line is complete, and the oci block
+  captures the reference `docker load` reports, then tags and pushes it, stopping without a push
+  if nothing loaded. Without them the reply names the missing inputs and asks for another call
+  instead of printing a block that is a shell syntax error when pasted. An input for the wrong
+  ecosystem is refused.
+
+### Changed
+
+- **The GitHub mirror no longer publishes to public npm.** Its workflow still
+  tests every push and attaches the Claude Desktop extension bundle to the GitHub release for a
+  version tag. Packages are released only to the private Dependably registry.
+
+- **`check_dependencies` requires `ecosystem`.** A call without it now fails. A pip list sent
+  without one used to be checked as npm and came back clean. A blank name or version is rejected,
+  and `summary.packagesChecked` counts the distinct dependencies that were actually checked.
+- **A base URL with shell metacharacters in its host or path stops the server at startup.**
+  `DEPENDABLY_BASE_URL` is pasted into the setup commands the server returns, so a URL that would
+  change what a shell runs is refused rather than passed through. An IPv6 literal such as
+  `http://[::1]:8080` is accepted.
+- **`get_vulnerability` is compact by default.** It gives each affected range as `introduced` and
+  `fixed` versions instead of listing every affected version, which ran to hundreds for some
+  advisories. `verbosity: "full"` returns the raw OSV record.
+- The README is shorter and gains example prompts and the minimum Dependably version (0.12.2).
+  It drops two inaccuracies: a request-timeout field in the Claude Desktop install dialog, and
+  audit events, which no tool reads. Tool descriptions that return upstream or advisory text now
+  label it as third-party data.
+
 ### Fixed
 
 - **Version inputs are bounded and compare consistently.** A pypi version padded with tens of
@@ -95,47 +141,6 @@ All notable changes to this project are documented here. The format follows
   Hibernate releases no longer get a bump recommended for a version that is already fixed. The
   comparison follows Maven's `ComparableVersion` (qualifiers `alpha` < `beta` < `milestone` <
   `rc` < `snapshot` < release < `sp`, with unknown qualifiers after them).
-
-### Added
-
-- **`check_dependencies` and `lookup_package` cover apk, rpm, oci and Terraform, and take a
-  `distro`.** When the instance can look these up (a newer Dependably), they are checked like any
-  other ecosystem, so a clean apk, rpm or image dependency can now come back `clean`. apk and rpm
-  take an optional `distro` (`v3.20`, `Rocky Linux:9`, `Red Hat:enterprise_linux:9::baseos`); the
-  instance infers the release from its upstreams when they all name the same one. An image is
-  checked by its digest, an rpm by its full version-release and an apk by its `-rN` revision, and
-  anything else is listed as unverified with that reason instead of being sent. A dependency whose
-  advisory source was not consulted (no release, unreachable, no coverage, an image without a
-  complete scan) is unverified with the reason, and the server's own message is shown when it
-  rejects a lookup. Terraform has no advisory database, so its providers appear in the new
-  `coverage.notApplicable` list: they do not block `clean` and are not counted in
-  `summary.packagesChecked`. An older instance behaves as before.
-- **`get_install_command` covers apk, Terraform and Hex,** and `get_publish_command` covers Hex.
-  For apk and Terraform, which Dependably proxies but does not host, it says there is nothing to
-  publish.
-
-### Changed
-
-- **The GitHub mirror no longer publishes to public npm.** Its workflow still
-  tests every push and attaches the Claude Desktop extension bundle to the GitHub release for a
-  version tag. Packages are released only to the private Dependably registry.
-
-- **`check_dependencies` requires `ecosystem`.** A call without it now fails. A pip list sent
-  without one used to be checked as npm and came back clean. A blank name or version is rejected,
-  and `summary.packagesChecked` counts the distinct dependencies that were actually checked.
-- **A base URL with shell metacharacters in its host or path stops the server at startup.**
-  `DEPENDABLY_BASE_URL` is pasted into the setup commands the server returns, so a URL that would
-  change what a shell runs is refused rather than passed through. An IPv6 literal such as
-  `http://[::1]:8080` is accepted.
-- **`get_vulnerability` is compact by default.** It gives each affected range as `introduced` and
-  `fixed` versions instead of listing every affected version, which ran to hundreds for some
-  advisories. `verbosity: "full"` returns the raw OSV record.
-- The README is shorter and gains example prompts and the minimum Dependably version (0.12.2).
-  It drops two inaccuracies: a request-timeout field in the Claude Desktop install dialog, and
-  audit events, which no tool reads. Tool descriptions that return upstream or advisory text now
-  label it as third-party data.
-
-### Fixed
 
 - **rpm versions order `^` and `~` as rpm does.** A `^` (caret) post-release such as
   `1.0^20230101` now sorts after `1.0` and before `1.0.1`, where it used to compare equal to
