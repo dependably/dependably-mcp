@@ -174,7 +174,7 @@ const MAVEN_ID_PATTERN = /^[A-Za-z0-9_.-]+$/;
 // those with NAME_INVALID (dependably-community#817), so they are refused here
 // with a clear message rather than handed out as a command that fails later.
 const OCI_REPOSITORY_PATTERN = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*$/;
-const OCI_TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
+const OCI_TAG_PATTERN = /^\w[\w.-]{0,127}$/;
 const MAVEN_ID_MESSAGE = 'Maven groupId and artifactId are letters, digits, . _ - only, at most 128 characters.';
 
 const artifactPath = z
@@ -201,6 +201,11 @@ function shq(value: string): string {
  */
 function word(value: string): string {
   return /^[A-Za-z0-9_./:@%+,-]+$/.test(value) ? value : shq(value);
+}
+
+/** The base URL plus a path, as one shell word. */
+function urlWord(base: string, path: string): string {
+  return word(`${base}${path}`);
 }
 
 /**
@@ -353,7 +358,8 @@ function proxyOnly(text: string): ToolResult {
  */
 function withSecret(variable: string, command: string, opts: { after?: string; inEnv?: boolean } = {}): string {
   const { after = '', inEnv = true } = opts;
-  return `( read -rs ${variable} && ${after}${inEnv ? `${variable}="$${variable}" ` : ''}${command} )`;
+  const assignment = inEnv ? `${variable}="$${variable}" ` : '';
+  return `( read -rs ${variable} && ${after}${assignment}${command} )`;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -485,7 +491,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       const host = netrcHost(base);
       return render([
         `Put your token in ~/.netrc for ${host} first: machine ${host} login user password <token>`,
-        { lang: 'bash', body: `pip install --index-url ${word(`${base}/simple/`)} ${shq(pinned(pkg, '==', ver))}` },
+        { lang: 'bash', body: `pip install --index-url ${urlWord(base, '/simple/')} ${shq(pinned(pkg, '==', ver))}` },
       ]);
     }
     case 'nuget':
@@ -495,9 +501,9 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       return render([
         'Add the authenticated source once. dotnet takes the password only as an argument, so it is visible to ps on this machine while the command runs, and off Windows it needs --store-password-in-clear-text, which writes the token to NuGet.Config in plain text (on Windows, drop that flag).',
         SECRET_NOTE,
-        { lang: 'bash', body: withSecret('NUGET_TOKEN', `dotnet nuget add source ${word(`${base}/nuget/v3/index.json`)} --name dependably --username user --password "$NUGET_TOKEN" --store-password-in-clear-text`, { inEnv: false }) },
+        { lang: 'bash', body: withSecret('NUGET_TOKEN', `dotnet nuget add source ${urlWord(base, '/nuget/v3/index.json')} --name dependably --username user --password "$NUGET_TOKEN" --store-password-in-clear-text`, { inEnv: false }) },
         'Then add the package:',
-        { lang: 'bash', body: `dotnet add package ${shq(pkg)}${flag(' --version ', ver)} --source ${word(`${base}/nuget/v3/index.json`)}` },
+        { lang: 'bash', body: `dotnet add package ${shq(pkg)}${flag(' --version ', ver)} --source ${urlWord(base, '/nuget/v3/index.json')}` },
       ]);
     case 'maven': {
       const artifact = ver ? `${pkg}:${ver}` : `${pkg}:LATEST`;
@@ -531,7 +537,7 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       const host = hostOnly(base);
       return render([
         `Add credentials to ~/.netrc first: machine ${host} login user password <token>. Then, inside your module, run:`,
-        { lang: 'bash', body: `GOPROXY=${word(`${base}/go`)} go get ${shq(pkg)}@${orLatest(ver)}` },
+        { lang: 'bash', body: `GOPROXY=${urlWord(base, '/go')} go get ${shq(pkg)}@${orLatest(ver)}` },
       ]);
     }
     case 'cargo':
@@ -554,12 +560,13 @@ function installCommand(base: string, ecosystem: string, pkg: string, ver: strin
       // The dependency names the repository, not a URL: the registry signs its
       // index under the name "dependably" and Hex refuses any other.
       const requirement = ver ? `~> ${ver}` : '>= 0.0.0';
+      const repoAdd = `mix hex.repo add dependably ${urlWord(base, '/hex')} --public-key dependably-hex.pem --auth-key "$HEX_AUTH_KEY"`;
       return render([
         'Register the repository once. mix takes the key only as an argument, so it is visible to ps on this machine while the command runs.',
         SECRET_NOTE,
         {
           lang: 'bash',
-          body: `curl -sSf ${word(`${base}/hex/public_key`)} -o dependably-hex.pem\n${withSecret('HEX_AUTH_KEY', `mix hex.repo add dependably ${word(`${base}/hex`)} --public-key dependably-hex.pem --auth-key "$HEX_AUTH_KEY"`, { inEnv: false })}`,
+          body: `curl -sSf ${urlWord(base, '/hex/public_key')} -o dependably-hex.pem\n${withSecret('HEX_AUTH_KEY', repoAdd, { inEnv: false })}`,
         },
         'Then add to deps in mix.exs and run mix deps.get:',
         { lang: 'elixir', body: `{:${pkg}, "${requirement}", repo: :dependably}` },
@@ -593,12 +600,12 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string, i
     case 'npm':
       return render([
         `Requires .npmrc with //${stripScheme(base)}/npm/:_authToken=<token>. For a scoped package (@scope/name), npm prefers an @scope:registry setting in your npm config, or a registry in the package's publishConfig, over --registry, so a scoped publish can go to the wrong registry unless you also pass --@scope:registry=${base}/npm/ with the package's own scope (or fix that setting).`,
-        { lang: 'bash', body: `npm publish --registry=${word(`${base}/npm/`)} ${p}` },
+        { lang: 'bash', body: `npm publish --registry=${urlWord(base, '/npm/')} ${p}` },
       ]);
     case 'pypi':
       return render([
         SECRET_NOTE,
-        { lang: 'bash', body: withSecret('TWINE_PASSWORD', `TWINE_USERNAME=user twine upload --repository-url ${word(`${base}/pypi/legacy/`)} ${p}`) },
+        { lang: 'bash', body: withSecret('TWINE_PASSWORD', `TWINE_USERNAME=user twine upload --repository-url ${urlWord(base, '/pypi/legacy/')} ${p}`) },
       ]);
     case 'nuget':
       // dotnet nuget push takes the key only as --api-key, so it is on dotnet's
@@ -608,7 +615,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string, i
       return render([
         'dotnet takes the key only as --api-key, so it is visible to ps on this machine while the push runs.',
         SECRET_NOTE,
-        { lang: 'bash', body: withSecret('NUGET_API_KEY', `dotnet nuget push ${p} --source ${word(`${base}/nuget/v3/index.json`)} --api-key "$NUGET_API_KEY"`, { inEnv: false }) },
+        { lang: 'bash', body: withSecret('NUGET_API_KEY', `dotnet nuget push ${p} --source ${urlWord(base, '/nuget/v3/index.json')} --api-key "$NUGET_API_KEY"`, { inEnv: false }) },
       ]);
     case 'maven': {
       const settings = 'Add a <server> entry with <id>dependably</id>, your username and the token as the password to ~/.m2/settings.xml first.';
@@ -621,14 +628,14 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string, i
       }
       return render([
         `${settings} The command uploads the file with mvn deploy:deploy-file. To deploy from a project instead, run mvn deploy with ${base}/maven/ as the distributionManagement repository.`,
-        { lang: 'bash', body: `mvn deploy:deploy-file -Dfile=${p} -Durl=${word(`${base}/maven/`)} -DrepositoryId=dependably -DgroupId=${word(groupId)} -DartifactId=${word(artifactId)} -Dversion=${word(version)}` },
+        { lang: 'bash', body: `mvn deploy:deploy-file -Dfile=${p} -Durl=${urlWord(base, '/maven/')} -DrepositoryId=dependably -DgroupId=${word(groupId)} -DartifactId=${word(artifactId)} -Dversion=${word(version)}` },
       ]);
     }
     case 'rpm':
       // `-u user` with no password makes curl prompt for it.
       return render([
         'curl prompts for the password: paste your token.',
-        { lang: 'bash', body: `curl -u user --upload-file ${p} ${word(`${base}/rpm/upload`)}` },
+        { lang: 'bash', body: `curl -u user --upload-file ${p} ${urlWord(base, '/rpm/upload')}` },
       ]);
     case 'oci': {
       // The artefact is an image tarball (docker save); a path is not an image
@@ -679,7 +686,7 @@ function publishCommand(base: string, ecosystem: string, artifactPath: string, i
       return proxyOnly('Terraform is proxy-only — there is no hosted publish/upload endpoint. Providers are fetched from their upstream registry on first request.');
     case 'hex': {
       // The cd happens inside the subshell, so the user's own directory is left alone.
-      const publish = withSecret('HEX_API_KEY', `HEX_API_URL=${word(`${base}/hex/api`)} mix hex.publish`, { after: `cd ${pathWord(directoryOf(artifactPath, 'mix.exs'))} && ` });
+      const publish = withSecret('HEX_API_KEY', `HEX_API_URL=${urlWord(base, '/hex/api')} mix hex.publish`, { after: `cd ${pathWord(directoryOf(artifactPath, 'mix.exs'))} && ` });
       return render([
         'Requires the dependably repository registered with mix hex.repo add (see get_install_command).',
         SECRET_NOTE,
