@@ -1,6 +1,8 @@
-# GitHub CI for the public mirror: test on every push/PR, publish to the
-# PUBLIC npm registry on a vX.Y.Z tag, and attach the Claude Desktop extension
-# bundle (.mcpb + .sha256) to the GitHub release for that tag. The internal GitLab pipeline
+# GitHub CI for the public mirror: test on every push/PR, and on a vX.Y.Z tag
+# attach the Claude Desktop extension bundle (.mcpb + .sha256) to the GitHub
+# release for that tag. Nothing here publishes to the public npm registry: the
+# package is released only to the private Dependably registry, by the GitLab
+# pipeline. The public registry is read from, never written to. The internal GitLab pipeline
 # (.gitlab-ci.yml) remains the dogfood pipeline against the private registry;
 # this one exists so outsiders get artifacts without needing to build.
 #
@@ -16,10 +18,6 @@
 #     public-lockfile.mjs rewrites resolved to the public shape instead; the
 #     lockfile's sha512 integrity hashes still pin the exact bytes, so a
 #     discrepancy between the two registries fails loudly.
-#
-# Publishing needs an `NPM_TOKEN` repository secret (npm automation token).
-# `--provenance` links the package to this workflow run via OIDC (id-token:
-# write); it requires package.json's repository.url to match this GitHub repo.
 #
 # Actions are pinned to commit SHAs (we are a supply-chain security shop).
 
@@ -66,59 +64,12 @@ jobs:
           node-version: 22
       - run: npx -y @dependably/npm-check@1.8.0 audit package-lock.json
 
-  publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, npm-check]
-    runs-on: ubuntu-latest
-    # Serialize releases; id-token enables npm provenance.
-    concurrency: publish
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Use the public npm registry
-        run: printf 'registry=%s\nfund=false\n' "$PUBLIC_REGISTRY" > .npmrc
-      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
-        with:
-          node-version: 22
-          cache: npm
-          # Writes an auth-enabled user-level npmrc wired to NODE_AUTH_TOKEN.
-          registry-url: https://registry.npmjs.org
-      - run: node scripts/public-lockfile.mjs
-      - run: npm ci --ignore-scripts
-      - name: Tag must match package.json version
-        run: |
-          PKG=$(node -p "require('./package.json').version")
-          TAG="${GITHUB_REF_NAME#v}"
-          if [ "$PKG" != "$TAG" ]; then
-            echo "ERROR: tag v$TAG does not match package.json version $PKG" >&2
-            exit 1
-          fi
-      # prepublishOnly re-runs the full gate (clean build + smoke test), so the
-      # published tarball is always built fresh from this checkout.
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Verify the release is live
-        run: |
-          PKG=$(node -p "const p=require('./package.json'); p.name + '@' + p.version")
-          for i in 1 2 3 4 5; do
-            if npm view "$PKG" version --registry "$PUBLIC_REGISTRY"; then
-              echo "✓ $PKG is live"; exit 0
-            fi
-            echo "not visible yet, retrying ($i/5)…"; sleep 10
-          done
-          echo "ERROR: $PKG not visible on the public registry after 5 attempts" >&2
-          exit 1
-
-  # Claude Desktop extension. Built from the same tag as the npm publish and
-  # attached to the GitHub release, which is the download URL the README and
-  # the directory listing point at. Separate job so the npm token never shares
-  # a job with the release-writing token; `contents: write` is scoped here.
+  # Claude Desktop extension, attached to the GitHub release, which is the
+  # download URL the README and the directory listing point at.
+  # `contents: write` is scoped to this job.
   release-bundle:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish]
+    needs: [test, npm-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -132,6 +83,14 @@ jobs:
           cache: npm
       - run: node scripts/public-lockfile.mjs
       - run: npm ci --ignore-scripts
+      - name: Tag must match package.json version
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "ERROR: tag v$TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
       - run: npm run build
       # Validates the manifest, packs, writes the .sha256, then boots the server
       # from the unpacked bundle.

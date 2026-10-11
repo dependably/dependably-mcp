@@ -30,7 +30,8 @@
 #                 to the .mcpb bundle and checksum from that tag's build job
 #   publish:github manual on main or a vX.Y.Z tag — mirrors the commit (and tag)
 #                 to github.com/dependably/dependably-mcp, whose own workflow
-#                 publishes to public npm and attaches the bundle to the release
+#                 tests it and attaches the bundle to the GitHub release (it
+#                 never publishes to public npm)
 #   publish-dev   manual gate on the default branch — pushes an internal-testing
 #                 prerelease (<version>-dev.<iid>.<sha>, dist-tag `dev`) to the
 #                 same private registry
@@ -246,7 +247,7 @@ sonarqube-check:
 # Mirror to the public GitHub repository (github.com/dependably/dependably-mcp),
 # same shape as dependably-documentation's publish:github. Manual: a main push
 # mirrors main; a vX.Y.Z tag pipeline mirrors that tag, which is what triggers
-# the GitHub workflow's public npm publish and release-bundle jobs. Needs a
+# the GitHub workflow's release-bundle job. Needs a
 # GITHUB_TOKEN CI/CD variable (masked) with contents:write on the mirror.
 publish:github:
   stage: publish
