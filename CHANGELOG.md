@@ -53,6 +53,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **The GitHub mirror no longer publishes to public npm.** Its workflow still
+  tests every push and attaches the Claude Desktop extension bundle to the GitHub release for a
+  version tag. Packages are released only to the private Dependably registry.
+
 - **`check_dependencies` requires `ecosystem`.** A call without it now fails. A pip list sent
   without one used to be checked as npm and came back clean. A blank name or version is rejected,
   and `summary.packagesChecked` counts the distinct dependencies that were actually checked.
