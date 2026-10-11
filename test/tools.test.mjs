@@ -214,6 +214,18 @@ describe('read tools', () => {
     strictEqual(body.affected[0].versions, undefined);
   });
 
+  it('get_vulnerability and get_remediation trim name and reject a blank one', async () => {
+    const calls = stubFetch(() => ({}));
+    await call(base, 'get_vulnerability', { osvId: 'X-1', ecosystem: 'npm', name: '  lodash  ', version: '1.0.0' });
+    strictEqual(new URL(calls[0].url).searchParams.get('name'), 'lodash');
+    const blank = await call(base, 'get_vulnerability', { osvId: 'X-1', ecosystem: 'npm', name: '   ' });
+    strictEqual(blank.isError, true);
+    const rem = await call(base, 'get_remediation', { advisories: [{ osvId: 'X-1', ecosystem: 'npm', name: '  lodash ', version: '1.0.0' }] });
+    strictEqual(new URL(calls[1].url).searchParams.get('name'), 'lodash', JSON.stringify(rem));
+    const remBlank = await call(base, 'get_remediation', { advisories: [{ osvId: 'X-1', ecosystem: 'npm', name: ' ' }] });
+    strictEqual(remBlank.isError, true);
+  });
+
   it('get_vulnerability passes the installed version through', async () => {
     const calls = stubFetch();
     await call(base, 'get_vulnerability', { osvId: 'GHSA-a/b', version: '1.2.3' });
@@ -927,7 +939,7 @@ describe('check_dependencies live coverage', () => {
     strictEqual(byName.q.bumpTo, '2.0.0');
   });
 
-  it('with includeAdvisoryDetail, the detail lookup\'s fix wins over the inline one, and inline hits do not use the cap', async () => {
+  it('with includeAdvisoryDetail, the inline fix wins over the detail lookup\'s, and inline hits do not use the cap', async () => {
     const items = Array.from({ length: 200 }, (_, i) => ({ packageName: 'p', version: '1.0.0', osvId: `GHSA-p${i}`, severity: 'HIGH', cvssScore: 8 }));
     const calls = stubRoutes({
       '/api/v1/vuln-report': () => ({ items, total: items.length }),
@@ -955,8 +967,91 @@ describe('check_dependencies live coverage', () => {
       await call(base, 'check_dependencies', { ecosystem: 'npm', includeAdvisoryDetail: true, packages: [{ name: 'q', version: '1.0.0' }] }),
     );
     strictEqual(calls2.filter((c) => c.path.startsWith('/api/v1/vulnerabilities/')).length, 1);
-    strictEqual(body2.findings[0].advisories[0].fixedVersion, '2.0.1', 'the release-line-aware detail answer wins');
+    strictEqual(body2.findings[0].advisories[0].fixedVersion, '2.0.0', 'the row\'s own fix is for this package; the detail answer may be another package\'s');
+    strictEqual(body2.findings[0].bumpTo, '2.0.0');
     deepStrictEqual(body2.findings[0].advisories[0].cwes, ['CWE-79']);
+  });
+
+  it('a lookup answer with an advisory lacking an id, or a non-array list, is unverified, not clean', async () => {
+    const bodies = {
+      idless: { scored: [], unscored: [{ summary: 'x' }] },
+      scoredNotArray: { scored: { id: 'GHSA-z' }, unscored: [] },
+      mixed: { scored: [{ id: 'GHSA-ok', severity: 'HIGH', summary: 's' }], unscored: [{ summary: 'no id' }] },
+    };
+    stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) => ({ found: true, advisorySource: { status: 'checked' }, vulnerabilities: { available: true, ...bodies[u.searchParams.get('name')] } }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'pypi',
+        packages: Object.keys(bodies).map((name) => ({ name, version: '1.0' })),
+      }),
+    );
+    strictEqual(body.clean, false);
+    strictEqual(body.coverage.liveChecked, 0);
+    deepStrictEqual(body.coverage.unverifiedPackages.map((u) => u.name).sort(), ['idless', 'mixed', 'scoredNotArray']);
+    match(body.coverage.unverifiedPackages[0].reason, /could not read/);
+    deepStrictEqual(body.findings.map((f) => f.package), ['mixed'], 'the readable advisory is still reported');
+  });
+
+  it('looks up and attributes two Go modules that differ only in case separately', async () => {
+    const calls = stubRoutes({
+      '/api/v1/vuln-report': () => emptyReport,
+      '/api/v1/lookup': (u) => ({
+        found: true,
+        advisorySource: { status: 'checked' },
+        vulnerabilities: {
+          available: true,
+          scored: u.searchParams.get('name') === 'github.com/Sirupsen/logrus' ? [{ id: 'GHSA-up', severity: 'HIGH', summary: 's', fixedVersion: '1.9.1' }] : [],
+          unscored: [],
+        },
+      }),
+      '*': () => ({ status: 404, body: {} }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', {
+        ecosystem: 'golang',
+        packages: [{ name: 'github.com/Sirupsen/logrus', version: 'v1.9.0' }, { name: 'github.com/sirupsen/logrus', version: 'v1.9.0' }],
+      }),
+    );
+    deepStrictEqual(calls.filter((c) => c.path === '/api/v1/lookup').map((c) => c.query.get('name')).sort(), ['github.com/Sirupsen/logrus', 'github.com/sirupsen/logrus']);
+    strictEqual(body.coverage.liveChecked, 2);
+    deepStrictEqual(body.findings.map((f) => f.package), ['github.com/Sirupsen/logrus']);
+  });
+
+  it('still treats nuget and pypi names that differ only in case or separators as one package', async () => {
+    for (const [ecosystem, names] of [['nuget', ['Newtonsoft.Json', 'newtonsoft.json']], ['pypi', ['Typing_Extensions', 'typing-extensions']]]) {
+      const calls = stubRoutes({
+        '/api/v1/vuln-report': () => emptyReport,
+        '/api/v1/lookup': () => ({ found: true, advisorySource: { status: 'checked' }, vulnerabilities: { available: true, scored: [], unscored: [] } }),
+        '*': () => ({ status: 404, body: {} }),
+      });
+      await call(base, 'check_dependencies', { ecosystem, packages: names.map((name) => ({ name, version: '1.0.0' })) });
+      strictEqual(calls.filter((c) => c.path === '/api/v1/lookup').length, 1, ecosystem);
+    }
+  });
+
+  it('marks bumpToPartial from each hit\'s own spelling, not the finding\'s', async () => {
+    // Report rows spell one package two ways; both fold into one finding and
+    // both were looked up. Another package's capped rows must not mark it.
+    const items = [
+      { packageName: 'Foo_Bar', version: '1.0', osvId: 'GHSA-a', severity: 'CRITICAL', cvssScore: 9.9 },
+      { packageName: 'foo-bar', version: '1.0.0', osvId: 'GHSA-b', severity: 'CRITICAL', cvssScore: 9.8 },
+      ...Array.from({ length: 200 }, (_, i) => ({ packageName: 'other', version: '1.0', osvId: `GHSA-o${i}`, severity: 'LOW', cvssScore: 1 })),
+    ];
+    stubRoutes({
+      '/api/v1/vuln-report': () => ({ items, total: items.length }),
+      '*': () => ({ remediation: { fixedVersion: '2.0' } }),
+    });
+    const body = payload(
+      await call(base, 'check_dependencies', { ecosystem: 'pypi', packages: [{ name: 'foo-bar', version: '1.0.0' }, { name: 'other', version: '1.0' }] }),
+    );
+    const foo = body.findings.find((f) => f.package.toLowerCase().startsWith('foo'));
+    strictEqual(foo.advisories.length, 2);
+    strictEqual(foo.bumpToPartial, undefined);
+    strictEqual(body.findings.find((f) => f.package === 'other').bumpToPartial, true);
   });
 
   it('still asks the detail endpoint when the server sends no inline fix (older servers)', async () => {

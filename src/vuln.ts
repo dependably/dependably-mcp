@@ -152,7 +152,7 @@ export async function fetchReport(
 /**
  * Fold a package name to the form both sides of the join must agree on.
  *
- * The report stores canonical, lower-case names; a lockfile carries whatever the
+ * The report stores canonical names, lower-cased in the case-insensitive ecosystems; a lockfile carries whatever the
  * author wrote — `Newtonsoft.Json` in a NuGet `packages.lock.json`, `Typing-Extensions`
  * from a `pip freeze`. Joining those raw makes a vulnerable package report as
  * `clean: true`, which is the one answer this tool must never get wrong, so both
@@ -163,9 +163,18 @@ export async function fetchReport(
  * folding them together is the correct comparison, not a lenient one.
  */
 export function foldName(ecosystem: string | undefined, name: string): string {
+  if (ecosystem !== undefined && !CASE_INSENSITIVE_NAMES.has(ecosystem)) return name;
   const lower = name.toLowerCase();
   return ecosystem === 'pypi' ? lower.replace(/[-_.]+/g, '-') : lower;
 }
+
+/**
+ * Ecosystems whose names the instance stores lower-cased (PurlNormalizer.CanonicalName),
+ * so two spellings are one package. Every other ecosystem (golang, cargo, maven, apk)
+ * keeps names as written, and `github.com/Sirupsen/logrus` is a different module from
+ * `github.com/sirupsen/logrus`: folding them would drop one from the check altogether.
+ */
+const CASE_INSENSITIVE_NAMES = new Set(['pypi', 'npm', 'nuget', 'rpm', 'oci', 'terraform', 'hex']);
 
 /** Ecosystems whose registry omits a trailing `.0` release segment more often than a lockfile does. */
 const TRAILING_ZERO_ECOSYSTEMS = new Set(['pypi', 'nuget', 'maven']);
@@ -363,7 +372,13 @@ export function summarizeRemediation(detail: Record<string, unknown> | null): Re
     fixedVersion: typeof fixed === 'string' && fixed.length > 0 ? fixed : null,
     cwes: Array.isArray(remediation.cweIds) ? (remediation.cweIds as string[]) : [],
     owasp: [...new Set(entries.map((e) => e.owaspId).filter((v): v is string => typeof v === 'string'))],
-    skills: [...new Set(entries.map((e) => e.skillId).filter((v): v is string => typeof v === 'string'))],
+    skills: [
+      ...new Set(
+        [...entries.map((e) => e.skillId), remediation.upgradeSkillId].filter(
+          (v): v is string => typeof v === 'string' && v.length > 0,
+        ),
+      ),
+    ],
     // Normalized here, not passed through: the detail endpoint serves GHSA's raw
     // `database_specific` vocabulary ("MODERATE") while the report endpoint serves
     // the normalized one ("MEDIUM"). Two spellings of one severity across sibling
@@ -385,7 +400,9 @@ function toAdvisory(hit: ReportItem, rem: RemediationLookup | undefined): Adviso
     epss: hit.epssScore ?? null,
     kev: hit.isKev === true,
     summary: hit.summary ?? '',
-    fixedVersion: rem?.fixedVersion ?? (hasInlineFix(hit) ? (hit.fixedVersion as string) : null),
+    // The row's own fix is for this package; the detail lookup may have resolved
+    // against another package of the same advisory, so it only fills a gap.
+    fixedVersion: hasInlineFix(hit) ? (hit.fixedVersion as string) : (rem?.fixedVersion ?? null),
     ...(rem?.cwes.length ? { cwes: rem.cwes } : {}),
     ...(rem?.owasp.length ? { owasp: rem.owasp } : {}),
     ...(rem?.skills.length ? { skills: rem.skills } : {}),
@@ -1056,12 +1073,17 @@ export async function liveCheckByLookup(
     if (verdict.kind === 'unverified') {
       unverified.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
       // A partial answer (an image scan with gaps) still reports what it found.
-      if ('res' in r && r.res) hits.push(...lookupHits(r.p, r.res));
+      if ('res' in r && r.res) hits.push(...lookupHits(r.p, r.res).hits);
     } else if (verdict.kind === 'notApplicable') {
       notApplicable.push({ name: r.p.name, version: r.p.version, reason: verdict.reason });
     } else {
-      checked++;
-      hits.push(...lookupHits(r.p, (r as { res: Record<string, unknown> }).res));
+      const read = lookupHits(r.p, (r as { res: Record<string, unknown> }).res);
+      hits.push(...read.hits);
+      if (read.malformed) {
+        unverified.push({ name: r.p.name, version: r.p.version, reason: LOOKUP_MALFORMED_REASON });
+      } else {
+        checked++;
+      }
     }
   }
   return { hits, unverified, notApplicable, checked };
@@ -1126,7 +1148,7 @@ function classifyLookup(r: { error: string } | { res: Record<string, unknown> | 
 const UNAVAILABLE_FALLBACK = 'the advisory source was unavailable';
 
 /** Hits for one dependency from a lookup answer that passed `lookupSkipReason`. */
-function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[] {
+function lookupHits(p: InputPackage, res: Record<string, unknown>): { hits: ReportItem[]; malformed: boolean } {
   // A not-found answer, or an older server's, may carry no vulnerabilities block.
   const vulns = (res.vulnerabilities ?? {}) as { scored?: unknown; unscored?: unknown };
   // Lookup reports malware apart from vulnerabilities: MAL- ids appear only
@@ -1135,11 +1157,14 @@ function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[]
   const malwareIds = (Array.isArray(malware?.advisoryIds) ? malware.advisoryIds : []).filter(
     (id): id is string => typeof id === 'string',
   );
-  const all = [
-    ...(Array.isArray(vulns.scored) ? vulns.scored : []),
-    ...(Array.isArray(vulns.unscored) ? vulns.unscored : []),
-  ] as LookupAdvisory[];
-  return [
+  // A list that is present but not an array, or an entry with no id, is an answer
+  // this cannot read in full; it must not pass as "no advisories".
+  const lists = [vulns.scored, vulns.unscored];
+  const all = lists.flatMap((l) => (Array.isArray(l) ? l : [])) as LookupAdvisory[];
+  const malformed =
+    lists.some((l) => l !== undefined && l !== null && !Array.isArray(l)) ||
+    all.some((a) => typeof a?.id !== 'string');
+  const hits = [
     ...malwareIds.map(
       (id): ReportItem => ({
         packageName: p.name,
@@ -1152,7 +1177,10 @@ function lookupHits(p: InputPackage, res: Record<string, unknown>): ReportItem[]
     ),
     ...all.flatMap((a) => (typeof a?.id === 'string' ? [lookupHit(p, a, a.id)] : [])),
   ];
+  return { hits, malformed };
 }
+
+const LOOKUP_MALFORMED_REASON = 'live lookup returned an advisory list it could not read in full (an entry without an id, or a list that is not an array)';
 
 function lookupHit(p: InputPackage, a: LookupAdvisory, id: string): ReportItem {
   return {
