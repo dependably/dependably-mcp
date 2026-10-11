@@ -7,6 +7,8 @@ import { FALLBACK_REGISTRY_ECOSYSTEMS, enumOf, type EcosystemPlanes } from '../e
 import {
   buildFindings,
   fetchRemediations,
+  canonicalVersion,
+  foldName,
   hasInlineFix,
   MAX_REMEDIATION_LOOKUPS,
   remediationKey,
@@ -111,7 +113,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
           args.includeAdvisoryDetail === true,
         );
         const findings = buildFindings(hits, devOf, remediations, args.ecosystem);
-        if (skipped) markPartialBumps(findings, pairs, hits);
+        if (skipped) markPartialBumps(findings, pairs, hits, args.ecosystem);
         if (!args.includeAdvisoryDetail) stripAdvisoryDetail(findings);
 
         return json({
@@ -160,6 +162,7 @@ export function registerVulnTools(server: McpServer, client: DependablyClient, p
                 .describe('Ecosystem of the affected package. Give it with `name`, or neither.'),
               name: z
                 .string()
+                .trim()
                 .min(1)
                 .max(512)
                 .optional()
@@ -279,19 +282,27 @@ async function lookUpRemediations(
   return { pairs, skipped, remediations };
 }
 
-/** Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix. */
+/**
+ * Past the lookup cap a finding's bumpTo can miss a skipped advisory's fix.
+ * Judged per hit, by the spelling that hit carries and the key the finding was
+ * grouped under, since alias-folded hits of one finding can differ in both.
+ */
 function markPartialBumps(
   findings: readonly Finding[],
   pairs: readonly RemediationPair[],
   hits: readonly ReportItem[],
+  ecosystem: string,
 ): void {
   const looked = new Set([
     ...pairs.map((p) => remediationKey(p.osvId, p.name, p.version)),
     ...hits.filter(hasInlineFix).map((h) => remediationKey(h.osvId, h.packageName, h.version)),
   ]);
+  const groupKey = (name: string, version: string) => `${foldName(ecosystem, name)}@${canonicalVersion(ecosystem, version)}`;
+  const partial = new Set(
+    hits.filter((h) => !looked.has(remediationKey(h.osvId, h.packageName, h.version))).map((h) => groupKey(h.packageName, h.version)),
+  );
   for (const f of findings) {
-    const ids = f.advisories.flatMap((a) => [a.osvId, ...(a.aliases ?? [])]);
-    if (ids.some((id) => !looked.has(remediationKey(id, f.package, f.installed)))) f.bumpToPartial = true;
+    if (partial.has(groupKey(f.package, f.installed))) f.bumpToPartial = true;
   }
 }
 

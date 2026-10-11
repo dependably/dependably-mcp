@@ -182,6 +182,7 @@ export function registerReadTools(server: McpServer, client: DependablyClient, p
           .describe('Ecosystem of the affected package. Give it with `name`, or neither.'),
         name: z
           .string()
+          .trim()
           .min(1)
           .max(512)
           .optional()

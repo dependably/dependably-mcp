@@ -197,8 +197,26 @@ describe('matchPackages', () => {
   });
 });
 
+describe('foldName case sensitivity', () => {
+  it('keeps case where the instance does', () => {
+    strictEqual(foldName('golang', 'github.com/Sirupsen/logrus'), 'github.com/Sirupsen/logrus');
+    strictEqual(foldName('maven', 'org.Foo:Bar'), 'org.Foo:Bar');
+    strictEqual(foldName('cargo', 'Serde'), 'Serde');
+  });
+});
+
+describe('summarizeRemediation upgrade skill', () => {
+  it('includes upgradeSkillId in skills, once', () => {
+    const r = summarizeRemediation({
+      remediation: { upgradeSkillId: 'fix-vulnerable-dependency', entries: [{ skillId: 'fix-vulnerable-dependency' }, { skillId: 'other' }] },
+    });
+    deepStrictEqual(r.skills, ['fix-vulnerable-dependency', 'other']);
+    deepStrictEqual(summarizeRemediation({ remediation: { upgradeSkillId: 'u' } }).skills, ['u']);
+  });
+});
+
 describe('foldName', () => {
-  it('lower-cases every ecosystem', () => {
+  it('lower-cases the case-insensitive ecosystems', () => {
     strictEqual(foldName('npm', 'Hono'), 'hono');
     strictEqual(foldName('nuget', 'Newtonsoft.Json'), 'newtonsoft.json');
     strictEqual(foldName(undefined, 'Hono'), 'hono');

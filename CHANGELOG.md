@@ -20,6 +20,30 @@ All notable changes to this project are documented here. The format follows
   order. A PEP 440 prerelease number with leading zeros (`1.0rc01`) compares by value again under
   npm, and a maven version over 1,024 characters ranks below every shorter one (two such
   versions compare as text) instead of overflowing the stack.
+
+- **A lookup answer the client cannot read in full is unverified, not clean.** An advisory with
+  no id, a `scored` or `unscored` list that is not an array, or a `vulnerabilities` block that is
+  not an object, used to drop out silently and
+  leave the dependency counted as checked with no findings. It is now listed as unverified with
+  a reason, and any readable advisories in the same answer are still reported.
+- **Go modules, Cargo crates and Maven coordinates that differ only in case are separate
+  packages.** The dedupe and the report join folded every ecosystem's names to lower case, so
+  `github.com/Sirupsen/logrus` after `github.com/sirupsen/logrus` was never looked up or listed
+  as unverified. Case is now folded only where the instance does (npm, NuGet, PyPI, RPM, OCI,
+  Terraform, Hex); PyPI keeps its PEP 503 separator folding.
+- **A fix the server names for a package outranks the detail lookup's.** With
+  `includeAdvisoryDetail`, the detail answer used to override the row's own fixed version, and
+  on an instance that predates the ecosystem and name parameters it can describe a different
+  package of the same advisory. The row's fix now stands for `fixedVersion` and `bumpTo`; the
+  detail lookup still supplies CWE, OWASP and skill ids.
+- **`get_vulnerability` and `get_remediation` trim `name`.** A blank name now fails validation
+  instead of passing the pair check and drawing a 400, and a padded one no longer mismatches
+  the registry.
+- **`bumpToPartial` is judged per hit.** Alias-folded hits of one finding that spell the package
+  or version differently no longer mark the finding partial when every one of them was looked up.
+- **The upgrade skill is listed.** `get_remediation` and the `skills` on a finding now include
+  the remediation's `upgradeSkillId` (`fix-vulnerable-dependency`), once.
+
 - **Advisory detail names the package it is for.** One advisory can cover several packages, each
   with its own fix, and without the package the instance resolved the fix against whichever one
   it recorded first. `check_dependencies` now sends each finding's ecosystem and name, and keeps
