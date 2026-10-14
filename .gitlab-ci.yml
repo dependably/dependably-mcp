@@ -301,7 +301,11 @@ build:
     # a clear message rather than inside the verify step.
     - 'command -v unzip >/dev/null || { echo "ERROR: unzip is missing from the job image; bundle:verify needs it." >&2; exit 1; }'
     - npm run bundle:verify
-    - echo "BUILD_JOB_ID=$CI_JOB_ID" > build.env
+    # The release job's `release:` keyword expands plain $VARS but not shell
+    # forms like ${CI_COMMIT_TAG#v}, so hand it the bundle version ready-made.
+    - |
+      BUNDLE_VERSION=$(node -p "require('./manifest.json').version")
+      printf 'BUILD_JOB_ID=%s\nBUNDLE_VERSION=%s\n' "$CI_JOB_ID" "$BUNDLE_VERSION" > build.env
   artifacts:
     paths:
       - "*.tgz"
@@ -643,6 +647,10 @@ release:
     - |
       set -eu
       VERSION="${CI_COMMIT_TAG#v}"
+      if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
+        echo "ERROR: tag $CI_COMMIT_TAG does not match the bundle version $BUNDLE_VERSION" >&2
+        exit 1
+      fi
       if [ ! -f "dist-mcpb/dependably-$VERSION.mcpb" ]; then
         echo "ERROR: bundle for $VERSION missing from build artifacts" >&2
         exit 1
@@ -654,11 +662,11 @@ release:
     description: "See CHANGELOG.md for this release. The Claude Desktop extension is attached; verify it against the .sha256 before installing."
     assets:
       links:
-        - name: "dependably-${CI_COMMIT_TAG#v}.mcpb (Claude Desktop extension)"
-          url: "$ARTIFACT_BASE/dependably-${CI_COMMIT_TAG#v}.mcpb"
+        - name: "dependably-$BUNDLE_VERSION.mcpb (Claude Desktop extension)"
+          url: "$ARTIFACT_BASE/dependably-$BUNDLE_VERSION.mcpb"
           link_type: package
-        - name: "dependably-${CI_COMMIT_TAG#v}.mcpb.sha256"
-          url: "$ARTIFACT_BASE/dependably-${CI_COMMIT_TAG#v}.mcpb.sha256"
+        - name: "dependably-$BUNDLE_VERSION.mcpb.sha256"
+          url: "$ARTIFACT_BASE/dependably-$BUNDLE_VERSION.mcpb.sha256"
           link_type: other
 
 # Internal-testing publish: manual gate on the default branch, pushing to the

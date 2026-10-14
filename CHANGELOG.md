@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **GitLab release assets are named with the version again.** The `release:` keyword does not
+  expand shell forms like `${CI_COMMIT_TAG#v}`, so v1.2.0's links read `dependably-.mcpb`. The
+  build job now passes the bundle version to the release job, which also checks it against the tag.
+
 ## [1.2.0] - 2026-10-14
 
 1.1.0 was never tagged or published, so this is the first release to ship the changes listed
