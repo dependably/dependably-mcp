@@ -1,6 +1,6 @@
 {
   "name": "dependably-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server for Dependably, a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, apk, Terraform and Hex, self-hosted or hosted.",
   "keywords": [
     "mcp",

@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-14
+
+1.1.0 was never tagged or published, so this is the first release to ship the changes listed
+under 1.1.0 below as well as these.
+
 ### Added
 
 - **The server now sends usage instructions at initialize.** They tell the assistant to call
