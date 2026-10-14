@@ -104,6 +104,10 @@ describe('server over a real child process (stdio)', () => {
       ok(!init.TIMEOUT, 'initialize should not time out');
       ok(!list.TIMEOUT, 'tools/list should not time out');
       deepStrictEqual(init.result.serverInfo, { name: 'dependably-mcp', version: pkg.version });
+      ok(
+        typeof init.result.instructions === 'string' && init.result.instructions.includes('readiness_check'),
+        'initialize result should carry instructions that point at readiness_check',
+      );
       ok(Array.isArray(list.result.tools) && list.result.tools.length > 0, 'tools/list should return tools');
 
       for (const line of rawStdoutLines) {

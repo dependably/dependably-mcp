@@ -16,6 +16,17 @@ import { registerVulnTools } from './tools/vuln.js';
 const { version } = createRequire(import.meta.url)('../package.json') as { version: string };
 
 /**
+ * Sent to the client in the initialize result. Users who install from a client
+ * directory skip the onboarding steps that tell them what to check first, so the
+ * model needs to know which call to make before anything else.
+ */
+const SERVER_INSTRUCTIONS =
+  'Before relying on this server for the first time, and whenever a call fails, call readiness_check: it needs no token and separates an unreachable instance or wrong DEPENDABLY_BASE_URL from a token problem. ' +
+  'A 401 or 403 means DEPENDABLY_TOKEN is missing, expired, for another instance, or lacks a capability (the error names the capability when the server reports one); tell the user to fix the token instead of retrying. ' +
+  'Every tool works with a Pull token. ' +
+  'A 429 means slow down, and its message says how long to wait when the server gives a delay.';
+
+/**
  * Every tool here is reachable with a **Pull** token — the preset any member can
  * mint. Nothing in the surface requires a capability that only an admin or owner
  * can grant, which is what keeps the install instruction to one sentence.
@@ -40,7 +51,7 @@ export function createServer(
       name: 'dependably-mcp',
       version,
     },
-    { debouncedNotificationMethods: ['notifications/tools/list_changed'] },
+    { instructions: SERVER_INSTRUCTIONS, debouncedNotificationMethods: ['notifications/tools/list_changed'] },
   );
 
   let tools = registerTools(server, client, cfg, planes);
