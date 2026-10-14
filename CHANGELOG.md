@@ -8,6 +8,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **The server now sends usage instructions at initialize.** They tell the assistant to call
+  `readiness_check` before first use and after any failure, to ask the user to fix `DEPENDABLY_TOKEN`
+  on a 401 or 403 rather than retry, and to wait as long as a 429 message says.
 - **`check_dependencies` and `lookup_package` cover apk, rpm, oci and Terraform, and take a
   `distro`.** When the instance can look these up (a newer Dependably), they are checked like any
   other ecosystem, so a clean apk, rpm or image dependency can now come back `clean`. apk and rpm
