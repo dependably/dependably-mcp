@@ -10,7 +10,8 @@ filesystem, and runs no commands.
 
 ## Requirements
 
-- Node 22 or later, for Claude Code. Claude Desktop runs the extension on its own built-in Node.
+- Node 22 or later and git, for Claude Code and other MCP clients, which build the server from
+  source. Claude Desktop runs the extension on its own built-in Node.
 - Dependably 0.12.2 or later. On 0.10.0 to 0.12.1 every tool works, but `get_policies` returns
   only the licence rules.
 - A personal access token with the **Pull** preset, created in your instance under Tokens. Pull is

@@ -7,34 +7,31 @@ the [README](README.md).
 
 Node 22 or later is required.
 
+The committed `package-lock.json` and `.npmrc` resolve against our private Dependably instance.
+You don't need access to it: every dependency is also on the public registry. Clone, then point
+your clone there before installing:
+
 ```bash
 git clone https://github.com/dependably/dependably-mcp.git
 cd dependably-mcp
-npm install
-npm run dev   # tsc --watch
-npm run build # tsc once
-npm test      # build, unit tests with coverage, smoke test, manifest freshness check
-npm run test:unit  # just the unit tests; writes coverage/lcov.info
-npm run sbom  # local CycloneDX SBOM (cyclonedx-npm) into cyclonedx-sbom.json
-```
-
-CI also generates an SBOM with sbom-reach and uploads each to Dependency-Track as its own
-project, so the generators can be compared.
-
-## A note on the lockfile
-
-The committed `package-lock.json` and `.npmrc` resolve against our private Dependably instance.
-You don't need access to it: every dependency is also on the public registry. Point your clone
-there:
-
-```bash
 echo 'registry=https://registry.npmjs.org/' > .npmrc
 node scripts/public-lockfile.mjs
 npm ci
 ```
 
 `public-lockfile.mjs` rewrites each `resolved` URL to the public registry; the integrity hashes
-still pin the same bytes. The public CI does the same.
+still pin the same bytes. The public CI does the same. Don't commit the rewritten files; restore
+them with `git checkout -- .npmrc package-lock.json` before you pull or commit.
+
+Day to day:
+
+- `npm run dev` runs `tsc --watch`; `npm run build` compiles once.
+- `npm test` builds, runs the unit tests with coverage, then the smoke test and the manifest
+  freshness check. `npm run test:unit` runs just the unit tests and writes `coverage/lcov.info`.
+- `npm run sbom` writes a local CycloneDX SBOM (cyclonedx-npm) to `cyclonedx-sbom.json`.
+
+CI also generates an SBOM with sbom-reach and uploads each to Dependency-Track as its own
+project, so the generators can be compared.
 
 ## Source layout
 
