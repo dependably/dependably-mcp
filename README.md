@@ -21,10 +21,11 @@ filesystem, and runs no commands.
 ### Claude Code and other MCP clients
 
 The package isn't published to a public npm registry, so `npx` can't fetch it. Build it from
-source instead. Clone the [GitHub repository](https://github.com/dependably/dependably-mcp), then
-point the clone at the public registry and build:
+source instead. Clone the [GitHub repository](https://github.com/dependably/dependably-mcp), point
+the clone at the public registry and build:
 
 ```bash
+git clone https://github.com/dependably/dependably-mcp.git
 cd dependably-mcp
 echo 'registry=https://registry.npmjs.org/' > .npmrc
 node scripts/public-lockfile.mjs
@@ -60,7 +61,13 @@ the same `command`, `args` and `env` in their own MCP settings:
 }
 ```
 
-Rebuild after you pull changes.
+The registry step rewrites the committed `.npmrc` and `package-lock.json`, which point at a private
+registry. To update, restore both files, pull, and run the build steps again:
+
+```bash
+git checkout -- .npmrc package-lock.json
+git pull
+```
 
 ### Claude Desktop
 
