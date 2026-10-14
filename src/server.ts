@@ -22,7 +22,7 @@ const { version } = createRequire(import.meta.url)('../package.json') as { versi
  */
 const SERVER_INSTRUCTIONS =
   'Before relying on this server for the first time, and whenever a call fails, call readiness_check: it needs no token and separates an unreachable instance or wrong DEPENDABLY_BASE_URL from a token problem. ' +
-  'A 401 or 403 means DEPENDABLY_TOKEN is missing, expired, for another instance, or lacks a capability (the error names the capability when the server reports one); tell the user to fix the token instead of retrying. ' +
+  'A 401 or 403 means DEPENDABLY_TOKEN is expired, for another instance, or lacks a capability (the error names the capability when the server reports one); tell the user to fix the token instead of retrying. ' +
   'Every tool works with a Pull token. ' +
   'A 429 means slow down, and its message says how long to wait when the server gives a delay.';
 
