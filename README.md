@@ -10,7 +10,8 @@ filesystem, and runs no commands.
 
 ## Requirements
 
-- Node 22 or later, for Claude Code. Claude Desktop runs the extension on its own built-in Node.
+- Node 22 or later and git, for Claude Code and other MCP clients, which build the server from
+  source. Claude Desktop runs the extension on its own built-in Node.
 - Dependably 0.12.2 or later. On 0.10.0 to 0.12.1 every tool works, but `get_policies` returns
   only the licence rules.
 - A personal access token with the **Pull** preset, created in your instance under Tokens. Pull is
@@ -18,23 +19,40 @@ filesystem, and runs no commands.
 
 ## Install
 
-### Claude Code
+### Claude Code and other MCP clients
+
+The package isn't published to a public npm registry, so `npx` can't fetch it. Build it from
+source instead. Clone the [GitHub repository](https://github.com/dependably/dependably-mcp), point
+the clone at the public registry and build:
+
+```bash
+git clone https://github.com/dependably/dependably-mcp.git
+cd dependably-mcp
+echo 'registry=https://registry.npmjs.org/' > .npmrc
+node scripts/public-lockfile.mjs
+npm ci --ignore-scripts
+npm run build
+```
+
+The server is now at `dist/index.js`. Register it with Claude Code, using the absolute path to
+your clone:
 
 ```bash
 claude mcp add dependably \
   --env DEPENDABLY_BASE_URL=https://dependably.example.com \
   --env DEPENDABLY_TOKEN=dpb_xxx \
-  -- npx -y dependably-mcp
+  -- node /absolute/path/to/dependably-mcp/dist/index.js
 ```
 
-Or add it to `~/.claude.json` or your project's `.mcp.json`:
+Or add it to `~/.claude.json` or your project's `.mcp.json`. Other clients, such as Cursor, take
+the same `command`, `args` and `env` in their own MCP settings:
 
 ```jsonc
 {
   "mcpServers": {
     "dependably": {
-      "command": "npx",
-      "args": ["-y", "dependably-mcp"],
+      "command": "node",
+      "args": ["/absolute/path/to/dependably-mcp/dist/index.js"],
       "env": {
         "DEPENDABLY_BASE_URL": "https://dependably.example.com",
         "DEPENDABLY_TOKEN": "dpb_xxx"
@@ -44,12 +62,18 @@ Or add it to `~/.claude.json` or your project's `.mcp.json`:
 }
 ```
 
-To install it once instead, run `npm install -g dependably-mcp` and use `dependably-mcp` as the
-command in place of `npx -y dependably-mcp`.
+The registry step rewrites the committed `.npmrc` and `package-lock.json`, which point at a private
+registry. To update, restore both files, pull, and run the build steps again:
+
+```bash
+git checkout -- .npmrc package-lock.json
+git pull
+```
 
 ### Claude Desktop
 
-Download `dependably-<version>.mcpb` and its `.sha256` from the project's releases, and check
+Download `dependably-<version>.mcpb` and its `.sha256` from the
+[GitHub releases page](https://github.com/dependably/dependably-mcp/releases), and check
 the bundle with `shasum -a 256 -c dependably-<version>.mcpb.sha256`. Double-click it, or drag it
 onto **Settings > Extensions**.
 

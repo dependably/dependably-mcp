@@ -33,6 +33,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **The README install path no longer assumes public npm (#44).** The package is not on a public
+  registry, so `npx -y dependably-mcp` and `npm install -g dependably-mcp` are gone. Claude Code
+  and other MCP clients now build from source and run `node dist/index.js`; Claude Desktop
+  downloads the `.mcpb` bundle from the GitHub releases page.
 - **The GitHub mirror no longer publishes to public npm.** Its workflow still
   tests every push and attaches the Claude Desktop extension bundle to the GitHub release for a
   version tag. Packages are released only to the private Dependably registry.
