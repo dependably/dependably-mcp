@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "dependably",
   "display_name": "Dependably",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Ask Claude about the packages, vulnerabilities and licences in your Dependably registry.",
   "long_description": "Dependably is a private artefact repository and pull-through proxy for npm, PyPI, NuGet, Maven, RPM, OCI, Go, Cargo, apk, Terraform and Hex, self-hosted or hosted. This extension connects Claude to your own instance with a personal access token you create there.\n\nClaude can list and search your packages, check a package before you adopt it, explain an advisory and how to fix it, check a project's dependencies and name the version to bump to, and explain your organization's package policy: licence rules plus the vulnerability, release-age and signature controls that can refuse a download.\n\nTraffic goes only from your machine to your Dependably instance, and your token stays in your operating system's keychain. An optional setting takes a CA bundle for an instance with a private certificate authority. Every tool is read-only.\n\nRequires Dependably 0.12.2 or later and a token with the Pull preset.",
   "author": {
