@@ -6,12 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-25
+
+The server is the same as in 1.2.0: nothing in `src/` changed, and the manifest only carries the
+new version number. This release runs the corrected release pipeline below, so the tagged release carries a
+bundle with the right name and a fresh checksum.
+
 ### Fixed
 
 - **GitLab release asset links carry the version.** The `release:` keyword does not expand shell
   forms like `${CI_COMMIT_TAG#v}`, so the v1.2.0 release was created with links to
   `dependably-.mcpb` and had to be corrected by hand. The build job now passes the bundle version
   to the release job, which also checks it against the tag.
+
+### Changed
+
+- CI builds on the Node 22 images from the 21 October 2026 security releases. The extension itself
+  runs on whatever Node the host supplies, so this changes nothing for users.
 
 ## [1.2.0] - 2026-10-14
 
